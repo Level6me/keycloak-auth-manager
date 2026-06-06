@@ -3,14 +3,14 @@ import os, json, subprocess, secrets, string, time, re
 from flask import Flask, render_template, request, redirect, url_for, flash, Response, stream_with_context
 from datetime import datetime
 
-# 配置文件
+# 配置文件路径
 CONFIG_FILE = "/opt/keycloak-auth-manager/config.json"
 DATA_FILE = "/opt/keycloak-auth-manager/data.json"
 
-# 默认配置
-KEYCLOAK_URL = "https://au.abab.pw"
-KEYCLOAK_ADMIN = "admin"
-KEYCLOAK_PASSWORD = "keycloak2026"
+# 配置变量（从 config.json 加载，无默认值）
+KEYCLOAK_URL = ""
+KEYCLOAK_ADMIN = ""
+KEYCLOAK_PASSWORD = ""
 KEYCLOAK_CONTAINER = "keycloak"
 
 def load_config():
@@ -19,23 +19,17 @@ def load_config():
         if os.path.exists(CONFIG_FILE):
             with open(CONFIG_FILE, "r") as f:
                 cfg = json.load(f)
-                KEYCLOAK_URL = cfg.get("keycloak_url", KEYCLOAK_URL)
-                KEYCLOAK_ADMIN = cfg.get("keycloak_admin", KEYCLOAK_ADMIN)
-                KEYCLOAK_PASSWORD = cfg.get("keycloak_password", KEYCLOAK_PASSWORD)
-                KEYCLOAK_CONTAINER = cfg.get("keycloak_container", KEYCLOAK_CONTAINER)
-    except:
-        pass
+                KEYCLOAK_URL = cfg.get("keycloak_url", "")
+                KEYCLOAK_ADMIN = cfg.get("keycloak_admin", "")
+                KEYCLOAK_PASSWORD = cfg.get("keycloak_password", "")
+                KEYCLOAK_CONTAINER = cfg.get("keycloak_container", "keycloak")
+    except Exception as e:
+        print("加载配置失败:", str(e))
 
 load_config()
 
 app = Flask(__name__)
 app.secret_key = secrets.token_hex(32)
-current_logs = []
-from datetime import datetime
-
-app = Flask(__name__)
-app.secret_key = secrets.token_hex(32)
-DATA_FILE = "/opt/keycloak-auth-manager/data.json"
 current_logs = []
 
 def load_data():
@@ -69,35 +63,16 @@ def get_used_ports():
 
 def create_keycloak_client(domain, client_id, client_secret):
     log("创建 Keycloak Client: {}".format(client_id))
-    run_cmd("docker exec keycloak /opt/keycloak/bin/kcadm.sh config credentials --server http://localhost:8080 --realm master --user admin --password keycloak2026")
+    # 使用配置变量
+    run_cmd("docker exec {} /opt/keycloak/bin/kcadm.sh config credentials --server http://localhost:8080 --realm master --user {} --password {}".format(KEYCLOAK_CONTAINER, KEYCLOAK_ADMIN, KEYCLOAK_PASSWORD))
     
     redirect_uri = "https://" + domain + "/*"
-    cmd = 'docker exec keycloak /opt/keycloak/bin/kcadm.sh create clients -r master -s clientId={} -s secret={} -s enabled=true -s publicClient=false -s protocol=openid-connect -s standardFlowEnabled=true -s directAccessGrantsEnabled=true -s \'redirectUris=["{}"]\''.format(client_id, client_secret, redirect_uri)
+    cmd = 'docker exec {} /opt/keycloak/bin/kcadm.sh create clients -r master -s clientId={} -s secret={} -s enabled=true -s publicClient=false -s protocol=openid-connect -s standardFlowEnabled=true -s directAccessGrantsEnabled=true -s \'redirectUris=["{}"]\''.format(KEYCLOAK_CONTAINER, client_id, client_secret, redirect_uri)
     
     rc, out, err = run_cmd(cmd)
     if rc != 0:
         if "already exists" in err:
             log("Client 已存在，更新 Secret...")
-            rc2, out2, err2 = run_cmd("docker exec keycloak /opt/keycloak/bin/kcadm.sh get clients -r master -q clientId={} --fields id".format(client_id))
-            if out2:
-                uuid = re.search(r'"id" : "([^"]+)"', out2)
-                if uuid:
-                    run_cmd("docker exec keycloak /opt/keycloak/bin/kcadm.sh update clients/{}/{} -r master -s secret={}".format(uuid.group(1), client_id, client_secret))
-                    log("已更新 Client Secret")
-                    return True, ""
-        log("创建失败: {}".format(err))
-        return False, err
-    log("Keycloak Client 创建成功")
-    return True, ""
-
-def delete_keycloak_client(client_id):
-    run_cmd("docker exec keycloak /opt/keycloak/bin/kcadm.sh config credentials --server http://localhost:8080 --realm master --user admin --password keycloak2026")
-    rc, out, err = run_cmd("docker exec keycloak /opt/keycloak/bin/kcadm.sh get clients -r master -q clientId={} --fields id".format(client_id))
-    if out:
-        uuid = re.search(r'"id" : "([^"]+)"', out)
-        if uuid:
-            run_cmd("docker exec keycloak /opt/keycloak/bin/kcadm.sh delete clients/{} -r master".format(uuid.group(1)))
-
 def create_oauth2_container(domain, oauth_port, client_id, client_secret):
     container_name = "oauth2-" + domain.replace(".", "-")
     cookie_secret = generate_secret(32)
@@ -105,7 +80,7 @@ def create_oauth2_container(domain, oauth_port, client_id, client_secret):
     
     run_cmd("docker rm -f " + container_name)
     
-    cmd = "docker run -d --name {} --restart always --network host -e OAUTH2_PROXY_PROVIDER=oidc -e OAUTH2_PROXY_OIDC_ISSUER_URL=https://au.abab.pw/realms/master -e OAUTH2_PROXY_CLIENT_ID={} -e OAUTH2_PROXY_CLIENT_SECRET={} -e OAUTH2_PROXY_REDIRECT_URL=https://{} -e OAUTH2_PROXY_COOKIE_SECRET={} -e OAUTH2_PROXY_COOKIE_SECURE=true -e OAUTH2_PROXY_SKIP_PROVIDER_BUTTON=true -e OAUTH2_PROXY_CODE_CHALLENGE_METHOD=S256 -e OAUTH2_PROXY_EMAIL_DOMAINS=* -e OAUTH2_PROXY_INSECURE_OIDC_ALLOW_UNVERIFIED_EMAIL=true -e OAUTH2_PROXY_USER_ID_CLAIM=preferred_username -e OAUTH2_PROXY_HTTP_ADDRESS=0.0.0.0:{} quay.io/oauth2-proxy/oauth2-proxy:v7.6.0".format(container_name, client_id, client_secret, domain + "/oauth2/callback", cookie_secret, oauth_port)
+    cmd = "docker run -d --name {} --restart always --network host -e OAUTH2_PROXY_PROVIDER=oidc -e OAUTH2_PROXY_OIDC_ISSUER_URL=" + KEYCLOAK_URL + "/realms/master -e OAUTH2_PROXY_CLIENT_ID={} -e OAUTH2_PROXY_CLIENT_SECRET={} -e OAUTH2_PROXY_REDIRECT_URL=https://{} -e OAUTH2_PROXY_COOKIE_SECRET={} -e OAUTH2_PROXY_COOKIE_SECURE=true -e OAUTH2_PROXY_SKIP_PROVIDER_BUTTON=true -e OAUTH2_PROXY_CODE_CHALLENGE_METHOD=S256 -e OAUTH2_PROXY_EMAIL_DOMAINS=* -e OAUTH2_PROXY_INSECURE_OIDC_ALLOW_UNVERIFIED_EMAIL=true -e OAUTH2_PROXY_USER_ID_CLAIM=preferred_username -e OAUTH2_PROXY_HTTP_ADDRESS=0.0.0.0:{} quay.io/oauth2-proxy/oauth2-proxy:v7.6.0".format(container_name, client_id, client_secret, domain + "/oauth2/callback", cookie_secret, oauth_port)
     
     rc, out, err = run_cmd(cmd)
     if rc != 0:
