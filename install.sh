@@ -172,6 +172,23 @@ read -p "Keycloak 容器名称 [$KEYCLOAK_RUNNING]: " KEYCLOAK_CONTAINER
 KEYCLOAK_CONTAINER=${KEYCLOAK_CONTAINER:-$KEYCLOAK_RUNNING}
 
 # 验证容器名称
+
+# Apple 主题安装
+echo ""
+echo "=== Apple 主题安装 ==="
+read -p "是否安装 Apple 登录主题? (y/n): " INSTALL_THEME
+if [ "$INSTALL_THEME" = "y" ]; then
+    THEME_DIR="/opt/keycloak/themes/apple"
+    echo "    安装 Apple 主题到 $THEME_DIR..."
+    mkdir -p $THEME_DIR
+    if [ -d "themes/apple/login" ]; then
+        cp -r themes/apple/login $THEME_DIR/
+        echo "    ✓ Apple 主题已安装"
+        echo "    在 Keycloak Admin Console 选择 Login Theme: apple"
+    else
+        echo "    ! 主题文件不存在，请手动安装"
+    fi
+fi
 if ! docker ps --filter "name=$KEYCLOAK_CONTAINER" --format "{{.Names}}" | grep -q "$KEYCLOAK_CONTAINER"; then
     echo "    ! 容器 $KEYCLOAK_CONTAINER 未运行"
 fi
