@@ -136,8 +136,8 @@ echo "请输入配置信息（直接回车使用默认值）:"
 echo ""
 
 # Keycloak URL
-read -p "Keycloak 服务地址 [https://au.abab.pw]: " KEYCLOAK_URL
-KEYCLOAK_URL=${KEYCLOAK_URL:-https://au.abab.pw}
+read -p "Keycloak 服务地址 [https://keycloak.your-domain.com]: " KEYCLOAK_URL
+KEYCLOAK_URL=${KEYCLOAK_URL:-}
 
 # 验证 Keycloak URL 是否可访问
 echo "    测试 Keycloak 连接..."
@@ -152,9 +152,9 @@ read -p "Keycloak Admin 用户名 [admin]: " KEYCLOAK_ADMIN
 KEYCLOAK_ADMIN=${KEYCLOAK_ADMIN:-admin}
 
 # Keycloak Admin 密码
-read -sp "Keycloak Admin 密码 [keycloak2026]: " KEYCLOAK_PASSWORD
+read -sp "Keycloak Admin 密码 [YOUR_PASSWORD]: " KEYCLOAK_PASSWORD
 echo ""
-KEYCLOAK_PASSWORD=${KEYCLOAK_PASSWORD:-keycloak2026}
+KEYCLOAK_PASSWORD=${KEYCLOAK_PASSWORD:-}
 
 # Web 控制台端口
 read -p "Web 控制台端口 [8088]: " WEB_PORT

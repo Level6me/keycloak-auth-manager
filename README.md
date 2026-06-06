@@ -82,7 +82,7 @@ journalctl -u keycloak-auth-manager -f    # 查看日志
 ### 2. 添加认证
 
 1. 访问 Web 控制台 `http://服务器IP:8088`
-2. 输入域名（如 `example.abab.pw`）
+2. 输入域名（如 `your-domain.com`）
 3. 点击「添加认证」
 4. 自动完成：
    - 创建 Keycloak Client
@@ -91,7 +91,7 @@ journalctl -u keycloak-auth-manager -f    # 查看日志
 
 ### 3. 验证
 
-访问 `https://example.abab.pw`，会跳转到 Keycloak 进行 Passkey 认证。
+访问 `https://your-domain.com`，会跳转到 Keycloak 进行 Passkey 认证。
 
 ## 文件说明
 
