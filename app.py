@@ -1,4 +1,22 @@
 #!/usr/bin/env python3
+# 读取配置文件
+CONFIG_FILE = "/opt/keycloak-auth-manager/config.json"
+KEYCLOAK_URL = "https://au.abab.pw"
+KEYCLOAK_ADMIN = "admin"
+KEYCLOAK_PASSWORD = "keycloak2026"
+KEYCLOAK_CONTAINER = "keycloak"
+
+def load_config():
+    global KEYCLOAK_URL, KEYCLOAK_ADMIN, KEYCLOAK_PASSWORD, KEYCLOAK_CONTAINER
+    if os.path.exists(CONFIG_FILE):
+        with open(CONFIG_FILE, "r") as f:
+            cfg = json.load(f)
+            KEYCLOAK_URL = cfg.get("keycloak_url", KEYCLOAK_URL)
+            KEYCLOAK_ADMIN = cfg.get("keycloak_admin", KEYCLOAK_ADMIN)
+            KEYCLOAK_PASSWORD = cfg.get("keycloak_password", KEYCLOAK_PASSWORD)
+            KEYCLOAK_CONTAINER = cfg.get("keycloak_container", KEYCLOAK_CONTAINER)
+
+load_config()
 import os, json, subprocess, secrets, string, time, re
 from flask import Flask, render_template, request, redirect, url_for, flash, Response, stream_with_context
 from datetime import datetime
