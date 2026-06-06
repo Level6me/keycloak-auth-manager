@@ -70,3 +70,37 @@ docker run -d -p 8088:8088 --name auth-manager \
 ## License
 
 MIT
+
+## 一键部署（推荐）
+
+```bash
+# 克隆项目
+git clone https://gitee.com/singkong/keycloak-auth-manager.git
+
+# 进入目录
+cd keycloak-auth-manager
+
+# 一键部署（自动安装为 systemd 服务）
+bash install.sh
+```
+
+部署完成后：
+- 服务地址: `http://服务器IP:8088`
+- 日志文件: `/opt/keycloak-auth-manager/app.log`
+- 配置文件: `/opt/keycloak-auth-manager/data.json`
+
+## 服务管理
+
+```bash
+systemctl status keycloak-auth-manager   # 查看状态
+systemctl restart keycloak-auth-manager  # 重启服务
+systemctl stop keycloak-auth-manager     # 停止服务
+journalctl -u keycloak-auth-manager -f   # 查看日志
+```
+
+## 卸载
+
+```bash
+cd keycloak-auth-manager
+bash uninstall.sh
+```
