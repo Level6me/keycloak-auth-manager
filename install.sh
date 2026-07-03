@@ -171,8 +171,6 @@ fi
 read -p "Keycloak 容器名称 [$KEYCLOAK_RUNNING]: " KEYCLOAK_CONTAINER
 KEYCLOAK_CONTAINER=${KEYCLOAK_CONTAINER:-$KEYCLOAK_RUNNING}
 
-# 验证容器名称
-
 # Apple 主题安装
 echo ""
 echo "=== Apple 主题安装 ==="
@@ -219,10 +217,10 @@ if [ ! -f "app.py" ]; then
     exit 1
 fi
 
-# 安装 Flask
-echo "[1] 安装 Python 依赖..."
-pip3 install flask -q 2>/dev/null || pip install flask -q
-echo "    ✓ Flask 已安装"
+# 安装依赖
+echo "[1] 安装 Python 依赖 (flask, cryptography, requests)..."
+pip3 install flask cryptography requests -q 2>/dev/null || pip install flask cryptography requests -q
+echo "    ✓ 依赖包已安装"
 
 # 创建安装目录
 echo "[2] 创建安装目录..."
@@ -237,9 +235,24 @@ cp -r templates $INSTALL_DIR/
 cp -r nginx-auth $INSTALL_DIR/ 2>/dev/null || true
 echo "    ✓ 文件已复制"
 
-# 创建配置文件
-echo "[4] 创建配置文件..."
-cat > $INSTALL_DIR/config.json << CONFIG
+# 尝试还原备份的配置（支持卸载保留恢复）
+if [ -f "/tmp/keycloak_auth_manager_backup/encryption.key" ]; then
+    echo "    检测到备份的加密密钥，正在还原..."
+    cp /tmp/keycloak_auth_manager_backup/encryption.key $INSTALL_DIR/
+fi
+if [ -f "/tmp/keycloak_auth_manager_backup/config.json" ]; then
+    echo "    检测到备份的配置文件，正在还原..."
+    cp /tmp/keycloak_auth_manager_backup/config.json $INSTALL_DIR/
+fi
+if [ -f "/tmp/keycloak_auth_manager_backup/data.json" ]; then
+    echo "    检测到备份的数据文件，正在还原..."
+    cp /tmp/keycloak_auth_manager_backup/data.json $INSTALL_DIR/
+fi
+
+# 如果没有还原配置文件，则创建新的配置文件
+if [ ! -f "$INSTALL_DIR/config.json" ]; then
+    echo "[4] 创建配置文件..."
+    cat > $INSTALL_DIR/config.json << CONFIG
 {
     "keycloak_url": "$KEYCLOAK_URL",
     "keycloak_admin": "$KEYCLOAK_ADMIN",
@@ -249,10 +262,13 @@ cat > $INSTALL_DIR/config.json << CONFIG
     "install_dir": "$INSTALL_DIR"
 }
 CONFIG
-echo "    ✓ 配置已生成"
+    echo "    ✓ 配置已生成"
+fi
 
-# 创建空数据文件
-echo '{}' > $INSTALL_DIR/data.json
+if [ ! -f "$INSTALL_DIR/data.json" ]; then
+    # 创建空数据文件
+    echo '{}' > $INSTALL_DIR/data.json
+fi
 
 # 创建 systemd 服务
 echo "[5] 创建 systemd 服务..."
@@ -269,8 +285,6 @@ WorkingDirectory=$INSTALL_DIR
 ExecStart=/usr/bin/python3 $INSTALL_DIR/app.py
 Restart=always
 RestartSec=5
-StandardOutput=append:$INSTALL_DIR/app.log
-StandardError=append:$INSTALL_DIR/app.log
 
 [Install]
 WantedBy=multi-user.target
@@ -296,13 +310,13 @@ echo "=========================================="
 echo "  部署完成！"
 echo "=========================================="
 echo ""
-echo "访问地址: http://$(hostname -I | awk '{print $1}'):8088"
+echo "访问地址: http://$(hostname -I | awk '{print $1}'):$WEB_PORT"
 echo ""
 echo "文件位置:"
 echo "  程序:   $INSTALL_DIR/app.py"
 echo "  配置:   $INSTALL_DIR/config.json"
 echo "  数据:   $INSTALL_DIR/data.json"
-echo "  日志:   $INSTALL_DIR/app.log"
+echo "  日志:   通过 journalctl 集中管理"
 echo ""
 echo "管理命令:"
 echo "  systemctl status $SERVICE_NAME    # 查看状态"
