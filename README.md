@@ -49,6 +49,7 @@ bash install.sh
 - Keycloak Admin 用户名/密码
 - Web 控制台端口
 - Keycloak 容器名称
+- 1Panel API 端口和 API Key（用于自动建站）
 
 ## 部署完成后
 

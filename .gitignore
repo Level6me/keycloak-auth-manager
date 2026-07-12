@@ -18,4 +18,3 @@ __pycache__/
 *.bak
 keycloak-auth-manager.tar.gz
 logs/
-

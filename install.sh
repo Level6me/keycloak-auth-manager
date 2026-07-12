@@ -171,6 +171,14 @@ fi
 read -p "Keycloak 容器名称 [$KEYCLOAK_RUNNING]: " KEYCLOAK_CONTAINER
 KEYCLOAK_CONTAINER=${KEYCLOAK_CONTAINER:-$KEYCLOAK_RUNNING}
 
+# 1Panel API 端口
+read -p "1Panel API 端口 [40455]: " ONEPANEL_PORT
+ONEPANEL_PORT=${ONEPANEL_PORT:-40455}
+
+# 1Panel API Key
+read -p "1Panel API Key (如果不使用 API 自动建站可留空): " ONEPANEL_API_KEY
+ONEPANEL_API_KEY=${ONEPANEL_API_KEY:-}
+
 # Apple 主题安装
 echo ""
 echo "=== Apple 主题安装 ==="
@@ -198,6 +206,8 @@ echo "  Keycloak URL:    $KEYCLOAK_URL"
 echo "  Keycloak Admin:  $KEYCLOAK_ADMIN"
 echo "  Keycloak 容器:   $KEYCLOAK_CONTAINER"
 echo "  Web 端口:        $WEB_PORT"
+echo "  1Panel 端口:     $ONEPANEL_PORT"
+echo "  1Panel API Key:  $(if [ -n "$ONEPANEL_API_KEY" ]; then echo '已配置(隐藏)'; else echo '未配置'; fi)"
 echo "  安装目录:        $INSTALL_DIR"
 echo ""
 
@@ -259,6 +269,8 @@ if [ ! -f "$INSTALL_DIR/config.json" ]; then
     "keycloak_password": "$KEYCLOAK_PASSWORD",
     "keycloak_container": "$KEYCLOAK_CONTAINER",
     "web_port": $WEB_PORT,
+    "onepanel_port": $ONEPANEL_PORT,
+    "onepanel_api_key": "$ONEPANEL_API_KEY",
     "install_dir": "$INSTALL_DIR"
 }
 CONFIG
