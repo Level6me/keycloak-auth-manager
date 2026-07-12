@@ -219,7 +219,7 @@ fi
 
 # 安装依赖
 echo "[1] 安装 Python 依赖 (flask, cryptography, requests)..."
-pip3 install flask cryptography requests -q 2>/dev/null || pip install flask cryptography requests -q
+pip3 install flask cryptography requests --break-system-packages --ignore-installed -q 2>/dev/null || pip install flask cryptography requests --break-system-packages --ignore-installed -q
 echo "    ✓ 依赖包已安装"
 
 # 创建安装目录

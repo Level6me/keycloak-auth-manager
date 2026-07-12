@@ -49,6 +49,13 @@
         </div>
     </div>
     
+    {% if not auth.ssl_enabled %}
+    <div class="alert alert-warning d-flex justify-content-between align-items-center py-2 px-3 mb-3" style="font-size: 14px;" id="ssl-apply-alert">
+        <span>⚠️ 当前域名未启用 SSL (HTTPS) 保护。强烈建议申请证书以启用 Passkey 登录！</span>
+        <a href="/ssl?domain={{ domain }}" class="btn btn-sm btn-warning fw-bold text-nowrap ms-2">🔑 立即申请证书</a>
+    </div>
+    {% endif %}
+    
     <div class="card shadow-sm mb-3">
         <div class="card-header bg-dark text-white py-2">认证配置</div>
         <div class="card-body p-0">
@@ -102,6 +109,18 @@ document.addEventListener('DOMContentLoaded', function() {
                     status.textContent = enabled ? "已开" : "已关";
                     if (data.nginx_config) {
                         document.querySelector('pre small').textContent = data.nginx_config;
+                    }
+                    if (apiType === 'ssl') {
+                        const alertEl = document.getElementById('ssl-apply-alert');
+                        if (alertEl) {
+                            if (enabled) {
+                                alertEl.style.setProperty('display', 'none', 'important');
+                            } else {
+                                alertEl.style.setProperty('display', 'flex', 'important');
+                            }
+                        } else if (!enabled) {
+                            window.location.reload();
+                        }
                     }
                 } else {
                     toggle.checked = !enabled;

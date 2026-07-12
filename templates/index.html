@@ -22,7 +22,10 @@
 <body class="bg-light">
 <div class="container-fluid px-3 mt-4">
     <h2>🔐 Keycloak Passkey 认证管理</h2>
-    <a href="/add" class="btn btn-primary mb-3 w-100 w-sm-auto">➕ 添加认证</a>
+    <div class="d-flex flex-wrap gap-2 mb-3">
+        <a href="/add" class="btn btn-primary w-100 w-sm-auto">➕ 添加认证</a>
+        <a href="/ssl" class="btn btn-dark w-100 w-sm-auto">🔑 证书申请</a>
+    </div>
     
     {% with messages = get_flashed_messages(with_categories=true) %}
         {% if messages %}
