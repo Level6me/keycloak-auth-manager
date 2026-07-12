@@ -26,16 +26,46 @@ if command -v docker &> /dev/null; then
     echo "    ✓ Docker 已安装: $docker_version"
 else
     echo "    ✗ Docker 未安装"
-    echo "    安装命令: curl -fsSL https://get.docker.com | sh"
-    check_passed=false
+    read -p "    是否尝试自动安装 Docker? (y/n) [y]: " install_docker_now
+    install_docker_now=${install_docker_now:-y}
+    if [ "$install_docker_now" = "y" ]; then
+        echo "    正在自动安装 Docker..."
+        if curl -fsSL https://get.docker.com | sh; then
+            echo "    ✓ Docker 安装成功"
+        else
+            echo "    ✗ Docker 自动安装失败"
+            echo "    请手动执行安装命令: curl -fsSL https://get.docker.com | sh"
+            check_passed=false
+        fi
+    else
+        check_passed=false
+    fi
 fi
 
 # 检查 Docker 是否运行
-if docker ps &> /dev/null; then
-    echo "    ✓ Docker 服务运行中"
+if command -v docker &> /dev/null; then
+    if docker ps &> /dev/null; then
+        echo "    ✓ Docker 服务运行中"
+    else
+        echo "    ✗ Docker 服务未运行"
+        read -p "    是否尝试启动 Docker 服务? (y/n) [y]: " start_docker_now
+        start_docker_now=${start_docker_now:-y}
+        if [ "$start_docker_now" = "y" ]; then
+            echo "    正在启动 Docker 服务..."
+            if systemctl start docker; then
+                echo "    ✓ Docker 服务已启动"
+                systemctl enable docker &>/dev/null || true
+            else
+                echo "    ✗ Docker 服务启动失败"
+                echo "    请手动启动: systemctl start docker"
+                check_passed=false
+            fi
+        else
+            check_passed=false
+        fi
+    fi
 else
-    echo "    ✗ Docker 服务未运行"
-    echo "    启动命令: systemctl start docker"
+    echo "    ✗ Docker 服务无法检查（Docker 未安装）"
     check_passed=false
 fi
 
@@ -46,8 +76,33 @@ if command -v python3 &> /dev/null; then
     echo "    ✓ Python3 已安装: $python_version"
 else
     echo "    ✗ Python3 未安装"
-    echo "    安装命令: yum install python3 或 apt install python3"
-    check_passed=false
+    read -p "    是否尝试自动安装 Python3? (y/n) [y]: " install_python_now
+    install_python_now=${install_python_now:-y}
+    if [ "$install_python_now" = "y" ]; then
+        echo "    正在安装 Python3..."
+        installed=false
+        if command -v apt-get &>/dev/null; then
+            apt-get update -y -q && apt-get install -y python3
+            installed=true
+        elif command -v yum &>/dev/null; then
+            yum install -y python3
+            installed=true
+        elif command -v dnf &>/dev/null; then
+            dnf install -y python3
+            installed=true
+        fi
+        
+        if [ "$installed" = true ] && command -v python3 &>/dev/null; then
+            python_version=$(python3 --version)
+            echo "    ✓ Python3 安装成功: $python_version"
+        else
+            echo "    ✗ Python3 自动安装失败"
+            echo "    请手动安装: yum install python3 或 apt install python3"
+            check_passed=false
+        fi
+    else
+        check_passed=false
+    fi
 fi
 
 # 检查 pip3
@@ -55,8 +110,41 @@ if command -v pip3 &> /dev/null; then
     echo "    ✓ pip3 已安装"
 else
     echo "    ✗ pip3 未安装"
-    echo "    安装命令: yum install python3-pip 或 apt install python3-pip"
-    check_passed=false
+    read -p "    是否尝试自动安装 pip3? (y/n) [y]: " install_pip_now
+    install_pip_now=${install_pip_now:-y}
+    if [ "$install_pip_now" = "y" ]; then
+        echo "    正在安装 pip3..."
+        installed=false
+        if command -v apt-get &>/dev/null; then
+            apt-get update -y -q && apt-get install -y python3-pip
+            installed=true
+        elif command -v yum &>/dev/null; then
+            yum install -y python3-pip
+            installed=true
+        elif command -v dnf &>/dev/null; then
+            dnf install -y python3-pip
+            installed=true
+        fi
+        
+        if [ "$installed" = true ] && command -v pip3 &>/dev/null; then
+            echo "    ✓ pip3 安装成功"
+        else
+            if command -v python3 &>/dev/null; then
+                if python3 -m ensurepip --default-pip &>/dev/null || python3 -m ensurepip &>/dev/null; then
+                    echo "    ✓ pip3 安装成功 (通过 ensurepip)"
+                else
+                    echo "    ✗ pip3 自动安装失败"
+                    echo "    请手动安装: yum install python3-pip 或 apt install python3-pip"
+                    check_passed=false
+                fi
+            else
+                echo "    ✗ pip3 自动安装失败 (缺少 python3)"
+                check_passed=false
+            fi
+        fi
+    else
+        check_passed=false
+    fi
 fi
 
 # 检查 1Panel/OpenResty
@@ -68,14 +156,26 @@ if [ -d "$PANEL_DIR" ]; then
     echo "    ✓ 1Panel 已安装: $PANEL_DIR"
 else
     echo "    ✗ 1Panel 未安装"
-    echo "    安装命令: curl -sSL https://resource.fit2cloud.com/1panel/package快速安装v1.10.sh | bash"
-    check_passed=false
+    read -p "    是否尝试自动安装 1Panel? (y/n) [y]: " install_panel_now
+    install_panel_now=${install_panel_now:-y}
+    if [ "$install_panel_now" = "y" ]; then
+        echo "    正在下载并运行 1Panel 安装脚本..."
+        if bash -c "$(curl -sSL https://resource.fit2cloud.com/1panel/package/v2/quick_start.sh)"; then
+            echo "    ✓ 1Panel 安装完成"
+        else
+            echo "    ✗ 1Panel 安装失败"
+            echo "    请手动运行安装命令: bash -c \"\$(curl -sSL https://resource.fit2cloud.com/1panel/package/v2/quick_start.sh)\""
+            check_passed=false
+        fi
+    else
+        check_passed=false
+    fi
 fi
 
 if [ -d "$OPENRESTY_DIR" ]; then
     echo "    ✓ OpenResty 已安装: $OPENRESTY_DIR"
 else
-    echo "    ✗ OpenResty 未安装（需在 1Panel 中安装）"
+    echo "    ✗ OpenResty 未安装（需在 1Panel 应用商店中搜索并安装 OpenResty）"
     check_passed=false
 fi
 
@@ -84,80 +184,88 @@ SITES_DIR="$OPENRESTY_DIR/www/sites"
 if [ -d "$SITES_DIR" ]; then
     echo "    ✓ 网站目录存在: $SITES_DIR"
 else
-    echo "    ✗ 网站目录不存在: $SITES_DIR"
+    echo "    ✗ 网站目录不存在: $SITES_DIR (将随着 OpenResty 安装自动创建)"
     check_passed=false
 fi
 
 # 检查 Keycloak 容器
 echo "[4] 检查 Keycloak..."
-KEYCLOAK_RUNNING=$(docker ps --filter "name=keycloak" --format "{{.Names}}" | head -1)
-if [ -n "$KEYCLOAK_RUNNING" ]; then
-    echo "    ✓ Keycloak 容器运行中: $KEYCLOAK_RUNNING"
-else
-    KEYCLOAK_EXISTS=$(docker ps -a --filter "name=keycloak" --format "{{.Names}}" | head -1)
-    if [ -n "$KEYCLOAK_EXISTS" ]; then
-        echo "    ! Keycloak 容器存在但未运行: $KEYCLOAK_EXISTS"
-        read -p "    是否尝试启动该容器? (y/n) [y]: " start_kc_now
-        start_kc_now=${start_kc_now:-y}
-        if [ "$start_kc_now" = "y" ]; then
-            if docker start "$KEYCLOAK_EXISTS" &> /dev/null; then
-                echo "    ✓ 容器 $KEYCLOAK_EXISTS 已启动"
-                KEYCLOAK_RUNNING="$KEYCLOAK_EXISTS"
-            else
-                echo "    ✗ 容器启动失败"
-                check_passed=false
-            fi
-        else
-            check_passed=false
-        fi
+if command -v docker &> /dev/null && docker ps &> /dev/null; then
+    KEYCLOAK_RUNNING=$(docker ps --filter "name=keycloak" --format "{{.Names}}" | head -1)
+    if [ -n "$KEYCLOAK_RUNNING" ]; then
+        echo "    ✓ Keycloak 容器运行中: $KEYCLOAK_RUNNING"
     else
-        echo "    ✗ Keycloak 容器不存在"
-        read -p "    是否现在自动部署 Keycloak 容器? (y/n) [y]: " deploy_kc_now
-        deploy_kc_now=${deploy_kc_now:-y}
-        if [ "$deploy_kc_now" = "y" ]; then
-            echo ""
-            echo "--- 部署 Keycloak 容器配置 ---"
-            read -p "    选择数据库类型 (h2/postgres) [h2]: " kc_db_type
-            kc_db_type=${kc_db_type:-h2}
-            
-            read -p "    设置 Keycloak 管理员用户名 [admin]: " kc_admin_user
-            kc_admin_user=${kc_admin_user:-admin}
-            
-            read -sp "    设置 Keycloak 管理员密码 [admin123]: " kc_admin_pass
-            echo ""
-            kc_admin_pass=${kc_admin_pass:-admin123}
-            
-            read -p "    设置 Keycloak 映射端口 [8080]: " kc_port
-            kc_port=${kc_port:-8080}
-            
-            kc_db_pass=""
-            if [ "$kc_db_type" = "postgres" ]; then
-                read -sp "    设置 PostgreSQL 数据库密码 [KcDbPassWord_2026]: " kc_db_pass
-                echo ""
-                kc_db_pass=${kc_db_pass:-KcDbPassWord_2026}
-            fi
-            
-            echo "    正在调用 deploy_keycloak.sh 部署容器..."
-            if bash deploy_keycloak.sh "$kc_db_type" "$kc_admin_user" "$kc_admin_pass" "$kc_port" "$kc_db_pass"; then
-                echo "    ✓ Keycloak 容器部署成功"
-                KEYCLOAK_RUNNING="keycloak"
+        KEYCLOAK_EXISTS=$(docker ps -a --filter "name=keycloak" --format "{{.Names}}" | head -1)
+        if [ -n "$KEYCLOAK_EXISTS" ]; then
+            echo "    ! Keycloak 容器存在但未运行: $KEYCLOAK_EXISTS"
+            read -p "    是否尝试启动该容器? (y/n) [y]: " start_kc_now
+            start_kc_now=${start_kc_now:-y}
+            if [ "$start_kc_now" = "y" ]; then
+                if docker start "$KEYCLOAK_EXISTS" &> /dev/null; then
+                    echo "    ✓ 容器 $KEYCLOAK_EXISTS 已启动"
+                    KEYCLOAK_RUNNING="$KEYCLOAK_EXISTS"
+                else
+                    echo "    ✗ 容器启动失败"
+                    check_passed=false
+                fi
             else
-                echo "    ✗ Keycloak 容器部署失败"
                 check_passed=false
             fi
         else
-            check_passed=false
+            echo "    ✗ Keycloak 容器不存在"
+            read -p "    是否现在自动部署 Keycloak 容器? (y/n) [y]: " deploy_kc_now
+            deploy_kc_now=${deploy_kc_now:-y}
+            if [ "$deploy_kc_now" = "y" ]; then
+                echo ""
+                echo "--- 部署 Keycloak 容器配置 ---"
+                read -p "    选择数据库类型 (h2/postgres) [h2]: " kc_db_type
+                kc_db_type=${kc_db_type:-h2}
+                
+                read -p "    设置 Keycloak 管理员用户名 [admin]: " kc_admin_user
+                kc_admin_user=${kc_admin_user:-admin}
+                
+                read -sp "    设置 Keycloak 管理员密码 [admin123]: " kc_admin_pass
+                echo ""
+                kc_admin_pass=${kc_admin_pass:-admin123}
+                
+                read -p "    设置 Keycloak 映射端口 [8080]: " kc_port
+                kc_port=${kc_port:-8080}
+                
+                kc_db_pass=""
+                if [ "$kc_db_type" = "postgres" ]; then
+                    read -sp "    设置 PostgreSQL 数据库密码 [KcDbPassWord_2026]: " kc_db_pass
+                    echo ""
+                    kc_db_pass=${kc_db_pass:-KcDbPassWord_2026}
+                fi
+                
+                echo "    正在调用 deploy_keycloak.sh 部署容器..."
+                if bash deploy_keycloak.sh "$kc_db_type" "$kc_admin_user" "$kc_admin_pass" "$kc_port" "$kc_db_pass"; then
+                    echo "    ✓ Keycloak 容器部署成功"
+                    KEYCLOAK_RUNNING="keycloak"
+                else
+                    echo "    ✗ Keycloak 容器部署失败"
+                    check_passed=false
+                fi
+            else
+                check_passed=false
+            fi
         fi
     fi
+else
+    echo "    ✗ 无法检查 Keycloak (Docker 未运行)"
+    check_passed=false
 fi
-
 
 # 检查 oauth2-proxy 镜像
 echo "[5] 检查 oauth2-proxy..."
-if docker images | grep -q "oauth2-proxy"; then
-    echo "    ✓ oauth2-proxy 镜像已下载"
+if command -v docker &> /dev/null && docker ps &> /dev/null; then
+    if docker images | grep -q "oauth2-proxy"; then
+        echo "    ✓ oauth2-proxy 镜像已下载"
+    else
+        echo "    ! oauth2-proxy 镜像未下载（首次使用时会自动拉取）"
+    fi
 else
-    echo "    ! oauth2-proxy 镜像未下载（首次使用时会自动拉取）"
+    echo "    ✗ 无法检查 oauth2-proxy 镜像 (Docker 未运行)"
 fi
 
 echo ""
