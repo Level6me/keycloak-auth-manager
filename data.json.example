@@ -1,0 +1,13 @@
+{
+  "example.com": {
+    "auth_enabled": true,
+    "client_id": "example-com",
+    "client_secret": "gAAAAAB...",
+    "container_name": "oauth2-proxy-example-com",
+    "cookie_secret": "gAAAAAB...",
+    "nginx_config": "/opt/1panel/apps/openresty/openresty/www/sites/example.com/proxy/root.conf",
+    "oauth_port": 4180,
+    "proxy_enabled": true,
+    "ssl_enabled": false
+  }
+}

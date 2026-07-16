@@ -1,0 +1,201 @@
+/* 真正的 Apple 风格 - 极简、白色、大圆角 */
+
+/* 全局背景 - 苹果风格的纯白色 */
+body {
+    background-color: #ffffff !important;
+    background-image: none !important;
+    font-family: -apple-system, BlinkMacSystemFont, "SF Pro Display", "SF Pro Text", "Helvetica Neue", Arial, sans-serif !important;
+}
+
+/* 移除所有默认背景和边框 */
+div, span, p {
+    background: transparent !important;
+}
+
+/* 主容器 - 苹果卡片风格 */
+.login-pf body, 
+.login-pf-page {
+    background-color: #ffffff !important;
+}
+
+/* 登录卡片 - 大圆角、柔和阴影 */
+.card-pf, 
+.login-pf .card-pf {
+    background: #ffffff !important;
+    border: none !important;
+    border-radius: 20px !important;
+    box-shadow: 0 2px 20px rgba(0, 0, 0, 0.08) !important;
+    padding: 40px !important;
+}
+
+/* 页面整体布局 */
+#kc-content, 
+#kc-content-wrapper {
+    background: #ffffff !important;
+    border-radius: 20px !important;
+}
+
+/* 标题 */
+h1, #kc-page-title, #kc-header-wrapper {
+    color: #1d1d1f !important;
+    font-weight: 600 !important;
+    font-size: 28px !important;
+    text-align: center !important;
+    margin-bottom: 24px !important;
+}
+
+/* 所有输入框 - 苹果风格 */
+input[type="text"],
+input[type="password"],
+input[type="email"],
+input[type="number"],
+input:not([type]),
+.form-control,
+#username,
+#password,
+#totp,
+.form-group input {
+    background-color: #f5f5f7 !important;
+    border: none !important;
+    border-radius: 12px !important;
+    padding: 14px 16px !important;
+    font-size: 17px !important;
+    color: #1d1d1f !important;
+    width: 100% !important;
+    outline: none !important;
+    box-shadow: none !important;
+}
+
+input:focus,
+.form-control:focus {
+    background-color: #ffffff !important;
+    box-shadow: 0 0 0 4px rgba(0, 122, 255, 0.2) !important;
+}
+
+/* 按钮组 */
+.form-group, .kc-form-group {
+    margin-bottom: 16px !important;
+}
+
+/* 主按钮 - 苹果蓝色 */
+.kc-login-button,
+input[type="submit"],
+#kc-login,
+.btn-primary,
+.btn-lg,
+button.primary {
+    background-color: #0071e3 !important;
+    color: #ffffff !important;
+    border: none !important;
+    border-radius: 12px !important;
+    padding: 14px 24px !important;
+    font-size: 17px !important;
+    font-weight: 500 !important;
+    width: 100% !important;
+    cursor: pointer !important;
+    transition: background-color 0.2s ease !important;
+}
+
+.kc-login-button:hover,
+input[type="submit"]:hover,
+.btn-primary:hover {
+    background-color: #0077ed !important;
+}
+
+/* 次级按钮 */
+.btn-default,
+.btn-link,
+a.kc-button {
+    background: transparent !important;
+    color: #0071e3 !important;
+    border: none !important;
+    border-radius: 12px !important;
+    padding: 14px 24px !important;
+    font-weight: 500 !important;
+}
+
+/* 链接 */
+a {
+    color: #0071e3 !important;
+    text-decoration: none !important;
+}
+
+a:hover {
+    text-decoration: underline !important;
+}
+
+/* Passkey/WebAuthn 特殊按钮 */
+#kc-webauthn-button,
+.webauthn-button {
+    background-color: #1d1d1f !important;
+    color: #ffffff !important;
+    border-radius: 12px !important;
+    padding: 14px 24px !important;
+    font-weight: 500 !important;
+}
+
+/* 错误提示 */
+.alert-danger,
+#error,
+.kc-error-message {
+    background-color: #fff5f5 !important;
+    border: none !important;
+    border-radius: 12px !important;
+    color: #ff3b30 !important;
+    padding: 16px !important;
+}
+
+/* 信息提示 */
+.alert-info,
+.kc-info-panel {
+    background-color: #f5f5f7 !important;
+    border: none !important;
+    border-radius: 12px !important;
+    padding: 16px !important;
+    color: #1d1d1f !important;
+}
+
+/* 移除所有边框 */
+fieldset, .form-group, .card-pf-body {
+    border: none !important;
+}
+
+/* Logo 区域 */
+#kc-logo-wrapper, #kc-logo, .kc-logo {
+    text-align: center !important;
+    margin-bottom: 20px !important;
+}
+
+/* 注册链接 */
+.kc-registration, #kc-registration {
+    text-align: center !important;
+    margin-top: 24px !important;
+    color: #86868b !important;
+}
+
+/* 小屏幕适配 */
+@media (max-width: 480px) {
+    .card-pf {
+        padding: 24px !important;
+        border-radius: 16px !important;
+    }
+    
+    h1, #kc-page-title {
+        font-size: 22px !important;
+    }
+}
+
+/* Passkey 提示区域 */
+#kc-webauthn-login-form {
+    text-align: center !important;
+}
+
+/* 去除 Keycloak 默认的深色背景 */
+.login-pf {
+    background: #ffffff !important;
+}
+
+/* 去除默认样式 */
+.pf-c-form, .pf-c-title {
+    background: transparent !important;
+}

@@ -1,0 +1,331 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>SSL 证书申请与管理</title>
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3/dist/css/bootstrap.min.css" rel="stylesheet">
+    <style>
+        body {
+            background-color: #f4f6f9;
+            color: #333;
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+        }
+        .ssl-card {
+            border: none;
+            border-radius: 12px;
+            box-shadow: 0 4px 20px rgba(0, 0, 0, 0.08);
+            background: #ffffff;
+            transition: transform 0.2s;
+        }
+        .btn-gradient {
+            background: linear-gradient(135deg, #0d6efd 0%, #0a58ca 100%);
+            color: white;
+            border: none;
+            border-radius: 8px;
+            font-weight: 600;
+            padding: 10px 20px;
+        }
+        .btn-gradient:hover {
+            background: linear-gradient(135deg, #0b5ed7 0%, #084298 100%);
+            color: white;
+        }
+        .btn-gradient:disabled {
+            background: #6c757d;
+        }
+        #logs {
+            background: #181824;
+            color: #39ff14;
+            font-family: "Courier New", Courier, monospace;
+            padding: 18px;
+            border-radius: 10px;
+            min-height: 200px;
+            max-height: 350px;
+            overflow-y: auto;
+            font-size: 13px;
+            box-shadow: inset 0 2px 8px rgba(0, 0, 0, 0.5);
+            line-height: 1.6;
+        }
+        #logs .error { color: #ff4d4d; font-weight: bold; }
+        #logs .success { color: #39ff14; font-weight: bold; }
+        #logs .info { color: #00d9ff; }
+        #logs .system { color: #aaaaaa; }
+        .spinner-border { width: 1.2rem; height: 1.2rem; }
+        .status-badge-container {
+            font-weight: bold;
+        }
+        .form-select-lg, .form-control-lg {
+            font-size: 1rem;
+            border-radius: 8px;
+        }
+        .form-label {
+            font-size: 0.9rem;
+            color: #495057;
+        }
+        .card-header-gradient {
+            background: linear-gradient(135deg, #212529 0%, #343a40 100%);
+            color: #fff;
+            border-top-left-radius: 12px;
+            border-top-right-radius: 12px;
+        }
+    </style>
+</head>
+<body>
+<div class="container-fluid px-3 mt-4" style="max-width: 800px;">
+    <div class="d-flex justify-content-between align-items-center mb-3">
+        <h2>🔒 SSL 证书申请</h2>
+        <a href="/" class="btn btn-outline-secondary btn-sm">← 返回主页</a>
+    </div>
+
+    <div class="card ssl-card mb-4">
+        <div class="card-body p-4">
+            <form id="sslForm">
+                <div class="mb-3">
+                    <label class="form-label fw-bold">申请域名</label>
+                    <input type="text" name="domain" id="domain" class="form-control form-control-lg" 
+                           placeholder="例如: app.example.com" required 
+                           autocomplete="off" autocorrect="off" autocapitalize="off">
+                    <div class="form-text">请确保该域名在 1Panel 中已创建反代网站，且已正确解析到本服务器。</div>
+                </div>
+
+                <div class="row">
+                    <div class="col-md-6 mb-3">
+                        <label class="form-label fw-bold">ACME 账户</label>
+                        <select id="acme_account" class="form-select form-select-lg" required>
+                            <option value="">加载中...</option>
+                        </select>
+                        <div class="form-text">用于向 Let's Encrypt 等机构申请证书的 ACME 邮箱账户。</div>
+                    </div>
+                    
+                    <div class="col-md-6 mb-3">
+                        <label class="form-label fw-bold">验证方式</label>
+                        <select id="auth_method" class="form-select form-select-lg">
+                            <option value="http">HTTP 验证（默认）</option>
+                            <option value="dns">DNS 验证（需 API 账户）</option>
+                        </select>
+                        <div class="form-text">HTTP 需要 80 端口可正常访问；DNS 需要配置 API 账户。</div>
+                    </div>
+                </div>
+
+                <div class="mb-3 d-none" id="dns_container">
+                    <label class="form-label fw-bold">DNS 账户</label>
+                    <select id="dns_account" class="form-select form-select-lg">
+                        <option value="">请选择 DNS 账户...</option>
+                    </select>
+                    <div class="form-text">在 1Panel 中配置的 DNS 提供商 API 账户。</div>
+                </div>
+
+                <button type="submit" id="submitBtn" class="btn btn-gradient btn-lg w-100 mt-2">
+                    🚀 开始申请并绑定证书
+                </button>
+            </form>
+        </div>
+    </div>
+    
+    <div class="card ssl-card">
+        <div class="card-header card-header-gradient py-3 d-flex justify-content-between align-items-center">
+            <span class="fw-bold">📋 申请进度与日志</span>
+            <span id="statusBadge" class="badge bg-secondary py-2 px-3">等待操作</span>
+        </div>
+        <div class="card-body">
+            <div id="logs">系统处于就绪状态，请填写上述表单后开始...</div>
+        </div>
+    </div>
+    
+    <div class="mt-4 pb-4">
+        <h5>📌 申请说明与注意事项</h5>
+        <ul class="text-muted small">
+            <li><b>HTTP 验证</b>：程序会自动在您的网站根目录下生成验证文件。请确保您的域名已经解析至本服务器，且防火墙已放行 80/443 端口。</li>
+            <li><b>DNS 验证</b>：适用于没有开启 80 端口，或者需要申请泛域名证书的情况。需提前在 1Panel 的「证书」-「DNS 账户」中添加提供商 API 信息。</li>
+            <li><b>自动重载</b>：证书申请成功后，1Panel 会自动将证书绑定到对应的 OpenResty 站点，并自动重载 OpenResty 使其生效。</li>
+        </ul>
+    </div>
+</div>
+
+<script>
+let eventSource = null;
+
+// 解析 URL 参数中的 domain
+function getQueryParam(name) {
+    const urlParams = new URLSearchParams(window.location.search);
+    return urlParams.get(name);
+}
+
+document.addEventListener('DOMContentLoaded', async function() {
+    const domainInput = document.getElementById('domain');
+    const paramDomain = getQueryParam('domain');
+    if (paramDomain) {
+        domainInput.value = paramDomain;
+    }
+
+    // 加载 ACME 账户列表
+    try {
+        const response = await fetch('/api/acme_accounts');
+        const accounts = await response.json();
+        const acmeSelect = document.getElementById('acme_account');
+        acmeSelect.innerHTML = '';
+        if (accounts && accounts.length > 0) {
+            accounts.forEach(acc => {
+                const opt = document.createElement('option');
+                opt.value = acc.id;
+                opt.textContent = acc.email;
+                acmeSelect.appendChild(opt);
+            });
+        } else {
+            acmeSelect.innerHTML = '<option value="">未找到 ACME 账户，请去 1Panel 创建</option>';
+        }
+    } catch (e) {
+        document.getElementById('acme_account').innerHTML = '<option value="">加载失败，请刷新</option>';
+    }
+
+    // 加载 DNS 账户列表
+    try {
+        const response = await fetch('/api/dns_accounts');
+        const accounts = await response.json();
+        const dnsSelect = document.getElementById('dns_account');
+        dnsSelect.innerHTML = '<option value="">请选择 DNS 账户...</option>';
+        if (accounts && accounts.length > 0) {
+            accounts.forEach(acc => {
+                const opt = document.createElement('option');
+                opt.value = acc.id;
+                opt.textContent = acc.name;
+                dnsSelect.appendChild(opt);
+            });
+        } else {
+            dnsSelect.innerHTML = '<option value="">未在 1Panel 找到可用的 DNS 账户</option>';
+        }
+    } catch (e) {
+        document.getElementById('dns_account').innerHTML = '<option value="">加载失败</option>';
+    }
+});
+
+// 验证方式切换
+document.getElementById('auth_method').addEventListener('change', function(e) {
+    const dnsContainer = document.getElementById('dns_container');
+    if (e.target.value === 'dns') {
+        dnsContainer.classList.remove('d-none');
+        document.getElementById('dns_account').setAttribute('required', 'required');
+    } else {
+        dnsContainer.classList.add('d-none');
+        document.getElementById('dns_account').removeAttribute('required');
+    }
+});
+
+// 提交表单
+document.getElementById('sslForm').addEventListener('submit', async function(e) {
+    e.preventDefault();
+    
+    const domain = document.getElementById('domain').value.trim();
+    const acmeId = document.getElementById('acme_account').value;
+    const authMethod = document.getElementById('auth_method').value;
+    const dnsId = document.getElementById('dns_account').value;
+    
+    const btn = document.getElementById('submitBtn');
+    const logs = document.getElementById('logs');
+    const status = document.getElementById('statusBadge');
+    
+    if (!domain) {
+        alert('请输入申请域名');
+        return;
+    }
+    if (!acmeId) {
+        alert('请选择 ACME 账户。如果下拉框为空，请先在 1Panel 配置 ACME 账户。');
+        return;
+    }
+    if (authMethod === 'dns' && !dnsId) {
+        alert('请选择 DNS 账户。');
+        return;
+    }
+    
+    btn.disabled = true;
+    btn.innerHTML = '<span class="spinner-border spinner-border-sm me-2"></span>正在申请中...';
+    status.className = 'badge bg-warning text-dark';
+    status.textContent = '申请中';
+    logs.innerHTML = '<div class="system">[系统] 正在初始化 SSL 申请流程，连接实时日志流...</div>';
+    
+    // 连接 EventSource 实时日志
+    if (eventSource) {
+        eventSource.close();
+    }
+    
+    eventSource = new EventSource('/api/logs');
+    eventSource.onmessage = function(event) {
+        if (event.data !== 'heartbeat') {
+            const line = document.createElement('div');
+            line.textContent = event.data;
+            if (event.data.includes('失败') || event.data.includes('error') || event.data.includes('Error') || event.data.includes('Failed')) {
+                line.className = 'error';
+            } else if (event.data.includes('成功') || event.data.includes('完成') || event.data.includes('绑定成功') || event.data.includes('证书签发成功')) {
+                line.className = 'success';
+            } else {
+                line.className = 'info';
+            }
+            logs.appendChild(line);
+            logs.scrollTop = logs.scrollHeight;
+        }
+    };
+
+    try {
+        const formData = new FormData();
+        formData.append('domain', domain);
+        formData.append('acme_id', acmeId);
+        if (authMethod === 'dns') {
+            formData.append('dns_id', dnsId);
+        }
+        
+        const response = await fetch('/api/apply_ssl', {
+            method: 'POST',
+            body: formData
+        });
+        
+        const result = await response.json();
+        
+        if (result.success) {
+            status.className = 'badge bg-success';
+            status.textContent = '签发成功';
+            btn.innerHTML = '✅ 申请成功！';
+            const doneLine = document.createElement('div');
+            doneLine.className = 'success';
+            doneLine.textContent = '[系统] 证书已成功签发，并已在 1Panel 中启用 HTTPS 绑定重载。';
+            logs.appendChild(doneLine);
+            logs.scrollTop = logs.scrollHeight;
+            
+            setTimeout(() => {
+                window.location.href = `/detail/${domain}`;
+            }, 3000);
+        } else {
+            status.className = 'badge bg-danger';
+            status.textContent = '失败';
+            btn.innerHTML = '🚀 重新申请';
+            btn.disabled = false;
+            const errLine = document.createElement('div');
+            errLine.className = 'error';
+            errLine.textContent = '[系统] 错误提示: ' + (result.error || '未知错误');
+            logs.appendChild(errLine);
+            logs.scrollTop = logs.scrollHeight;
+        }
+    } catch (err) {
+        status.className = 'badge bg-danger';
+        status.textContent = '网络错误';
+        btn.innerHTML = '🚀 重新申请';
+        btn.disabled = false;
+        const errLine = document.createElement('div');
+        errLine.className = 'error';
+        errLine.textContent = '[系统] 网络请求失败: ' + err;
+        logs.appendChild(errLine);
+        logs.scrollTop = logs.scrollHeight;
+    } finally {
+        if (eventSource) {
+            setTimeout(() => {
+                if (eventSource) {
+                    eventSource.close();
+                    eventSource = null;
+                }
+            }, 5000);
+        }
+    }
+});
+</script>
+<script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3/dist/js/bootstrap.bundle.min.js"></script>
+</body>
+</html>
