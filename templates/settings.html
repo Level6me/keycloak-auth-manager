@@ -1,0 +1,80 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>系统设置 - Keycloak 认证管理</title>
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3/dist/css/bootstrap.min.css" rel="stylesheet">
+    <style>
+        body { padding-bottom: 60px; }
+    </style>
+</head>
+<body class="bg-light">
+<div class="container-fluid px-3 mt-4">
+    <div class="d-flex justify-content-between align-items-center mb-3">
+        <h2>⚙️ 系统配置</h2>
+        <a href="/" class="btn btn-secondary">返回首页</a>
+    </div>
+
+    {% with messages = get_flashed_messages(with_categories=true) %}
+        {% if messages %}
+            {% for category, message in messages %}
+                <div class="alert alert-{{ category }} alert-dismissible fade show">
+                    {{ message }}
+                    <button type="button" class="btn-close" data-bs-dismiss="alert"></button>
+                </div>
+            {% endfor %}
+        {% endif %}
+    {% endwith %}
+
+    <div class="card shadow-sm">
+        <div class="card-body">
+            <form action="/settings" method="post">
+                <h5 class="card-title text-primary mb-3">面板运行配置</h5>
+                <div class="mb-3">
+                    <label class="form-label">面板监听端口 (web_port)</label>
+                    <input type="number" class="form-control" name="web_port" value="{{ config.get('web_port', 8088) }}" required>
+                    <div class="form-text text-danger">注意：修改面板端口后，需要手动在服务器运行 <code>systemctl restart keycloak-auth-manager</code> 才能生效。</div>
+                </div>
+
+                <hr>
+                <h5 class="card-title text-primary mb-3">Keycloak 容器配置</h5>
+                <div class="mb-3">
+                    <label class="form-label">Keycloak URL</label>
+                    <input type="url" class="form-control" name="keycloak_url" value="{{ config.get('keycloak_url', '') }}" required>
+                    <div class="form-text">例如: http://127.0.0.1:8080</div>
+                </div>
+                <div class="row">
+                    <div class="col-md-6 mb-3">
+                        <label class="form-label">管理员账号</label>
+                        <input type="text" class="form-control" name="keycloak_admin" value="{{ config.get('keycloak_admin', '') }}" required>
+                    </div>
+                    <div class="col-md-6 mb-3">
+                        <label class="form-label">管理员密码</label>
+                        <input type="password" class="form-control" name="keycloak_password" placeholder="若不修改请留空">
+                    </div>
+                </div>
+                <div class="mb-3">
+                    <label class="form-label">Docker 容器名称 (keycloak_container)</label>
+                    <input type="text" class="form-control" name="keycloak_container" value="{{ config.get('keycloak_container', 'keycloak') }}" required>
+                </div>
+
+                <hr>
+                <h5 class="card-title text-primary mb-3">1Panel API 配置</h5>
+                <div class="mb-3">
+                    <label class="form-label">API 端口 (onepanel_port)</label>
+                    <input type="number" class="form-control" name="onepanel_port" value="{{ config.get('onepanel_port', 40455) }}" required>
+                </div>
+                <div class="mb-3">
+                    <label class="form-label">API 密钥 (API Key)</label>
+                    <input type="password" class="form-control" name="onepanel_api_key" placeholder="若不修改请留空">
+                </div>
+
+                <button type="submit" class="btn btn-primary w-100">保存设置</button>
+            </form>
+        </div>
+    </div>
+</div>
+<script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3/dist/js/bootstrap.bundle.min.js"></script>
+</body>
+</html>
