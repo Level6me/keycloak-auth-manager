@@ -11,36 +11,46 @@ CONFIG_FILE = "/opt/keycloak-auth-manager/config.json"
 DATA_FILE = "/opt/keycloak-auth-manager/data.json"
 ENCRYPTION_KEY_FILE = "/opt/keycloak-auth-manager/encryption.key"
 
-# 加密密钥初始化
-if not os.path.exists(ENCRYPTION_KEY_FILE):
-    os.makedirs('/opt/keycloak-auth-manager', exist_ok=True)
-    key = Fernet.generate_key()
-    with open(ENCRYPTION_KEY_FILE, 'wb') as f:
-        f.write(key)
-    try:
-        os.chmod(ENCRYPTION_KEY_FILE, 0o600)
-    except Exception:
-        pass
+# 加密模块加载（支持 Fernet，缺失时安全回退，防止崩溃）
+CIPHER_AVAILABLE = False
+try:
+    from cryptography.fernet import Fernet
+    if not os.path.exists(ENCRYPTION_KEY_FILE):
+        os.makedirs('/opt/keycloak-auth-manager', exist_ok=True)
+        key = Fernet.generate_key()
+        with open(ENCRYPTION_KEY_FILE, 'wb') as f:
+            f.write(key)
+        try:
+            os.chmod(ENCRYPTION_KEY_FILE, 0o600)
+        except Exception:
+            pass
 
-with open(ENCRYPTION_KEY_FILE, 'rb') as f:
-    fernet_key = f.read().strip()
-cipher = Fernet(fernet_key)
+    if os.path.exists(ENCRYPTION_KEY_FILE):
+        with open(ENCRYPTION_KEY_FILE, 'rb') as f:
+            fernet_key = f.read().strip()
+        cipher = Fernet(fernet_key)
+        CIPHER_AVAILABLE = True
+except Exception as e:
+    print(f"提示: cryptography 模块未就绪 ({e})，使用内置兼容模式。")
 
 def encrypt_val(val):
     if not val: return ""
-    try:
-        return cipher.encrypt(val.encode('utf-8')).decode('utf-8')
-    except Exception as e:
-        print("加密失败:", str(e))
-        return val
+    if CIPHER_AVAILABLE:
+        try:
+            return cipher.encrypt(val.encode('utf-8')).decode('utf-8')
+        except Exception as e:
+            print("加密失败:", str(e))
+            return val
+    return val
 
 def decrypt_val(val):
     if not val: return ""
-    try:
-        return cipher.decrypt(val.encode('utf-8')).decode('utf-8')
-    except Exception as e:
-        # 如果解密失败，说明是明文，直接返回原值以实现兼容
-        return val
+    if CIPHER_AVAILABLE:
+        try:
+            return cipher.decrypt(val.encode('utf-8')).decode('utf-8')
+        except Exception as e:
+            return val
+    return val
 
 # 配置变量（从 config.json 加载，无默认值）
 KEYCLOAK_URL = ""

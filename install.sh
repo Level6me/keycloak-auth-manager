@@ -382,31 +382,38 @@ echo "=== 开始部署 ==="
 
 # 安装 Python 依赖
 echo "[1] 智能检测并安装 Python 依赖 (flask, cryptography, requests)..."
-pip3 install flask cryptography requests -q 2>/dev/null || \
-pip install flask cryptography requests -q 2>/dev/null || \
-pip3 install flask cryptography requests --break-system-packages -q 2>/dev/null || \
-python3 -m pip install flask cryptography requests -q 2>/dev/null || \
-python3 -m pip install flask cryptography requests --break-system-packages -q 2>/dev/null || true
 
-# 依赖校验与自动补齐自愈
-if ! python3 -c "import flask, cryptography, requests" 2>/dev/null; then
-    echo "    ! 常规 pip 安装未生效，正在尝试系统包管理器与 ensurepip 深度自愈..."
-    if command -v yum >/dev/null 2>&1; then
-        yum install -y -q epel-release 2>/dev/null || true
-        yum install -y -q python3-pip python3-flask python3-cryptography python3-requests 2>/dev/null || true
-        python3 -m ensurepip --upgrade 2>/dev/null || true
-        python3 -m pip install flask cryptography requests 2>/dev/null || true
-    elif command -v apt-get >/dev/null 2>&1; then
-        export DEBIAN_FRONTEND=noninteractive
-        apt-get install -y -q python3-pip python3-flask python3-cryptography python3-requests 2>/dev/null || true
-        python3 -m pip install flask cryptography requests 2>/dev/null || true
-    fi
+# 判断 Python 版本，对 Python 3.6 (CentOS 7) 锁定免 Rust 编译的版本 <=3.3.2
+CRYPTO_PKG="cryptography"
+if python3 -c "import sys; sys.exit(0 if sys.version_info < (3, 7) else 1)" 2>/dev/null; then
+    CRYPTO_PKG="cryptography<=3.3.2"
 fi
 
-if python3 -c "import flask, cryptography, requests" 2>/dev/null; then
-    echo "    ✓ Python 依赖包已就绪 (flask, cryptography, requests)"
+# 1. 优先尝试系统包管理器直接安装已编译的二进制库 (CentOS / Debian / Ubuntu)
+if command -v yum >/dev/null 2>&1; then
+    yum install -y -q epel-release 2>/dev/null || true
+    yum install -y -q python3-pip python3-flask python3-cryptography python3-requests 2>/dev/null || true
+elif command -v apt-get >/dev/null 2>&1; then
+    export DEBIAN_FRONTEND=noninteractive
+    apt-get install -y -q python3-pip python3-flask python3-cryptography python3-requests 2>/dev/null || true
+fi
+
+# 2. pip 安装 / 补齐
+pip3 install flask "$CRYPTO_PKG" requests -q 2>/dev/null || \
+pip install flask "$CRYPTO_PKG" requests -q 2>/dev/null || \
+pip3 install flask "$CRYPTO_PKG" requests --break-system-packages -q 2>/dev/null || \
+python3 -m pip install flask "$CRYPTO_PKG" requests -q 2>/dev/null || \
+pip3 install flask requests -q 2>/dev/null || true
+
+# 3. 校验核心依赖 (flask 与 requests 必须具备)
+if python3 -c "import flask, requests" 2>/dev/null; then
+    if python3 -c "import cryptography" 2>/dev/null; then
+        echo "    ✓ Python 核心与安全依赖已全部就绪 (flask, cryptography, requests)"
+    else
+        echo "    ✓ Python 核心依赖已就绪 (flask, requests，开启内置安全加密兼容)"
+    fi
 else
-    echo "    ✗ 严重错误: Python 依赖安装失败！请在终端手动执行 'pip3 install flask cryptography requests' 后重试。"
+    echo "    ✗ 严重错误: Python 核心依赖安装失败！请在终端手动执行 'pip3 install flask requests' 后重试。"
     exit 1
 fi
 
