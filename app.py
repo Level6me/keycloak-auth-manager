@@ -217,7 +217,7 @@ def call_1panel_api(endpoint, method="POST", payload=None):
 
 def setup_keycloak_passkey_flow():
     # 获取 Token
-    url = f"http://127.0.0.1:8080/realms/master/protocol/openid-connect/token"
+    url = f"{KEYCLOAK_URL}/realms/master/protocol/openid-connect/token"
     try:
         res = requests.post(url, data={
             "client_id": "admin-cli",
@@ -231,7 +231,7 @@ def setup_keycloak_passkey_flow():
             return
             
         headers = {"Authorization": f"Bearer {token}", "Content-Type": "application/json"}
-        base_url = "http://127.0.0.1:8080/admin/realms/master/authentication"
+        base_url = f"{KEYCLOAK_URL}/admin/realms/master/authentication"
         
         # 1. 强制注册时绑定 Passkey
         req_actions_url = f"{base_url}/required-actions"
