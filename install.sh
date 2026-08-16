@@ -392,6 +392,7 @@ echo "[2] 复制项目文件..."
 cp -f "$SOURCE_DIR/app.py" "$INSTALL_DIR/"
 cp -rf "$SOURCE_DIR/static" "$INSTALL_DIR/"
 cp -rf "$SOURCE_DIR/templates" "$INSTALL_DIR/"
+cp -rf "$SOURCE_DIR/themes" "$INSTALL_DIR/" 2>/dev/null || true
 cp -rf "$SOURCE_DIR/nginx-auth" "$INSTALL_DIR/" 2>/dev/null || true
 cp -f "$SOURCE_DIR/deploy_keycloak.sh" "$INSTALL_DIR/" 2>/dev/null || true
 echo "    ✓ 文件已复制"
@@ -432,6 +433,9 @@ if [ ! -f "$INSTALL_DIR/data.json" ]; then
     echo '{}' > "$INSTALL_DIR/data.json"
 fi
 
+# 获取当前 python3 实际可执行路径
+PYTHON_BIN=$(command -v python3 2>/dev/null || echo "/usr/bin/python3")
+
 # 创建 systemd 服务
 echo "[4] 创建 systemd 服务..."
 cat > /etc/systemd/system/$SERVICE_NAME.service << SERVICE
@@ -444,7 +448,7 @@ Wants=docker.service
 Type=simple
 User=root
 WorkingDirectory=$INSTALL_DIR
-ExecStart=/usr/bin/python3 $INSTALL_DIR/app.py
+ExecStart=$PYTHON_BIN $INSTALL_DIR/app.py
 Restart=always
 RestartSec=5
 
@@ -467,9 +471,21 @@ else
     echo "    ! 服务启动失败，请检查: journalctl -u $SERVICE_NAME -n 20"
 fi
 
-# [6] 安装 Apple 主题
+# 自动放行防火墙端口
+echo "[6.1] 检查并配置防火墙规则..."
+if command -v ufw >/dev/null 2>&1 && ufw status 2>/dev/null | grep -q "Status: active"; then
+    ufw allow "$WEB_PORT"/tcp >/dev/null 2>&1 || true
+    echo "    ✓ UFW 防火墙已放行端口: $WEB_PORT"
+fi
+if command -v firewall-cmd >/dev/null 2>&1 && systemctl is-active --quiet firewalld 2>/dev/null; then
+    firewall-cmd --add-port="$WEB_PORT"/tcp --permanent >/dev/null 2>&1 || true
+    firewall-cmd --reload >/dev/null 2>&1 || true
+    echo "    ✓ Firewalld 防火墙已放行端口: $WEB_PORT"
+fi
+
+# [7] 安装 Apple 主题
 if [ "$INSTALL_THEME" = "y" ]; then
-    echo "[6] 安装 Apple 主题..."
+    echo "[7] 安装 Apple 主题..."
     THEME_DIR="/opt/keycloak/themes/apple"
     mkdir -p "$THEME_DIR"
     if [ -d "$SOURCE_DIR/themes/apple" ]; then
@@ -482,8 +498,15 @@ if [ "$INSTALL_THEME" = "y" ]; then
             docker exec "$KEYCLOAK_CONTAINER" mkdir -p /opt/keycloak/themes 2>/dev/null || true
             docker cp "$SOURCE_DIR/themes/apple" "$KEYCLOAK_CONTAINER":/opt/keycloak/themes/
             docker restart "$KEYCLOAK_CONTAINER" >/dev/null
-            echo "    ✓ Apple 主题已成功安装到容器 $KEYCLOAK_CONTAINER"
+            echo "    ✓ Apple 主题已成功安装到容器 $KEYCLOAK_CONTAINER 且已重启该容器"
+        else
+            echo "    ! 未检测到运行中的 Keycloak 容器 $KEYCLOAK_CONTAINER，无法自动复制主题到容器内。"
+            echo "    请在 Keycloak 容器启动后手动执行此命令复制主题："
+            echo "    docker cp $INSTALL_DIR/themes/apple $KEYCLOAK_CONTAINER:/opt/keycloak/themes/"
         fi
+        echo "    说明: 导入后，请在 Keycloak Admin Console 的 Realm Settings -> Themes 中选择 Login Theme 为 'apple'。"
+    else
+        echo "    ! 本地主题文件不存在，跳过安装。"
     fi
 fi
 
