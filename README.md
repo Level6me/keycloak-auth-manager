@@ -25,9 +25,17 @@ Keycloak Passkey 认证管理 Web 控制台，一键为网站添加 OAuth2 认�
 
 ## 一键部署
 
+### 方式一：远程一键命令（无需手动克隆）
+
+```bash
+curl -sSL https://raw.githubusercontent.com/Level6me/keycloak-auth-manager/main/install.sh | bash
+```
+
+### 方式二：克隆源码部署
+
 ```bash
 # 克隆项目
-git clone https://gitee.com/singkong/keycloak-auth-manager.git
+git clone https://github.com/Level6me/keycloak-auth-manager.git
 
 # 进入目录
 cd keycloak-auth-manager
@@ -155,4 +163,4 @@ MIT
 
 ## 仓库
 
-- Gitee（私有）: https://gitee.com/singkong/keycloak-auth-manager
+- GitHub: https://github.com/Level6me/keycloak-auth-manager
