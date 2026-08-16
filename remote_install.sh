@@ -77,10 +77,26 @@ echo "    ✓ Python 依赖包已安装"
 
 # 2. 创建安装目录并同步文件
 echo "[2] 创建安装目录并复制项目文件..."
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" 2>/dev/null && pwd || echo "")"
+SOURCE_DIR=""
+if [ -n "$SCRIPT_DIR" ] && [ -f "$SCRIPT_DIR/app.py" ]; then
+    SOURCE_DIR="$SCRIPT_DIR"
+elif [ -f "./app.py" ]; then
+    SOURCE_DIR="$(pwd)"
+fi
+
+if [ -z "$SOURCE_DIR" ]; then
+    echo "    检测到远程安装模式，正在从 GitHub 官方仓库拉取最新源码..."
+    TMP_SRC="/tmp/keycloak-auth-manager-src-$(date +%s)"
+    git clone https://github.com/Level6me/keycloak-auth-manager.git "$TMP_SRC" -q
+    SOURCE_DIR="$TMP_SRC"
+fi
+
 sudo mkdir -p $INSTALL_DIR
-sudo cp -r /home/ubuntu/keycloak-auth-manager/app.py $INSTALL_DIR/
-sudo cp -r /home/ubuntu/keycloak-auth-manager/static $INSTALL_DIR/
-sudo cp -r /home/ubuntu/keycloak-auth-manager/templates $INSTALL_DIR/
+sudo cp -r "$SOURCE_DIR/app.py" $INSTALL_DIR/
+sudo cp -r "$SOURCE_DIR/static" $INSTALL_DIR/
+sudo cp -r "$SOURCE_DIR/templates" $INSTALL_DIR/
+sudo cp -r "$SOURCE_DIR/nginx-auth" $INSTALL_DIR/ 2>/dev/null || true
 echo "    ✓ 文件复制完成"
 
 # 3. 创建配置文件
