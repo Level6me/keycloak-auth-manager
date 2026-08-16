@@ -1,11 +1,44 @@
-#!/bin/bash
-# Keycloak Auth Manager 一键部署脚本（含依赖检查）
-# 用法: bash install.sh
+#!/usr/bin/env bash
+# ==============================================================================
+# Keycloak Auth Manager 一键部署脚本（全自动检测、依赖修复与双模式兼容）
+# 支持方式:
+#   1. curl -sSL https://raw.githubusercontent.com/Level6me/keycloak-auth-manager/main/install.sh | bash
+#   2. git clone ... && cd keycloak-auth-manager && sudo bash install.sh
+# ==============================================================================
 
 set -e
 
 INSTALL_DIR="/opt/keycloak-auth-manager"
 SERVICE_NAME="keycloak-auth-manager"
+REPO_URL="https://github.com/Level6me/keycloak-auth-manager.git"
+
+# 终端安全输入辅助函数（防止 curl | bash 管道破坏吞食脚本内容）
+prompt_input() {
+    local prompt_text="$1"
+    local var_name="$2"
+    local default_val="$3"
+    local is_secret="${4:-false}"
+    local user_val=""
+
+    if [ -t 0 ]; then
+        if [ "$is_secret" = "true" ]; then
+            read -sp "$prompt_text" user_val || true
+            echo ""
+        else
+            read -p "$prompt_text" user_val || true
+        fi
+    elif [ -e /dev/tty ]; then
+        if [ "$is_secret" = "true" ]; then
+            read -sp "$prompt_text" user_val < /dev/tty || true
+            echo ""
+        else
+            read -p "$prompt_text" user_val < /dev/tty || true
+        fi
+    else
+        user_val=""
+    fi
+    eval "$var_name=\"${user_val:-$default_val}\""
+}
 
 echo ""
 echo "=========================================="
@@ -13,7 +46,39 @@ echo "  Keycloak Auth Manager 一键部署"
 echo "=========================================="
 echo ""
 
+# 0. 准备项目源文件 (若通过 curl | bash 远程执行，则自动拉取最新仓库源码)
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" 2>/dev/null && pwd || echo "")"
+SOURCE_DIR=""
+if [ -n "$SCRIPT_DIR" ] && [ -f "$SCRIPT_DIR/app.py" ] && [ -f "$SCRIPT_DIR/deploy_keycloak.sh" ]; then
+    SOURCE_DIR="$SCRIPT_DIR"
+elif [ -f "./app.py" ] && [ -f "./deploy_keycloak.sh" ]; then
+    SOURCE_DIR="$(pwd)"
+fi
+
+if [ -z "$SOURCE_DIR" ]; then
+    echo "[0] 检测到远程管道执行模式，正在自动获取最新项目源码..."
+    TMP_SRC="/tmp/keycloak-auth-manager-src-$(date +%s)"
+    rm -rf "$TMP_SRC"
+    if command -v git >/dev/null 2>&1; then
+        git clone "$REPO_URL" "$TMP_SRC" -q
+    else
+        echo "    正在安装 git 以获取源码..."
+        if command -v apt-get >/dev/null 2>&1; then
+            export DEBIAN_FRONTEND=noninteractive
+            apt-get update -y -q && apt-get install -y -q git
+        elif command -v yum >/dev/null 2>&1; then
+            yum install -y -q git
+        fi
+        git clone "$REPO_URL" "$TMP_SRC" -q
+    fi
+    SOURCE_DIR="$TMP_SRC"
+    echo "    ✓ 源码已就绪: $SOURCE_DIR"
+fi
+
+cd "$SOURCE_DIR"
+
 # ==================== 依赖检查 ====================
+echo ""
 echo "=== 检查依赖 ==="
 echo ""
 
@@ -31,7 +96,7 @@ if ! command -v docker &> /dev/null; then
     MISSING_YUM="$MISSING_YUM docker"
     MISSING_CMD="$MISSING_CMD docker"
 fi
-if ! command -v docker-compose &> /dev/null; then
+if ! command -v docker-compose &> /dev/null && ! docker compose version &> /dev/null; then
     MISSING_APT="$MISSING_APT docker-compose-v2"
     MISSING_YUM="$MISSING_YUM docker-compose-plugin"
     MISSING_CMD="$MISSING_CMD docker-compose"
@@ -41,7 +106,7 @@ if ! command -v python3 &> /dev/null; then
     MISSING_YUM="$MISSING_YUM python3"
     MISSING_CMD="$MISSING_CMD python3"
 fi
-if ! command -v pip3 &> /dev/null; then
+if ! command -v pip3 &> /dev/null && ! command -v pip &> /dev/null; then
     MISSING_APT="$MISSING_APT python3-pip"
     MISSING_YUM="$MISSING_YUM python3-pip"
     MISSING_CMD="$MISSING_CMD pip3"
@@ -49,8 +114,7 @@ fi
 
 if [ -n "$MISSING_CMD" ]; then
     echo "    ✗ 发现缺失基础命令:$MISSING_CMD"
-    read -p "    是否尝试自动一次性安装缺失的基础环境? (y/n) [y]: " install_deps_now
-    install_deps_now=${install_deps_now:-y}
+    prompt_input "    是否尝试自动一次性安装缺失的基础环境? (y/n) [y]: " install_deps_now "y"
     if [ "$install_deps_now" = "y" ]; then
         echo "    正在自动安装缺失的依赖..."
         if command -v apt-get &>/dev/null; then
@@ -66,12 +130,12 @@ if [ -n "$MISSING_CMD" ]; then
         
         # 兼容 docker-compose 命令（V2）
         if [ -f /usr/libexec/docker/cli-plugins/docker-compose ] && ! command -v docker-compose &> /dev/null; then
-            ln -sf /usr/libexec/docker/cli-plugins/docker-compose /usr/local/bin/docker-compose
-            ln -sf /usr/libexec/docker/cli-plugins/docker-compose /usr/bin/docker-compose
+            ln -sf /usr/libexec/docker/cli-plugins/docker-compose /usr/local/bin/docker-compose 2>/dev/null || true
+            ln -sf /usr/libexec/docker/cli-plugins/docker-compose /usr/bin/docker-compose 2>/dev/null || true
         fi
         
         # 验证是否全部安装成功
-        if ! command -v docker &> /dev/null || ! command -v python3 &> /dev/null || ! command -v pip3 &> /dev/null; then
+        if ! command -v docker &> /dev/null || ! command -v python3 &> /dev/null; then
             echo "    ✗ 部分基础依赖自动安装失败，请检查系统网络或手动安装。"
             check_passed=false
         else
@@ -90,16 +154,14 @@ if command -v docker &> /dev/null; then
         echo "    ✓ Docker 服务运行中"
     else
         echo "    ✗ Docker 服务未运行"
-        read -p "    是否尝试启动 Docker 服务? (y/n) [y]: " start_docker_now
-        start_docker_now=${start_docker_now:-y}
+        prompt_input "    是否尝试启动 Docker 服务? (y/n) [y]: " start_docker_now "y"
         if [ "$start_docker_now" = "y" ]; then
             echo "    正在启动 Docker 服务..."
             if systemctl start docker; then
                 echo "    ✓ Docker 服务已启动"
                 systemctl enable docker &>/dev/null || true
             else
-                echo "    ✗ Docker 服务启动失败"
-                echo "    请手动启动: systemctl start docker"
+                echo "    ✗ Docker 服务启动失败，请检查: systemctl status docker"
                 check_passed=false
             fi
         else
@@ -110,45 +172,29 @@ fi
 
 # 检查 1Panel/OpenResty
 echo "[2] 检查 1Panel/OpenResty..."
-PANEL_DIR="/opt/1panel"
-OPENRESTY_DIR="/opt/1panel/apps/openresty/openresty"
-
-if [ -d "$PANEL_DIR" ]; then
-    echo "    ✓ 1Panel 已安装: $PANEL_DIR"
-else
-    echo "    ✗ 1Panel 未安装"
-    read -p "    是否尝试自动安装 1Panel? (y/n) [y]: " install_panel_now
-    install_panel_now=${install_panel_now:-y}
-    if [ "$install_panel_now" = "y" ]; then
-        echo "    正在下载并运行 1Panel 安装脚本..."
-        if bash -c "$(curl -sSL https://resource.fit2cloud.com/1panel/package/v2/quick_start.sh)"; then
-            echo "    ✓ 1Panel 安装完成"
-        else
-            echo "    ✗ 1Panel 安装失败"
-            echo "    请手动运行安装命令: bash -c \"\$(curl -sSL https://resource.fit2cloud.com/1panel/package/v2/quick_start.sh)\""
-            check_passed=false
-        fi
+ONEPANEL_INSTALLED=false
+if [ -d "/opt/1panel" ]; then
+    ONEPANEL_INSTALLED=true
+    echo "    ✓ 1Panel 已安装: /opt/1panel"
+    
+    if [ -d "/opt/1panel/apps/openresty/openresty/conf" ]; then
+        echo "    ✓ OpenResty 已安装"
     else
-        check_passed=false
+        echo "    ! OpenResty 未安装（建议在 1Panel 应用商店中搜索并安装 OpenResty）"
     fi
-fi
-
-if [ -d "$OPENRESTY_DIR" ]; then
-    echo "    ✓ OpenResty 已安装: $OPENRESTY_DIR"
+    
+    if [ -d "/opt/1panel/apps/openresty/openresty/www/sites" ]; then
+        echo "    ✓ 网站目录存在: /opt/1panel/apps/openresty/openresty/www/sites"
+    else
+        echo "    ! 网站目录不存在: /opt/1panel/apps/openresty/openresty/www/sites (将在 1Panel 中建站时自动创建)"
+    fi
 else
-    echo "    ! OpenResty 未安装（建议在 1Panel 应用商店中搜索并安装 OpenResty）"
-fi
-
-# 检查网站目录
-SITES_DIR="$OPENRESTY_DIR/www/sites"
-if [ -d "$SITES_DIR" ]; then
-    echo "    ✓ 网站目录存在: $SITES_DIR"
-else
-    echo "    ! 网站目录不存在: $SITES_DIR (将随着在 1Panel 中创建网站时自动创建)"
+    echo "    ! 1Panel 未安装（如不需要与 1Panel 深度集成可忽略）"
 fi
 
 # 检查 Keycloak 容器
 echo "[3] 检查 Keycloak..."
+KEYCLOAK_RUNNING=""
 if command -v docker &> /dev/null && docker ps &> /dev/null; then
     KEYCLOAK_RUNNING=$(docker ps --filter "name=keycloak" --format "{{.Names}}" | head -1)
     if [ -n "$KEYCLOAK_RUNNING" ]; then
@@ -157,8 +203,7 @@ if command -v docker &> /dev/null && docker ps &> /dev/null; then
         KEYCLOAK_EXISTS=$(docker ps -a --filter "name=keycloak" --format "{{.Names}}" | head -1)
         if [ -n "$KEYCLOAK_EXISTS" ]; then
             echo "    ! Keycloak 容器存在但未运行: $KEYCLOAK_EXISTS"
-            read -p "    是否尝试启动该容器? (y/n) [y]: " start_kc_now
-            start_kc_now=${start_kc_now:-y}
+            prompt_input "    是否尝试启动该容器? (y/n) [y]: " start_kc_now "y"
             if [ "$start_kc_now" = "y" ]; then
                 if docker start "$KEYCLOAK_EXISTS" &> /dev/null; then
                     echo "    ✓ 容器 $KEYCLOAK_EXISTS 已启动"
@@ -172,33 +217,22 @@ if command -v docker &> /dev/null && docker ps &> /dev/null; then
             fi
         else
             echo "    ✗ Keycloak 容器不存在"
-            read -p "    是否现在自动部署 Keycloak 容器? (y/n) [y]: " deploy_kc_now
-            deploy_kc_now=${deploy_kc_now:-y}
+            prompt_input "    是否现在自动部署 Keycloak 容器? (y/n) [y]: " deploy_kc_now "y"
             if [ "$deploy_kc_now" = "y" ]; then
                 echo ""
                 echo "--- 部署 Keycloak 容器配置 ---"
-                read -p "    选择数据库类型 (h2/postgres) [h2]: " kc_db_type
-                kc_db_type=${kc_db_type:-h2}
-                
-                read -p "    设置 Keycloak 管理员用户名 [admin]: " kc_admin_user
-                kc_admin_user=${kc_admin_user:-admin}
-                
-                read -sp "    设置 Keycloak 管理员密码 [admin123]: " kc_admin_pass
-                echo ""
-                kc_admin_pass=${kc_admin_pass:-admin123}
-                
-                read -p "    设置 Keycloak 映射端口 [8080]: " kc_port
-                kc_port=${kc_port:-8080}
+                prompt_input "    选择数据库类型 (h2/postgres) [h2]: " kc_db_type "h2"
+                prompt_input "    设置 Keycloak 管理员用户名 [admin]: " kc_admin_user "admin"
+                prompt_input "    设置 Keycloak 管理员密码 [admin123]: " kc_admin_pass "admin123" "true"
+                prompt_input "    设置 Keycloak 映射端口 [8080]: " kc_port "8080"
                 
                 kc_db_pass=""
                 if [ "$kc_db_type" = "postgres" ]; then
-                    read -sp "    设置 PostgreSQL 数据库密码 [KcDbPassWord_2026]: " kc_db_pass
-                    echo ""
-                    kc_db_pass=${kc_db_pass:-KcDbPassWord_2026}
+                    prompt_input "    设置 PostgreSQL 数据库密码 [KcDbPassWord_2026]: " kc_db_pass "KcDbPassWord_2026" "true"
                 fi
                 
                 echo "    正在调用 deploy_keycloak.sh 部署容器..."
-                if bash deploy_keycloak.sh "$kc_db_type" "$kc_admin_user" "$kc_admin_pass" "$kc_port" "$kc_db_pass"; then
+                if bash "$SOURCE_DIR/deploy_keycloak.sh" "$kc_db_type" "$kc_admin_user" "$kc_admin_pass" "$kc_port" "$kc_db_pass"; then
                     echo "    ✓ Keycloak 容器部署成功"
                     KEYCLOAK_RUNNING="keycloak"
                 else
@@ -236,7 +270,7 @@ if [ "$check_passed" = false ]; then
     echo ""
     echo "请先安装缺失的依赖，然后重新运行此脚本。"
     echo ""
-    read -p "是否继续部署（忽略检查失败）? (y/n): " force_continue
+    prompt_input "是否继续部署（忽略检查失败）? (y/n) [n]: " force_continue "n"
     if [ "$force_continue" != "y" ]; then
         exit 1
     fi
@@ -250,7 +284,7 @@ echo "请输入配置信息（直接回车使用默认值）:"
 echo ""
 
 # 获取本地 IP 供默认值使用
-local_ip=$(hostname -I | awk '{print $1}')
+local_ip=$(hostname -I 2>/dev/null | awk '{print $1}' || echo "127.0.0.1")
 local_ip=${local_ip:-127.0.0.1}
 
 # 自动探测运行中 Keycloak 容器的映射端口
@@ -263,37 +297,30 @@ kc_detected_port=${kc_detected_port:-${kc_port:-8080}}
 default_kc_url="http://$local_ip:$kc_detected_port"
 
 # Keycloak URL
-read -p "Keycloak 服务地址 [$default_kc_url]: " KEYCLOAK_URL
-KEYCLOAK_URL=${KEYCLOAK_URL:-$default_kc_url}
+prompt_input "Keycloak 服务地址 [$default_kc_url]: " KEYCLOAK_URL "$default_kc_url"
 
 # 验证 Keycloak URL 是否可访问
 echo "    测试 Keycloak 连接..."
-if curl -s -o /dev/null -w "%{http_code}" "$KEYCLOAK_URL" --max-time 10 | grep -q "200\|302\|303\|307\|404"; then
+if curl -s -o /dev/null -w "%{http_code}" "$KEYCLOAK_URL" --max-time 5 | grep -q "200\|302\|303\|307\|404"; then
     echo "    ✓ Keycloak URL 可访问"
 else
-    echo "    ! Keycloak URL 无法访问，请确认地址正确（若容器刚启动请稍候）"
+    echo "    ! Keycloak URL 暂时无法访问（若容器刚启动请稍候）"
 fi
 
 # Keycloak Admin 用户名
 default_kc_admin=${kc_admin_user:-admin}
-read -p "Keycloak Admin 用户名 [$default_kc_admin]: " KEYCLOAK_ADMIN
-KEYCLOAK_ADMIN=${KEYCLOAK_ADMIN:-$default_kc_admin}
+prompt_input "Keycloak Admin 用户名 [$default_kc_admin]: " KEYCLOAK_ADMIN "$default_kc_admin"
 
 # Keycloak Admin 密码
 default_kc_pass=${kc_admin_pass:-}
 if [ -n "$default_kc_pass" ]; then
-    read -sp "Keycloak Admin 密码 [使用自动部署时设置的密码]: " KEYCLOAK_PASSWORD
-    echo ""
-    KEYCLOAK_PASSWORD=${KEYCLOAK_PASSWORD:-$default_kc_pass}
+    prompt_input "Keycloak Admin 密码 [使用自动部署时设置的密码]: " KEYCLOAK_PASSWORD "$default_kc_pass" "true"
 else
-    read -sp "Keycloak Admin 密码 [YOUR_PASSWORD]: " KEYCLOAK_PASSWORD
-    echo ""
-    KEYCLOAK_PASSWORD=${KEYCLOAK_PASSWORD:-}
+    prompt_input "Keycloak Admin 密码 [admin123]: " KEYCLOAK_PASSWORD "admin123" "true"
 fi
 
 # Web 控制台端口
-read -p "Web 控制台端口 [8088]: " WEB_PORT
-WEB_PORT=${WEB_PORT:-8088}
+prompt_input "Web 控制台端口 [8088]: " WEB_PORT "8088"
 
 # 检查端口是否被占用 (优先使用 ss, 次之 netstat)
 port_in_use="no"
@@ -309,33 +336,24 @@ fi
 
 if [ "$port_in_use" = "yes" ]; then
     echo "    ! 端口 $WEB_PORT 已被占用"
-    read -p "    是否使用其他端口? 输入新端口: " NEW_PORT
+    prompt_input "    是否使用其他端口? 输入新端口: " NEW_PORT "$WEB_PORT"
     WEB_PORT=${NEW_PORT:-$WEB_PORT}
 fi
 
 # Keycloak 容器名称
 default_kc_container=${KEYCLOAK_RUNNING:-keycloak}
-read -p "Keycloak 容器名称 [$default_kc_container]: " KEYCLOAK_CONTAINER
-KEYCLOAK_CONTAINER=${KEYCLOAK_CONTAINER:-$default_kc_container}
+prompt_input "Keycloak 容器名称 [$default_kc_container]: " KEYCLOAK_CONTAINER "$default_kc_container"
 
 # 1Panel API 端口
-read -p "1Panel API 端口 [40455]: " ONEPANEL_PORT
-ONEPANEL_PORT=${ONEPANEL_PORT:-40455}
+prompt_input "1Panel API 端口 [40455]: " ONEPANEL_PORT "40455"
 
 # 1Panel API Key
-read -p "1Panel API Key (如果不使用 API 自动建站可留空): " ONEPANEL_API_KEY
-ONEPANEL_API_KEY=${ONEPANEL_API_KEY:-}
+prompt_input "1Panel API Key (如果不使用 API 自动建站可留空): " ONEPANEL_API_KEY ""
 
 # Apple 主题安装选择
 echo ""
 echo "=== Apple 主题安装 ==="
-read -p "是否安装 Apple 登录主题? (y/n) [n]: " INSTALL_THEME
-INSTALL_THEME=${INSTALL_THEME:-n}
-
-# 检测容器运行状态
-if ! docker ps --filter "name=^/${KEYCLOAK_CONTAINER}$" --format "{{.Names}}" | grep -q "^${KEYCLOAK_CONTAINER}$"; then
-    echo "    ! 警示: 容器 $KEYCLOAK_CONTAINER 未运行，如果已在其他地方运行或非 Docker 部署可忽略此警告。"
-fi
+prompt_input "是否安装 Apple 登录主题? (y/n) [n]: " INSTALL_THEME "n"
 
 echo ""
 echo "=== 配置确认 ==="
@@ -349,7 +367,7 @@ echo "  1Panel API Key:  $(if [ -n "$ONEPANEL_API_KEY" ]; then echo '已配置(�
 echo "  安装目录:        $INSTALL_DIR"
 echo ""
 
-read -p "确认部署? (y/n): " confirm
+prompt_input "确认部署? (y/n) [y]: " confirm "y"
 if [ "$confirm" != "y" ]; then
     echo "取消部署"
     exit 0
@@ -359,58 +377,43 @@ fi
 echo ""
 echo "=== 开始部署 ==="
 
-# 检查项目文件与获取源文件
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" 2>/dev/null && pwd || echo "")"
-SOURCE_DIR=""
-if [ -n "$SCRIPT_DIR" ] && [ -f "$SCRIPT_DIR/app.py" ]; then
-    SOURCE_DIR="$SCRIPT_DIR"
-elif [ -f "./app.py" ]; then
-    SOURCE_DIR="$(pwd)"
-fi
-
-if [ -z "$SOURCE_DIR" ]; then
-    echo "    检测到远程/外部运行模式，正在从 GitHub 官方仓库拉取最新源码..."
-    TMP_SRC="/tmp/keycloak-auth-manager-src-$(date +%s)"
-    git clone https://github.com/Level6me/keycloak-auth-manager.git "$TMP_SRC" -q
-    SOURCE_DIR="$TMP_SRC"
-fi
-
-# 安装依赖
+# 安装 Python 依赖
 echo "[1] 安装 Python 依赖 (flask, cryptography, requests)..."
-pip3 install flask cryptography requests --break-system-packages --ignore-installed -q 2>/dev/null || pip install flask cryptography requests --break-system-packages --ignore-installed -q
+pip3 install flask cryptography requests --break-system-packages --ignore-installed -q 2>/dev/null || pip install flask cryptography requests --break-system-packages --ignore-installed -q 2>/dev/null || true
 echo "    ✓ 依赖包已安装"
 
 # 创建安装目录
 echo "[2] 创建安装目录..."
-mkdir -p $INSTALL_DIR
+mkdir -p "$INSTALL_DIR"
 echo "    ✓ 目录已创建: $INSTALL_DIR"
 
 # 复制文件
 echo "[2] 复制项目文件..."
-cp "$SOURCE_DIR/app.py" $INSTALL_DIR/
-cp -r "$SOURCE_DIR/static" $INSTALL_DIR/
-cp -r "$SOURCE_DIR/templates" $INSTALL_DIR/
-cp -r "$SOURCE_DIR/nginx-auth" $INSTALL_DIR/ 2>/dev/null || true
+cp -f "$SOURCE_DIR/app.py" "$INSTALL_DIR/"
+cp -rf "$SOURCE_DIR/static" "$INSTALL_DIR/"
+cp -rf "$SOURCE_DIR/templates" "$INSTALL_DIR/"
+cp -rf "$SOURCE_DIR/nginx-auth" "$INSTALL_DIR/" 2>/dev/null || true
+cp -f "$SOURCE_DIR/deploy_keycloak.sh" "$INSTALL_DIR/" 2>/dev/null || true
 echo "    ✓ 文件已复制"
 
 # 尝试还原备份的配置（支持卸载保留恢复）
 if [ -f "/tmp/keycloak_auth_manager_backup/encryption.key" ]; then
     echo "    检测到备份的加密密钥，正在还原..."
-    cp /tmp/keycloak_auth_manager_backup/encryption.key $INSTALL_DIR/
+    cp /tmp/keycloak_auth_manager_backup/encryption.key "$INSTALL_DIR/"
 fi
 if [ -f "/tmp/keycloak_auth_manager_backup/config.json" ]; then
     echo "    检测到备份的配置文件，正在还原..."
-    cp /tmp/keycloak_auth_manager_backup/config.json $INSTALL_DIR/
+    cp /tmp/keycloak_auth_manager_backup/config.json "$INSTALL_DIR/"
 fi
 if [ -f "/tmp/keycloak_auth_manager_backup/data.json" ]; then
     echo "    检测到备份的数据文件，正在还原..."
-    cp /tmp/keycloak_auth_manager_backup/data.json $INSTALL_DIR/
+    cp /tmp/keycloak_auth_manager_backup/data.json "$INSTALL_DIR/"
 fi
 
 # 如果没有还原配置文件，则创建新的配置文件
 if [ ! -f "$INSTALL_DIR/config.json" ]; then
     echo "[3] 创建配置文件..."
-    cat > $INSTALL_DIR/config.json << CONFIG
+    cat > "$INSTALL_DIR/config.json" << CONFIG
 {
     "keycloak_url": "$KEYCLOAK_URL",
     "keycloak_admin": "$KEYCLOAK_ADMIN",
@@ -426,8 +429,7 @@ CONFIG
 fi
 
 if [ ! -f "$INSTALL_DIR/data.json" ]; then
-    # 创建空数据文件
-    echo '{}' > $INSTALL_DIR/data.json
+    echo '{}' > "$INSTALL_DIR/data.json"
 fi
 
 # 创建 systemd 服务
@@ -452,65 +454,56 @@ SERVICE
 echo "    ✓ 服务文件已创建"
 
 # 启动服务
-echo "[6] 启动服务..."
+echo "[5] 启动服务..."
 systemctl daemon-reload
 systemctl enable $SERVICE_NAME
-systemctl start $SERVICE_NAME
-sleep 3
+systemctl restart $SERVICE_NAME
+sleep 2
 
 # 检查状态
 if systemctl is-active --quiet $SERVICE_NAME; then
     echo "    ✓ 服务已启动"
 else
-    echo "    ! 服务启动失败，请检查日志"
+    echo "    ! 服务启动失败，请检查: journalctl -u $SERVICE_NAME -n 20"
 fi
 
-# [7] 安装 Apple 主题
+# [6] 安装 Apple 主题
 if [ "$INSTALL_THEME" = "y" ]; then
-    echo "[7] 安装 Apple 主题..."
+    echo "[6] 安装 Apple 主题..."
     THEME_DIR="/opt/keycloak/themes/apple"
-    echo "    创建本地备份目录 $THEME_DIR..."
     mkdir -p "$THEME_DIR"
-    if [ -d "themes/apple/login" ]; then
-        cp -r themes/apple/login "$THEME_DIR"/
+    if [ -d "$SOURCE_DIR/themes/apple" ]; then
+        cp -r "$SOURCE_DIR/themes/apple"/* "$THEME_DIR"/ 2>/dev/null || true
         echo "    ✓ Apple 主题本地文件已保存"
         
         # 复制到 Keycloak 容器内部
         if docker ps --filter "name=^/${KEYCLOAK_CONTAINER}$" --format "{{.Names}}" | grep -q "^${KEYCLOAK_CONTAINER}$"; then
             echo "    正在复制主题到容器 $KEYCLOAK_CONTAINER..."
-            # 确保容器内的 themes 目录存在并复制
             docker exec "$KEYCLOAK_CONTAINER" mkdir -p /opt/keycloak/themes 2>/dev/null || true
-            docker cp themes/apple "$KEYCLOAK_CONTAINER":/opt/keycloak/themes/
-            echo "    重启 Keycloak 容器以加载新主题..."
+            docker cp "$SOURCE_DIR/themes/apple" "$KEYCLOAK_CONTAINER":/opt/keycloak/themes/
             docker restart "$KEYCLOAK_CONTAINER" >/dev/null
-            echo "    ✓ Apple 主题已成功安装到容器 $KEYCLOAK_CONTAINER 且已重启该容器"
-        else
-            echo "    ! 未检测到运行中的 Keycloak 容器 $KEYCLOAK_CONTAINER，无法自动复制主题到容器内。"
-            echo "    请在 Keycloak 容器启动后手动执行此命令复制主题："
-            echo "    docker cp themes/apple $KEYCLOAK_CONTAINER:/opt/keycloak/themes/"
+            echo "    ✓ Apple 主题已成功安装到容器 $KEYCLOAK_CONTAINER"
         fi
-        echo "    说明: 导入后，请在 Keycloak Admin Console 的 Realm Settings -> Themes 中选择 Login Theme 为 'apple'。"
-    else
-        echo "    ! 本地主题文件 themes/apple/login 不存在，跳过安装。"
     fi
 fi
 
+PUBLIC_IP=$(curl -s --connect-timeout 3 ifconfig.me || curl -s --connect-timeout 3 icanhazip.com || echo "YOUR_SERVER_IP")
+
 echo ""
 echo "=========================================="
-echo "  部署完成！"
+echo "  🎉 Keycloak Auth Manager 部署完成！"
 echo "=========================================="
 echo ""
-echo "访问地址: http://$(hostname -I | awk '{print $1}'):$WEB_PORT"
+echo "访问地址: http://${PUBLIC_IP}:$WEB_PORT"
 echo ""
 echo "文件位置:"
-echo "  程序:   $INSTALL_DIR/app.py"
-echo "  配置:   $INSTALL_DIR/config.json"
-echo "  数据:   $INSTALL_DIR/data.json"
-echo "  日志:   通过 journalctl 集中管理"
+echo "  程序目录: $INSTALL_DIR"
+echo "  配置文件: $INSTALL_DIR/config.json"
+echo "  数据文件: $INSTALL_DIR/data.json"
 echo ""
 echo "管理命令:"
-echo "  systemctl status $SERVICE_NAME    # 查看状态"
-echo "  systemctl restart $SERVICE_NAME   # 重启"
-echo "  systemctl stop $SERVICE_NAME      # 停止"
-echo "  journalctl -u $SERVICE_NAME -f    # 日志"
+echo "  查看状态: systemctl status $SERVICE_NAME"
+echo "  重启服务: systemctl restart $SERVICE_NAME"
+echo "  查看日志: journalctl -u $SERVICE_NAME -f"
+echo "=========================================="
 echo ""
