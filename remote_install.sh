@@ -71,8 +71,23 @@ else
     echo "    ✓ 基础命令已全部存在"
 fi
 
-echo "[1.1] 安装 Python3 依赖包 (flask, cryptography, requests)..."
-sudo pip3 install flask cryptography requests --break-system-packages --ignore-installed -q || sudo pip install flask cryptography requests --break-system-packages --ignore-installed -q
+echo "[1.1] 智能检测并安装 Python 依赖 (flask, cryptography, requests)..."
+sudo pip3 install flask cryptography requests -q 2>/dev/null || \
+sudo pip install flask cryptography requests -q 2>/dev/null || \
+sudo pip3 install flask cryptography requests --break-system-packages -q 2>/dev/null || \
+sudo python3 -m pip install flask cryptography requests -q 2>/dev/null || true
+
+if ! python3 -c "import flask, cryptography, requests" 2>/dev/null; then
+    if command -v yum >/dev/null 2>&1; then
+        sudo yum install -y -q epel-release 2>/dev/null || true
+        sudo yum install -y -q python3-pip python3-flask python3-cryptography python3-requests 2>/dev/null || true
+        sudo python3 -m ensurepip --upgrade 2>/dev/null || true
+        sudo python3 -m pip install flask cryptography requests 2>/dev/null || true
+    elif command -v apt-get >/dev/null 2>&1; then
+        export DEBIAN_FRONTEND=noninteractive
+        sudo apt-get install -y -q python3-pip python3-flask python3-cryptography python3-requests 2>/dev/null || true
+    fi
+fi
 echo "    ✓ Python 依赖包已安装"
 
 # 2. 创建安装目录并同步文件
