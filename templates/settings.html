@@ -40,9 +40,9 @@
                 <hr>
                 <h5 class="card-title text-primary mb-3">Keycloak 容器配置</h5>
                 <div class="mb-3">
-                    <label class="form-label">Keycloak URL</label>
-                    <input type="url" class="form-control" name="keycloak_url" value="{{ config.get('keycloak_url', '') }}" required>
-                    <div class="form-text">例如: http://127.0.0.1:8080</div>
+                    <label class="form-label">Keycloak URL / 服务地址</label>
+                    <input type="text" class="form-control" name="keycloak_url" value="{{ config.get('keycloak_url', '') }}" placeholder="例如: https://auth.example.com 或 auth.example.com" required>
+                    <div class="form-text">支持输入完整地址或域名（如 <code>https://auth.example.com</code> 或 <code>auth.example.com</code>）</div>
                 </div>
                 <div class="row">
                     <div class="col-md-6 mb-3">
