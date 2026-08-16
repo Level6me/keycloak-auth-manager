@@ -83,7 +83,12 @@ def load_config():
                 cfg["onepanel_api_key"] = encrypt_val(raw_api_key)
                 need_rewrite = True
                 
-            KEYCLOAK_URL = cfg.get("keycloak_url", "")
+            raw_url = cfg.get("keycloak_url", "").strip()
+            if raw_url:
+                if not raw_url.startswith("http://") and not raw_url.startswith("https://"):
+                    raw_url = "https://" + raw_url
+                raw_url = raw_url.rstrip("/")
+            KEYCLOAK_URL = raw_url
             KEYCLOAK_ADMIN = cfg.get("keycloak_admin", "")
             KEYCLOAK_CONTAINER = cfg.get("keycloak_container", "keycloak")
             WEB_PORT = cfg.get("web_port", 8088)
@@ -630,6 +635,10 @@ def settings():
     if request.method == 'POST':
         web_port = int(request.form.get('web_port', 8088))
         keycloak_url = request.form.get('keycloak_url', '').strip()
+        if keycloak_url:
+            if not keycloak_url.startswith("http://") and not keycloak_url.startswith("https://"):
+                keycloak_url = "https://" + keycloak_url
+            keycloak_url = keycloak_url.rstrip("/")
         keycloak_admin = request.form.get('keycloak_admin', '').strip()
         keycloak_password = request.form.get('keycloak_password', '').strip()
         keycloak_container = request.form.get('keycloak_container', '').strip()
