@@ -432,24 +432,19 @@ cp -rf "$SOURCE_DIR/nginx-auth" "$INSTALL_DIR/" 2>/dev/null || true
 cp -f "$SOURCE_DIR/deploy_keycloak.sh" "$INSTALL_DIR/" 2>/dev/null || true
 echo "    ✓ 文件已复制"
 
-# 尝试还原备份的配置（支持卸载保留恢复）
+# 尝试还原备份的加密密钥与站点数据
 if [ -f "/tmp/keycloak_auth_manager_backup/encryption.key" ]; then
     echo "    检测到备份的加密密钥，正在还原..."
     cp /tmp/keycloak_auth_manager_backup/encryption.key "$INSTALL_DIR/"
 fi
-if [ -f "/tmp/keycloak_auth_manager_backup/config.json" ]; then
-    echo "    检测到备份的配置文件，正在还原..."
-    cp /tmp/keycloak_auth_manager_backup/config.json "$INSTALL_DIR/"
-fi
 if [ -f "/tmp/keycloak_auth_manager_backup/data.json" ]; then
-    echo "    检测到备份的数据文件，正在还原..."
+    echo "    检测到备份的站点数据文件，正在还原..."
     cp /tmp/keycloak_auth_manager_backup/data.json "$INSTALL_DIR/"
 fi
 
-# 如果没有还原配置文件，则创建新的配置文件
-if [ ! -f "$INSTALL_DIR/config.json" ]; then
-    echo "[3] 创建配置文件..."
-    cat > "$INSTALL_DIR/config.json" << CONFIG
+# 写入用户本次确认的最新配置文件（始终以本次输入为准）
+echo "[3] 创建/更新配置文件..."
+cat > "$INSTALL_DIR/config.json" << CONFIG
 {
     "keycloak_url": "$KEYCLOAK_URL",
     "keycloak_admin": "$KEYCLOAK_ADMIN",
@@ -461,8 +456,7 @@ if [ ! -f "$INSTALL_DIR/config.json" ]; then
     "install_dir": "$INSTALL_DIR"
 }
 CONFIG
-    echo "    ✓ 配置已生成"
-fi
+echo "    ✓ 配置已生成"
 
 if [ ! -f "$INSTALL_DIR/data.json" ]; then
     echo '{}' > "$INSTALL_DIR/data.json"
