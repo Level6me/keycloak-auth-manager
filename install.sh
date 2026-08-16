@@ -298,9 +298,12 @@ default_kc_url="http://$local_ip:$kc_detected_port"
 
 # Keycloak URL
 prompt_input "Keycloak 服务地址 [$default_kc_url]: " KEYCLOAK_URL "$default_kc_url"
+if [[ ! "$KEYCLOAK_URL" =~ ^https?:// ]]; then
+    KEYCLOAK_URL="http://$KEYCLOAK_URL"
+fi
 
 # 验证 Keycloak URL 是否可访问
-echo "    测试 Keycloak 连接..."
+echo "    测试 Keycloak 连接 ($KEYCLOAK_URL)..."
 if curl -s -o /dev/null -w "%{http_code}" "$KEYCLOAK_URL" --max-time 5 | grep -q "200\|302\|303\|307\|404"; then
     echo "    ✓ Keycloak URL 可访问"
 else
@@ -378,9 +381,34 @@ echo ""
 echo "=== 开始部署 ==="
 
 # 安装 Python 依赖
-echo "[1] 安装 Python 依赖 (flask, cryptography, requests)..."
-pip3 install flask cryptography requests --break-system-packages --ignore-installed -q 2>/dev/null || pip install flask cryptography requests --break-system-packages --ignore-installed -q 2>/dev/null || true
-echo "    ✓ 依赖包已安装"
+echo "[1] 智能检测并安装 Python 依赖 (flask, cryptography, requests)..."
+pip3 install flask cryptography requests -q 2>/dev/null || \
+pip install flask cryptography requests -q 2>/dev/null || \
+pip3 install flask cryptography requests --break-system-packages -q 2>/dev/null || \
+python3 -m pip install flask cryptography requests -q 2>/dev/null || \
+python3 -m pip install flask cryptography requests --break-system-packages -q 2>/dev/null || true
+
+# 依赖校验与自动补齐自愈
+if ! python3 -c "import flask, cryptography, requests" 2>/dev/null; then
+    echo "    ! 常规 pip 安装未生效，正在尝试系统包管理器与 ensurepip 深度自愈..."
+    if command -v yum >/dev/null 2>&1; then
+        yum install -y -q epel-release 2>/dev/null || true
+        yum install -y -q python3-pip python3-flask python3-cryptography python3-requests 2>/dev/null || true
+        python3 -m ensurepip --upgrade 2>/dev/null || true
+        python3 -m pip install flask cryptography requests 2>/dev/null || true
+    elif command -v apt-get >/dev/null 2>&1; then
+        export DEBIAN_FRONTEND=noninteractive
+        apt-get install -y -q python3-pip python3-flask python3-cryptography python3-requests 2>/dev/null || true
+        python3 -m pip install flask cryptography requests 2>/dev/null || true
+    fi
+fi
+
+if python3 -c "import flask, cryptography, requests" 2>/dev/null; then
+    echo "    ✓ Python 依赖包已就绪 (flask, cryptography, requests)"
+else
+    echo "    ✗ 严重错误: Python 依赖安装失败！请在终端手动执行 'pip3 install flask cryptography requests' 后重试。"
+    exit 1
+fi
 
 # 创建安装目录
 echo "[2] 创建安装目录..."
@@ -472,7 +500,7 @@ else
 fi
 
 # 自动放行防火墙端口
-echo "[6.1] 检查并配置防火墙规则..."
+echo "[6] 检查并配置防火墙规则..."
 if command -v ufw >/dev/null 2>&1 && ufw status 2>/dev/null | grep -q "Status: active"; then
     ufw allow "$WEB_PORT"/tcp >/dev/null 2>&1 || true
     echo "    ✓ UFW 防火墙已放行端口: $WEB_PORT"
@@ -481,6 +509,11 @@ if command -v firewall-cmd >/dev/null 2>&1 && systemctl is-active --quiet firewa
     firewall-cmd --add-port="$WEB_PORT"/tcp --permanent >/dev/null 2>&1 || true
     firewall-cmd --reload >/dev/null 2>&1 || true
     echo "    ✓ Firewalld 防火墙已放行端口: $WEB_PORT"
+fi
+if command -v iptables >/dev/null 2>&1; then
+    iptables -C INPUT -p tcp --dport "$WEB_PORT" -j ACCEPT 2>/dev/null || \
+    iptables -I INPUT -p tcp --dport "$WEB_PORT" -j ACCEPT 2>/dev/null || true
+    echo "    ✓ iptables 防火墙已放行端口: $WEB_PORT"
 fi
 
 # [7] 安装 Apple 主题
