@@ -54,7 +54,7 @@
                 <td>
                     <div class="btn-group-mobile">
                         <a href="/detail/{{ domain }}" class="btn btn-sm btn-info">详情</a>
-                        <form action="/delete/{{ domain }}" method="post" style="display:inline">
+                        <form action="/delete/{{ domain }}" method="post" style="display:inline" onsubmit="return confirm('确定要删除域名 {{ domain }} 的认证配置吗？此操作不可撤销！')">
                             <button class="btn btn-sm btn-danger w-100">删除</button>
                         </form>
                     </div>

@@ -79,7 +79,7 @@
         </div>
     </div>
     
-    <form action="/delete/{{ domain }}" method="post" class="mt-3 mb-4">
+    <form action="/delete/{{ domain }}" method="post" class="mt-3 mb-4" onsubmit="return confirm('确定要删除域名 {{ domain }} 的全部认证配置吗？\n此操作将同时删除 Keycloak Client、OAuth2 容器及 Nginx 配置，且不可撤销！')">
         <button class="btn btn-danger btn-sm w-100 py-2">🗑️ 删除此认证</button>
     </form>
 </div>
