@@ -437,6 +437,10 @@ if [ -f "/tmp/keycloak_auth_manager_backup/encryption.key" ]; then
     echo "    检测到备份的加密密钥，正在还原..."
     cp /tmp/keycloak_auth_manager_backup/encryption.key "$INSTALL_DIR/"
 fi
+if [ -f "/tmp/keycloak_auth_manager_backup/secret.key" ]; then
+    echo "    检测到备份的 Session 密钥，正在还原..."
+    cp /tmp/keycloak_auth_manager_backup/secret.key "$INSTALL_DIR/"
+fi
 if [ -f "/tmp/keycloak_auth_manager_backup/data.json" ]; then
     echo "    检测到备份的站点数据文件，正在还原..."
     cp /tmp/keycloak_auth_manager_backup/data.json "$INSTALL_DIR/"

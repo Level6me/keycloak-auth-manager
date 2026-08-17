@@ -111,21 +111,30 @@ sudo mkdir -p $INSTALL_DIR
 sudo cp -r "$SOURCE_DIR/app.py" $INSTALL_DIR/
 sudo cp -r "$SOURCE_DIR/static" $INSTALL_DIR/
 sudo cp -r "$SOURCE_DIR/templates" $INSTALL_DIR/
-sudo cp -r "$SOURCE_DIR/nginx-auth" $INSTALL_DIR/ 2>/dev/null || true
+sudo cp -rf "$SOURCE_DIR/themes" $INSTALL_DIR/ 2>/dev/null || true
+sudo cp -rf "$SOURCE_DIR/nginx-auth" $INSTALL_DIR/ 2>/dev/null || true
 echo "    ✓ 文件复制完成"
 
 # 3. 创建配置文件
 echo "[3] 创建 config.json 配置文件..."
+KC_URL=${KEYCLOAK_URL:-"http://127.0.0.1:8080"}
+KC_ADMIN=${KEYCLOAK_ADMIN:-"admin"}
+KC_PASS=${KEYCLOAK_PASSWORD:-"KeycloakAdmin_2026_Secure!"}
+KC_CONTAINER=${KEYCLOAK_CONTAINER:-"keycloak"}
+KC_WEB_PORT=${WEB_PORT:-8088}
+OP_API_KEY=${ONEPANEL_API_KEY:-"P01Wovo36NVwRqyNrHqYrqfs7fJis0vl"}
+OP_PORT=${ONEPANEL_PORT:-18080}
+
 sudo tee $INSTALL_DIR/config.json > /dev/null << CONFIG
 {
-  "keycloak_url": "http://127.0.0.1:8080",
-  "keycloak_admin": "admin",
-  "keycloak_password": "KeycloakAdmin_2026_Secure!",
-  "keycloak_container": "keycloak",
-  "web_port": 8088,
+  "keycloak_url": "$KC_URL",
+  "keycloak_admin": "$KC_ADMIN",
+  "keycloak_password": "$KC_PASS",
+  "keycloak_container": "$KC_CONTAINER",
+  "web_port": $KC_WEB_PORT,
   "install_dir": "$INSTALL_DIR",
-  "onepanel_api_key": "P01Wovo36NVwRqyNrHqYrqfs7fJis0vl",
-  "onepanel_port": 18080
+  "onepanel_api_key": "$OP_API_KEY",
+  "onepanel_port": $OP_PORT
 }
 CONFIG
 sudo chmod 600 $INSTALL_DIR/config.json
@@ -142,10 +151,10 @@ fi
 # 5. 复制 Apple 登录主题到 Keycloak 容器中
 echo "[5] 配置 Apple 登录主题..."
 if sudo docker ps --filter "name=keycloak" --format "{{.Names}}" | grep -q "keycloak"; then
-    sudo docker exec keycloak mkdir -p /opt/keycloak/themes
-    if [ -d "/home/ubuntu/keycloak-auth-manager/themes/apple/login" ]; then
-        sudo docker cp /home/ubuntu/keycloak-auth-manager/themes/apple/login keycloak:/opt/keycloak/themes/
-        echo "    ✓ Apple 主题已复制到 Keycloak 容器内 (/opt/keycloak/themes/)"
+    sudo docker exec keycloak mkdir -p /opt/keycloak/themes 2>/dev/null || true
+    if [ -d "$SOURCE_DIR/themes/apple" ]; then
+        sudo docker cp "$SOURCE_DIR/themes/apple" keycloak:/opt/keycloak/themes/
+        echo "    ✓ Apple 主题已复制到 Keycloak 容器内 (/opt/keycloak/themes/apple)"
     else
         echo "    ! 未找到本地 Apple 主题目录，跳过"
     fi
@@ -155,6 +164,7 @@ fi
 
 # 6. 创建 systemd 服务
 echo "[6] 创建 systemd 服务文件..."
+PYTHON_BIN=$(command -v python3 2>/dev/null || echo "/usr/bin/python3")
 sudo tee /etc/systemd/system/$SERVICE_NAME.service > /dev/null << SERVICE
 [Unit]
 Description=Keycloak Auth Manager Web Console
@@ -165,7 +175,7 @@ Wants=docker.service
 Type=simple
 User=root
 WorkingDirectory=$INSTALL_DIR
-ExecStart=/usr/bin/python3 $INSTALL_DIR/app.py
+ExecStart=$PYTHON_BIN $INSTALL_DIR/app.py
 Restart=always
 RestartSec=5
 

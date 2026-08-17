@@ -19,15 +19,32 @@ echo "删除 systemd 服务..."
 rm -f /etc/systemd/system/$SERVICE_NAME.service
 systemctl daemon-reload
 
+prompt_input() {
+    local prompt_text="$1"
+    local var_name="$2"
+    local default_val="$3"
+    local user_val=""
+
+    if [ -t 0 ]; then
+        read -p "$prompt_text" user_val || true
+    elif [ -e /dev/tty ]; then
+        read -p "$prompt_text" user_val < /dev/tty || true
+    else
+        user_val=""
+    fi
+    eval "$var_name=\"${user_val:-$default_val}\""
+}
+
 # 删除安装目录（保留配置与密钥）
 echo "删除安装目录..."
-read -p "是否保留全套配置文件 (config.json, data.json, encryption.key)? (y/n): " keep_config
+prompt_input "是否保留全套配置文件 (config.json, data.json, encryption.key, secret.key)? (y/n) [y]: " keep_config "y"
 if [ "$keep_config" = "y" ]; then
     rm -rf $BACKUP_DIR
     mkdir -p $BACKUP_DIR
     [ -f "$INSTALL_DIR/data.json" ] && cp $INSTALL_DIR/data.json $BACKUP_DIR/
     [ -f "$INSTALL_DIR/config.json" ] && cp $INSTALL_DIR/config.json $BACKUP_DIR/
     [ -f "$INSTALL_DIR/encryption.key" ] && cp $INSTALL_DIR/encryption.key $BACKUP_DIR/
+    [ -f "$INSTALL_DIR/secret.key" ] && cp $INSTALL_DIR/secret.key $BACKUP_DIR/
 fi
 rm -rf $INSTALL_DIR
 
