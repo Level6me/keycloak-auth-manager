@@ -1,8 +1,7 @@
 #!/usr/bin/env python3
-import os, json, subprocess, secrets, string, time, re, hashlib, requests
+import os, json, subprocess, secrets, string, time, re, hashlib, requests, threading
 from flask import Flask, render_template, request, redirect, url_for, flash, Response, stream_with_context
 from datetime import datetime
-from cryptography.fernet import Fernet
 import shlex
 import copy
 
@@ -107,14 +106,21 @@ def load_config():
 load_config()
 
 app = Flask(__name__)
-# 修复：使用固定的或持久化的 secret_key
-if not os.path.exists('/opt/keycloak-auth-manager/secret.key'):
-    os.makedirs('/opt/keycloak-auth-manager', exist_ok=True)
-    with open('/opt/keycloak-auth-manager/secret.key', 'w') as f:
-        f.write(secrets.token_hex(32))
-with open('/opt/keycloak-auth-manager/secret.key', 'r') as f:
-    app.secret_key = f.read().strip()
+# 修复：使用固定的或持久化的 secret_key，并加异常保护防止目录不存在时崩溃
+try:
+    if not os.path.exists('/opt/keycloak-auth-manager/secret.key'):
+        os.makedirs('/opt/keycloak-auth-manager', exist_ok=True)
+        with open('/opt/keycloak-auth-manager/secret.key', 'w') as f:
+            f.write(secrets.token_hex(32))
+    with open('/opt/keycloak-auth-manager/secret.key', 'r') as f:
+        app.secret_key = f.read().strip()
+except Exception as e:
+    print(f"警告: 无法读取持久化 secret_key，使用随机密钥 ({e})")
+    app.secret_key = secrets.token_hex(32)
+
+# 线程安全的日志列表
 current_logs = []
+logs_lock = threading.Lock()
 
 def load_data():
     if os.path.exists(DATA_FILE):
@@ -167,7 +173,8 @@ def generate_secret(length=32):
 
 def log(msg):
     line = "[{}] {}".format(datetime.now().strftime("%H:%M:%S"), msg)
-    current_logs.append(line)
+    with logs_lock:
+        current_logs.append(line)
     print(line)
 
 def run_cmd_args(args):
@@ -176,8 +183,11 @@ def run_cmd_args(args):
     return r.returncode, r.stdout, r.stderr
 
 def get_used_ports():
-    rc, out, err = run_cmd_args(["netstat", "-tlnp"])
     ports = set()
+    # 优先使用 ss（现代 Linux 标准工具），若不存在则回退到 netstat
+    rc, out, err = run_cmd_args(["ss", "-tlnp"])
+    if rc != 0:
+        rc, out, err = run_cmd_args(["netstat", "-tlnp"])
     if rc == 0:
         for line in out.splitlines():
             # 匹配本地绑定端口，例如包含 :418x
@@ -264,6 +274,9 @@ def setup_keycloak_passkey_flow():
         
         # 获取新创建的 Flow ID
         flows_res = requests.get(f"{base_url}/flows", headers=headers)
+        if flows_res.status_code != 200:
+            log(f"获取 Flow 列表失败: HTTP {flows_res.status_code}")
+            return None
         flows = flows_res.json()
         new_flow_id = next((f["id"] for f in flows if f.get("alias") == "passkey-only-browser"), None)
         
@@ -695,12 +708,20 @@ def add_page():
 @app.route('/api/logs')
 def api_logs():
     def gen():
-        while True:
-            if current_logs:
-                for l in current_logs: yield "data: {}\n\n".format(l)
-                current_logs[:] = []
-            yield "data: heartbeat\n\n"
-            time.sleep(0.5)
+        try:
+            while True:
+                with logs_lock:
+                    if current_logs:
+                        lines = list(current_logs)
+                        current_logs[:] = []
+                    else:
+                        lines = []
+                for l in lines:
+                    yield "data: {}\n\n".format(l)
+                yield "data: heartbeat\n\n"
+                time.sleep(0.5)
+        except GeneratorExit:
+            pass
     return Response(stream_with_context(gen()), mimetype='text/event-stream')
 
 @app.route('/api/acme_accounts')
@@ -723,7 +744,8 @@ def api_dns_accounts():
 
 @app.route('/api/create', methods=['POST'])
 def api_create():
-    current_logs[:] = []
+    with logs_lock:
+        current_logs[:] = []
     domain = request.form.get('domain', '').strip()
     port = request.form.get('port', '').strip()
     
@@ -782,7 +804,8 @@ def api_create():
 
 @app.route('/api/apply_ssl', methods=['POST'])
 def api_apply_ssl():
-    current_logs[:] = []
+    with logs_lock:
+        current_logs[:] = []
     domain = request.form.get('domain', '').strip()
     acme_id = request.form.get('acme_id')
     dns_id = request.form.get('dns_id')
@@ -863,7 +886,7 @@ def api_apply_ssl():
                         return json.dumps({"success": False, "error": f"1Panel API返回失败状态: {err_msg}"})
         
         if ssl_ready:
-            log("正在将证书绑定 to 网站并开启 HTTPS...")
+            log("正在将证书绑定到网站并开启 HTTPS...")
             ws_res = call_1panel_api("/api/v2/websites/search", "POST", {"Page": 1, "PageSize": 10, "Info": domain, "OrderBy": "created_at", "Order": "null"})
             if ws_res and ws_res.get("code") == 200 and ws_res.get("data") and ws_res["data"]["items"]:
                 ws_item = next((x for x in ws_res["data"]["items"] if x.get("primaryDomain") == domain or domain in x.get("domains", [])), None)
@@ -1031,4 +1054,7 @@ def ssl_page():
     return render_template('ssl.html')
 
 if __name__ == '__main__':
-    app.run(host='0.0.0.0', port=WEB_PORT, debug=True, threaded=True)
+    # 修复：生产环境禁用 debug 模式（debug=True 会暴露交互式调试器，存在严重安全风险）
+    # 如需开启调试，请设置环境变量 FLASK_DEBUG=1
+    debug_mode = os.environ.get('FLASK_DEBUG', '0') == '1'
+    app.run(host='0.0.0.0', port=WEB_PORT, debug=debug_mode, threaded=True)
