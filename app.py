@@ -190,16 +190,22 @@ def get_used_ports():
         rc, out, err = run_cmd_args(["netstat", "-tlnp"])
     if rc == 0:
         for line in out.splitlines():
-            # 匹配本地绑定端口，例如包含 :418x
-            match = re.search(r':(418\d+)\b', line)
-            if match:
-                ports.add(int(match.group(1)))
+            # 匹配所有本地绑定的监听端口
+            matches = re.findall(r':(\d+)\s+', line)
+            for m in matches:
+                try:
+                    ports.add(int(m))
+                except ValueError:
+                    pass
     
     # 额外检查 data.json 中已经分配出去的端口（防止容器崩溃时释放端口导致重复分配）
     data = load_data()
     for k, v in data.items():
         if isinstance(v, dict) and 'oauth_port' in v:
-            ports.add(int(v['oauth_port']))
+            try:
+                ports.add(int(v['oauth_port']))
+            except (ValueError, TypeError):
+                pass
             
     return ports
 
@@ -348,7 +354,7 @@ def create_keycloak_client(domain, client_id, client_secret):
                 "--format", "csv",
                 "--noquotes"
             ])
-            uuid = uuid_out.strip()
+            uuid = uuid_out.strip().splitlines()[0].strip() if uuid_out.strip() else ""
             if uuid:
                 up_rc, up_out, up_err = run_cmd_args([
                     "docker", "exec", KEYCLOAK_CONTAINER,
@@ -386,7 +392,7 @@ def delete_keycloak_client(client_id):
         "--format", "csv",
         "--noquotes"
     ])
-    uuid = uuid_out.strip()
+    uuid = uuid_out.strip().splitlines()[0].strip() if uuid_out.strip() else ""
     if uuid:
         run_cmd_args([
             "docker", "exec", KEYCLOAK_CONTAINER,
@@ -436,13 +442,15 @@ def stop_oauth2_container(container_name):
     run_cmd_args(["docker", "rm", "-f", container_name])
 
 def get_proxy_conf_path(domain):
-    paths = [
-        f"/opt/1panel/www/sites/{domain}/proxy/root.conf",
-        f"/opt/1panel/apps/openresty/openresty/www/sites/{domain}/proxy/root.conf"
+    base_dirs = [
+        f"/opt/1panel/www/sites/{domain}",
+        f"/opt/1panel/apps/openresty/openresty/www/sites/{domain}"
     ]
-    for p in paths:
-        if os.path.exists(p):
-            return p
+    for b in base_dirs:
+        if os.path.exists(b):
+            proxy_dir = os.path.join(b, "proxy")
+            os.makedirs(proxy_dir, exist_ok=True)
+            return os.path.join(proxy_dir, "root.conf")
     return None
 
 def update_nginx_config(domain, oauth_port, target_port, auth_enabled, proxy_enabled):
@@ -466,6 +474,7 @@ location ^~ / {{
     proxy_set_header Host $host;
     proxy_set_header X-Real-IP $remote_addr;
     proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+    proxy_set_header X-Forwarded-Proto $scheme;
     proxy_http_version 1.1;
     proxy_set_header Upgrade $http_upgrade;
     proxy_set_header Connection $http_connection;
@@ -494,6 +503,7 @@ location = /oauth2/auth {{
     proxy_set_header Content-Length "";
     proxy_set_header X-Real-IP $remote_addr;
     proxy_set_header Host $host;
+    proxy_set_header X-Forwarded-Proto $scheme;
 }}
 
 location @login {{
@@ -510,6 +520,7 @@ location ^~ / {{
     proxy_set_header Host $host;
     proxy_set_header X-Real-IP $remote_addr;
     proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+    proxy_set_header X-Forwarded-Proto $scheme;
     proxy_http_version 1.1;
     proxy_set_header Upgrade $http_upgrade;
     proxy_set_header Connection $http_connection;
@@ -522,7 +533,7 @@ location ^~ / {{
         
         # 重载 Nginx 容器
         or_rc, or_out, or_err = run_cmd_args(["docker", "ps", "-q", "-f", "name=openresty"])
-        openresty_id = or_out.strip()
+        openresty_id = or_out.strip().splitlines()[0].strip() if or_out.strip() else ""
         if openresty_id:
             run_cmd_args(["docker", "exec", openresty_id, "nginx", "-t"])
             run_cmd_args(["docker", "exec", openresty_id, "nginx", "-s", "reload"])
@@ -746,7 +757,7 @@ def api_dns_accounts():
 def api_create():
     with logs_lock:
         current_logs[:] = []
-    domain = request.form.get('domain', '').strip()
+    domain = request.form.get('domain', '').strip().lower()
     port = request.form.get('port', '').strip()
     
     if not domain or not port:
@@ -806,7 +817,7 @@ def api_create():
 def api_apply_ssl():
     with logs_lock:
         current_logs[:] = []
-    domain = request.form.get('domain', '').strip()
+    domain = request.form.get('domain', '').strip().lower()
     acme_id = request.form.get('acme_id')
     dns_id = request.form.get('dns_id')
     
@@ -922,6 +933,7 @@ def api_apply_ssl():
 
 @app.route('/detail/<domain>')
 def detail(domain):
+    domain = domain.strip().lower()
     data = load_data()
     if domain not in data: return redirect(url_for('index'))
     auth = data[domain]
@@ -947,6 +959,7 @@ def detail(domain):
 
 @app.route('/delete/<domain>', methods=['POST'])
 def delete(domain):
+    domain = domain.strip().lower()
     log(f"收到删除请求，domain: '{domain}'")
     data = load_data()
     if domain not in data: 
@@ -978,6 +991,7 @@ def delete(domain):
 
 @app.route('/api/toggle/<domain>/<feature>', methods=['POST'])
 def api_toggle(domain, feature):
+    domain = domain.strip().lower()
     enabled_str = request.form.get('enabled', 'false')
     enabled = enabled_str.lower() == 'true'
     
