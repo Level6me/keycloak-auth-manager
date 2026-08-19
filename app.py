@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 import os, json, subprocess, secrets, string, time, re, hashlib, requests, threading
-from flask import Flask, render_template, request, redirect, url_for, flash, Response, stream_with_context
+from flask import Flask, render_template, request, redirect, url_for, flash, Response, stream_with_context, send_from_directory
 from datetime import datetime
 import shlex
 import copy
@@ -961,6 +961,11 @@ def settings():
         except Exception:
             pass
     return render_template('settings.html', config=cfg)
+
+@app.route('/favicon.ico')
+@app.route('/favicon.svg')
+def favicon():
+    return send_from_directory(os.path.join(app.root_path, 'static'), 'favicon.svg', mimetype='image/svg+xml')
 
 @app.route('/')
 def index():
