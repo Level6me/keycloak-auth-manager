@@ -99,8 +99,26 @@ async function copyToClipboard(text, label = '内容') {
 }
 
 // --- 4. SPA Tab Navigation & View Management ---
+function updateHeaderDate() {
+    const el = document.getElementById('header-date');
+    if (el) {
+        const now = new Date();
+        const month = now.getMonth() + 1;
+        const date = now.getDate();
+        const days = ['星期日', '星期一', '星期二', '星期三', '星期四', '星期五', '星期六'];
+        const dayName = days[now.getDay()];
+        el.textContent = `${month}月${date}日 ${dayName}`;
+    }
+}
+
 function switchTab(pageId, title, btnEl) {
-    // 1. 切换 Page 显示
+    // 1. 切换 Header 标题
+    const headerTitle = document.getElementById('header-title');
+    if (headerTitle && title) {
+        headerTitle.textContent = title;
+    }
+
+    // 2. 切换 Page 显示
     document.querySelectorAll('.page').forEach(page => {
         page.classList.remove('active');
     });
@@ -109,7 +127,7 @@ function switchTab(pageId, title, btnEl) {
         targetPage.classList.add('active');
     }
 
-    // 2. 切换 Dock 按钮高亮
+    // 3. 切换 Dock 按钮高亮
     document.querySelectorAll('.dock-btn').forEach(btn => {
         btn.classList.remove('active');
     });
@@ -121,13 +139,13 @@ function switchTab(pageId, title, btnEl) {
         if (matchingBtn) matchingBtn.classList.add('active');
     }
 
-    // 3. 更新 URL Hash (无刷新)
+    // 4. 更新 URL Hash (无刷新)
     const hash = pageId.replace('p-', '');
     if (window.location.hash !== `#${hash}`) {
         history.replaceState(null, null, `#${hash}`);
     }
 
-    // 4. 页面激活回调
+    // 5. 页面激活回调
     if (pageId === 'p-domains') {
         loadDomainsAjax();
     } else if (pageId === 'p-add') {
@@ -432,12 +450,14 @@ function stopLogStream() {
 // --- 8. 初始化与 Hash 路由自适应 ---
 document.addEventListener('DOMContentLoaded', () => {
     initTheme();
+    updateHeaderDate();
 
     // 根据 URL Hash 激活对应 Tab
     const hash = (window.location.hash || '').replace('#', '');
     if (hash && ['domains', 'add', 'ssl', 'settings'].includes(hash)) {
-        switchTab(`p-${hash}`, hash, document.getElementById(`dock-btn-${hash}`));
+        const titleMap = { 'domains': '总览', 'add': '添加认证', 'ssl': '证书申请', 'settings': '系统配置' };
+        switchTab(`p-${hash}`, titleMap[hash] || hash, document.getElementById(`dock-btn-${hash}`));
     } else {
-        switchTab('p-domains', '域名管理', document.getElementById('dock-btn-domains'));
+        switchTab('p-domains', '总览', document.getElementById('dock-btn-domains'));
     }
 });
