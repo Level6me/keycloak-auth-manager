@@ -80,6 +80,22 @@ systemctl stop keycloak-auth-manager      # 停止服务
 journalctl -u keycloak-auth-manager -f    # 查看日志
 ```
 
+## 一键更新
+
+脚本会自动保留所有历史配置（`config.json`）、代理站点数据（`data.json`）与加密密钥（`encryption.key`），实现无损平滑更新。
+
+### 方式一：远程一键更新命令（推荐）
+
+```bash
+curl -sSL https://raw.githubusercontent.com/Level6me/keycloak-auth-manager/main/update.sh | bash
+```
+
+### 方式二：服务器本地一键更新
+
+```bash
+cd /opt/keycloak-auth-manager && sudo bash update.sh
+```
+
 ## 使用方法
 
 ### 1. 准备工作
