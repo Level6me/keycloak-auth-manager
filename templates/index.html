@@ -80,7 +80,7 @@
             <!-- Card Grid View -->
             <div id="cardViewContainer" class="domain-grid">
                 {% for domain, auth in auths.items() %}
-                <div class="domain-card" data-domain="{{ domain }}" data-target="{{ auth.get('target_host', '127.0.0.1') }}:{{ auth.target_port }}" data-port="{{ auth.oauth_port }}">
+                <div class="domain-card" data-domain="{{ domain }}" data-target="{{ auth.get('target_host', '127.0.0.1') }}:{{ auth.get('target_port', auth.get('port', 80)) }}" data-port="{{ auth.oauth_port }}">
                     <div>
                         <div class="domain-card-header">
                             <div>
@@ -90,7 +90,7 @@
                                 </span>
                                 <div class="domain-target">
                                     <span>🎯 目标:</span>
-                                    <code style="background: var(--card-sec); padding: 2px 6px; border-radius: 6px; border: 1px solid var(--border-subtle);">{{ auth.get('target_host', '127.0.0.1') }}:{{ auth.target_port }}</code>
+                                    <code style="background: var(--card-sec); padding: 2px 6px; border-radius: 6px; border: 1px solid var(--border-subtle);">{{ auth.get('target_host', '127.0.0.1') }}:{{ auth.get('target_port', auth.get('port', 80)) }}</code>
                                 </div>
                             </div>
                             <span class="badge secondary" style="font-family: monospace;">:{{ auth.oauth_port }}</span>
@@ -100,20 +100,14 @@
                             <div class="badges-wrap" style="margin: 0;">
                                 {% if auth.proxy_enabled %}
                                     <span class="badge success">🔄 反代已开</span>
-                                {% else %}
-                                    <span class="badge secondary">🔄 反代已关</span>
                                 {% endif %}
 
                                 {% if auth.ssl_enabled %}
                                     <span class="badge success">🔒 SSL已开</span>
-                                {% else %}
-                                    <span class="badge warning">⚠️ 无SSL</span>
                                 {% endif %}
 
                                 {% if auth.auth_enabled %}
                                     <span class="badge accent">🛡️ 认证已开</span>
-                                {% else %}
-                                    <span class="badge secondary">🛡️ 认证已关</span>
                                 {% endif %}
                             </div>
 
@@ -141,7 +135,7 @@
                     </thead>
                     <tbody id="tableBodyContainer">
                         {% for domain, auth in auths.items() %}
-                        <tr data-domain="{{ domain }}" data-target="{{ auth.get('target_host', '127.0.0.1') }}:{{ auth.target_port }}" data-port="{{ auth.oauth_port }}">
+                        <tr data-domain="{{ domain }}" data-target="{{ auth.get('target_host', '127.0.0.1') }}:{{ auth.get('target_port', auth.get('port', 80)) }}" data-port="{{ auth.oauth_port }}">
                             <td>
                                 <span onclick="openDomainDetail('{{ domain }}')" style="font-weight: 700; color: var(--text); cursor: pointer; display: flex; align-items: center; gap: 6px;">
                                     <span class="status-dot {% if not auth.proxy_enabled %}offline{% endif %}"></span>
@@ -150,12 +144,18 @@
                             </td>
                             <td>
                                 <div class="badges-wrap">
-                                    <span class="badge {% if auth.proxy_enabled %}success{% else %}secondary{% endif %}">🔄 反代{% if not auth.proxy_enabled %}关{% endif %}</span>
-                                    <span class="badge {% if auth.ssl_enabled %}success{% else %}warning{% endif %}">{% if auth.ssl_enabled %}🔒 SSL{% else %}⚠️ 无SSL{% endif %}</span>
-                                    <span class="badge {% if auth.auth_enabled %}accent{% else %}secondary{% endif %}">🛡️ 认证{% if not auth.auth_enabled %}关{% endif %}</span>
+                                    {% if auth.proxy_enabled %}
+                                        <span class="badge success">🔄 反代</span>
+                                    {% endif %}
+                                    {% if auth.ssl_enabled %}
+                                        <span class="badge success">🔒 SSL</span>
+                                    {% endif %}
+                                    {% if auth.auth_enabled %}
+                                        <span class="badge accent">🛡️ 认证</span>
+                                    {% endif %}
                                 </div>
                             </td>
-                            <td><code>{{ auth.get('target_host', '127.0.0.1') }}:{{ auth.target_port }}</code></td>
+                            <td><code>{{ auth.get('target_host', '127.0.0.1') }}:{{ auth.get('target_port', auth.get('port', 80)) }}</code></td>
                             <td><span class="badge secondary">{{ auth.oauth_port }}</span></td>
                             <td style="text-align: right;">
                                 <div style="display: inline-flex; gap: 6px;">
