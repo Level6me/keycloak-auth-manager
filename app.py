@@ -124,11 +124,57 @@ log_history = []
 log_seq = 0
 logs_lock = threading.Lock()
 
+def check_domain_ssl_enabled(domain):
+    if not domain:
+        return False
+    domain = domain.strip().lower()
+    
+    # 1. 检查 conf.d/ 下的站点主配置文件中是否配置并启用了 SSL
+    conf_paths = [
+        f"/opt/1panel/apps/openresty/openresty/conf/conf.d/{domain}.conf",
+        f"/opt/1panel/conf/conf.d/{domain}.conf",
+        f"/etc/nginx/conf.d/{domain}.conf"
+    ]
+    for p in conf_paths:
+        if os.path.exists(p):
+            try:
+                with open(p, 'r', encoding='utf-8', errors='ignore') as f:
+                    content = f.read()
+                if 'ssl_certificate' in content or ('listen' in content and '443' in content and 'ssl' in content):
+                    return True
+            except Exception:
+                pass
+
+    # 2. 检查站点目录下的 ssl/ 证书文件是否存在且非空
+    ssl_paths = [
+        f"/opt/1panel/apps/openresty/openresty/www/sites/{domain}/ssl/fullchain.pem",
+        f"/opt/1panel/apps/openresty/openresty/www/sites/{domain}/ssl/cert.pem",
+        f"/opt/1panel/www/sites/{domain}/ssl/fullchain.pem",
+        f"/opt/1panel/www/sites/{domain}/ssl/cert.pem"
+    ]
+    for p in ssl_paths:
+        if os.path.exists(p) and os.path.getsize(p) > 0:
+            return True
+
+    # 3. 若配置了 1Panel API Key，通过 API 实时查询 HTTPS 开启状态
+    if ONEPANEL_API_KEY:
+        try:
+            ws_res = call_1panel_api("/api/v2/websites/search", "POST", {"Page": 1, "PageSize": 10, "Info": domain, "OrderBy": "created_at", "Order": "null"})
+            if ws_res and ws_res.get("code") == 200 and ws_res.get("data") and ws_res["data"]["items"]:
+                ws_item = next((x for x in ws_res["data"]["items"] if x.get("primaryDomain") == domain or domain in x.get("domains", [])), None)
+                if ws_item and ws_item.get("protocol", "").upper() == "HTTPS":
+                    return True
+        except Exception:
+            pass
+
+    return False
+
 def load_data():
     if os.path.exists(DATA_FILE):
         try:
             with open(DATA_FILE, 'r') as f:
                 data = json.load(f)
+            changed = False
             for domain, auth in data.items():
                 if isinstance(auth, dict):
                     if 'client_secret' in auth:
@@ -143,12 +189,12 @@ def load_data():
                         auth['proxy_enabled'] = True
                     if 'auth_enabled' not in auth:
                         auth['auth_enabled'] = True
-                    if 'ssl_enabled' not in auth:
-                        nginx_conf = auth.get('nginx_config', '')
-                        if nginx_conf and ('https' in nginx_conf or '443' in nginx_conf or 'ssl' in nginx_conf):
-                            auth['ssl_enabled'] = True
-                        else:
-                            auth['ssl_enabled'] = False
+                        
+                    # 动态精确校准 SSL 开启状态
+                    real_ssl = check_domain_ssl_enabled(domain)
+                    if auth.get('ssl_enabled') != real_ssl:
+                        auth['ssl_enabled'] = real_ssl
+                        changed = True
             return data
         except Exception as e:
             print("加载数据失败:", str(e))
@@ -452,25 +498,43 @@ def create_oauth2_container(domain, oauth_port, client_id, client_secret):
     log("容器创建成功")
     return True, container_name, cookie_secret, ""
 
-def stop_oauth2_container(container_name):
-    run_cmd_args(["docker", "rm", "-f", container_name])
-
 def get_proxy_conf_path(domain):
+    if not domain:
+        return None
+    domain = domain.strip().lower()
     base_dirs = [
-        f"/opt/1panel/www/sites/{domain}",
-        f"/opt/1panel/apps/openresty/openresty/www/sites/{domain}"
+        f"/opt/1panel/apps/openresty/openresty/www/sites/{domain}",
+        f"/opt/1panel/www/sites/{domain}"
     ]
+    # 先检查是否已有存在的目录
     for b in base_dirs:
         if os.path.exists(b):
             proxy_dir = os.path.join(b, "proxy")
             os.makedirs(proxy_dir, exist_ok=True)
             return os.path.join(proxy_dir, "root.conf")
+            
+    # 如果不存在，确定 OpenResty 的 sites 父目录并自愈创建
+    parent_sites = None
+    if os.path.exists("/opt/1panel/apps/openresty/openresty/www/sites"):
+        parent_sites = "/opt/1panel/apps/openresty/openresty/www/sites"
+    elif os.path.exists("/opt/1panel/www/sites"):
+        parent_sites = "/opt/1panel/www/sites"
+    elif os.path.exists("/www/sites"):
+        parent_sites = "/www/sites"
+        
+    if parent_sites:
+        site_dir = os.path.join(parent_sites, domain)
+        proxy_dir = os.path.join(site_dir, "proxy")
+        os.makedirs(proxy_dir, exist_ok=True)
+        os.makedirs(os.path.join(site_dir, "log"), exist_ok=True)
+        os.makedirs(os.path.join(site_dir, "ssl"), exist_ok=True)
+        return os.path.join(proxy_dir, "root.conf")
     return None
 
 def update_nginx_config(domain, oauth_port, target_host, target_port, auth_enabled, proxy_enabled):
     proxy_conf = get_proxy_conf_path(domain)
     if not proxy_conf:
-        log("未找到 1Panel 配置文件，请确认网站创建成功")
+        log("未找到 OpenResty 站点目录，无法生成反代配置文件")
         return None
     
     target_host = target_host.strip() if target_host else "127.0.0.1"
@@ -548,17 +612,129 @@ location ^~ / {{
         with open(proxy_conf, 'w') as f:
             f.write(new_content)
         
-        # 重载 Nginx 容器
+        # 重载 Nginx / OpenResty 容器
         or_rc, or_out, or_err = run_cmd_args(["docker", "ps", "-q", "-f", "name=openresty"])
         openresty_id = or_out.strip().splitlines()[0].strip() if or_out.strip() else ""
         if openresty_id:
             run_cmd_args(["docker", "exec", openresty_id, "nginx", "-t"])
             run_cmd_args(["docker", "exec", openresty_id, "nginx", "-s", "reload"])
-            log("Nginx 站点配置已更新并重载！")
+            log("OpenResty / Nginx 站点配置已更新并成功重载！")
         return new_content
     except Exception as e:
         log(f"更新 Nginx 配置文件失败: {str(e)}")
         return None
+
+def ensure_openresty_site_conf(domain):
+    if not domain:
+        return
+    domain = domain.strip().lower()
+    conf_dirs = [
+        "/opt/1panel/apps/openresty/openresty/conf/conf.d",
+        "/opt/1panel/conf/conf.d",
+        "/etc/nginx/conf.d"
+    ]
+    for cd in conf_dirs:
+        if os.path.exists(cd):
+            conf_file = os.path.join(cd, f"{domain}.conf")
+            if not os.path.exists(conf_file):
+                # 检查该域名是否已经存在证书文件
+                ssl_cert = f"/opt/1panel/apps/openresty/openresty/www/sites/{domain}/ssl/fullchain.pem"
+                ssl_key = f"/opt/1panel/apps/openresty/openresty/www/sites/{domain}/ssl/privkey.pem"
+                has_ssl = os.path.exists(ssl_cert) and os.path.exists(ssl_key) and os.path.getsize(ssl_cert) > 0
+                
+                if has_ssl:
+                    main_conf = """server {
+    listen 80;
+    server_name """ + domain + """;
+    
+    location ^~ /.well-known/acme-challenge {
+        default_type "text/plain";
+        root /usr/share/nginx/html;
+    }
+    
+    location / {
+        return 301 https://$host$request_uri;
+    }
+}
+
+server {
+    listen 443 ssl http2;
+    server_name """ + domain + """;
+    
+    access_log /www/sites/""" + domain + """/log/access.log main;
+    error_log /www/sites/""" + domain + """/log/error.log;
+    
+    ssl_certificate /www/sites/""" + domain + """/ssl/fullchain.pem;
+    ssl_certificate_key /www/sites/""" + domain + """/ssl/privkey.pem;
+    ssl_protocols TLSv1.3 TLSv1.2;
+    ssl_prefer_server_ciphers on;
+    ssl_session_cache shared:SSL:10m;
+    add_header Strict-Transport-Security "max-age=31536000";
+    
+    include /www/sites/""" + domain + """/proxy/*.conf;
+}
+"""
+                else:
+                    main_conf = """server {
+    listen 80;
+    server_name """ + domain + """;
+    
+    access_log /www/sites/""" + domain + """/log/access.log main;
+    error_log /www/sites/""" + domain + """/log/error.log;
+    
+    location ^~ /.well-known/acme-challenge {
+        default_type "text/plain";
+        root /usr/share/nginx/html;
+    }
+    
+    include /www/sites/""" + domain + """/proxy/*.conf;
+}
+"""
+                try:
+                    with open(conf_file, 'w', encoding='utf-8') as f:
+                        f.write(main_conf)
+                    log(f"已自动生成 OpenResty 站点主配置文件: {conf_file}")
+                except Exception as e:
+                    log(f"生成主配置文件异常: {e}")
+
+def create_nginx_auth(domain, oauth_port, target_host, target_port):
+    log("配置 Nginx / OpenResty 站点与反代...")
+    target_host = target_host.strip() if target_host else "127.0.0.1"
+    target_upstream = f"{target_host}:{target_port}"
+    
+    # 1. 尝试通过 1Panel API 自动建站（若已配置 API Key）
+    if ONEPANEL_API_KEY:
+        api_payload = {
+            "PrimaryDomain": domain,
+            "Type": "proxy",
+            "Alias": domain,
+            "WebsiteGroupID": 1,
+            "Domains": [{"Domain": domain, "Port": 80}],
+            "AppType": "installed",
+            "AppInstallId": 1,
+            "Proxy": f"http://{target_upstream}",
+            "Remark": "Keycloak Auth Manager 自动创建"
+        }
+        res = call_1panel_api("/api/v2/websites", "POST", api_payload)
+        if res and res.get("code") == 200:
+            log("通过 1Panel API 成功创建反向代理网站")
+            time.sleep(1.5)
+        else:
+            if res:
+                log(f"1Panel API 建站提示: {res.get('message', res)}")
+    
+    # 2. 无论是否调用 API，均确保站点主配置文件与目录存在（自愈机制）
+    ensure_openresty_site_conf(domain)
+    
+    # 3. 获取 proxy 配置文件路径
+    proxy_conf = get_proxy_conf_path(domain)
+    if not proxy_conf:
+        log("未找到 OpenResty 站点目录，请确认 OpenResty 已安装")
+        return None
+    
+    # 4. 写入完整认证反代配置并重载
+    new_conf = update_nginx_config(domain, oauth_port, target_host, target_port, auth_enabled=True, proxy_enabled=True)
+    return new_conf
 
 def toggle_nginx_ssl(domain, enable):
     # 查找 1Panel 中的网站ID，修复：1Panel 该接口 orderBy 和 order 为必填字段，须在此补全
@@ -627,42 +803,6 @@ def delete_1panel_website(domain):
         
     log(f"1Panel 网站删除失败: {del_res}")
     return False
-
-def create_nginx_auth(domain, oauth_port, target_host, target_port):
-    log("修改 Nginx 配置...")
-    target_host = target_host.strip() if target_host else "127.0.0.1"
-    target_upstream = f"{target_host}:{target_port}"
-    
-    # 尝试通过 1Panel API 自动建站
-    api_payload = {
-        "PrimaryDomain": domain,
-        "Type": "proxy",
-        "Alias": domain,
-        "WebsiteGroupID": 1,
-        "Domains": [{"Domain": domain, "Port": 80}],
-        "AppType": "installed",
-        "AppInstallId": 1,
-        "Proxy": f"http://{target_upstream}",
-        "Remark": "Keycloak Auth Manager 自动创建"
-    }
-    res = call_1panel_api("/api/v2/websites", "POST", api_payload)
-    if res and res.get("code") == 200:
-        log("通过 1Panel API 成功创建反向代理网站")
-        # 等待一秒让文件系统同步
-        time.sleep(1.5)
-    else:
-        if res:
-            log(f"1Panel API 创建建站失败，尝试继续修改配置文件. 响应: {res}")
-        else:
-            log("跳过 1Panel API 调用")
-    
-    proxy_conf = get_proxy_conf_path(domain)
-    if not proxy_conf:
-        log("未找到 1Panel 配置文件，请确认网站创建成功")
-        return None
-    
-    new_conf = update_nginx_config(domain, oauth_port, target_host, target_port, auth_enabled=True, proxy_enabled=True)
-    return new_conf
 
 def do_apply_ssl(domain, acme_id, dns_id=None):
     if not domain or not acme_id:
@@ -964,7 +1104,7 @@ def api_create():
         'nginx_config': conf, 
         'created_at': datetime.now().isoformat(),
         'proxy_enabled': True,
-        'ssl_enabled': False,
+        'ssl_enabled': check_domain_ssl_enabled(domain),
         'auth_enabled': True
     }
     save_data(fresh_data)
