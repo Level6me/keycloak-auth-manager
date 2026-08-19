@@ -3,7 +3,7 @@
 <head>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
-    <title>系统设置 - Keycloak 认证管理</title>
+    <title>系统设置 - Auth 认证管理</title>
     <link rel="icon" type="image/svg+xml" href="/static/favicon.svg">
     <link rel="alternate icon" href="/favicon.ico">
     <link rel="stylesheet" href="/static/css/abit.css">
@@ -48,17 +48,17 @@
             <div class="form-group">
                 <label class="form-label">面板监听端口 (web_port)</label>
                 <input type="number" class="input-box" name="web_port" value="{{ config.get('web_port', 8088) }}" required>
-                <div class="form-hint" style="color: var(--warning);">⚠️ 修改面板监听端口后，需在服务器终端手动执行 <code>sudo systemctl restart keycloak-auth.service</code> 才能生效</div>
+                <div class="form-hint" style="color: var(--warning);">⚠️ 修改面板监听端口后，需在服务器终端手动执行 <code>sudo systemctl restart auth-manager.service</code> 才能生效</div>
             </div>
         </div>
 
-        <!-- 2. Keycloak Config -->
+        <!-- 2. Auth Config -->
         <div class="card">
             <div class="card-header">
-                <span class="card-title">🔐 Keycloak 认证服务配置</span>
+                <span class="card-title">🔐 Auth 认证服务配置</span>
             </div>
             <div class="form-group">
-                <label class="form-label">Keycloak URL / 服务地址</label>
+                <label class="form-label">Auth URL / 服务地址</label>
                 <input type="text" class="input-box" name="keycloak_url" value="{{ config.get('keycloak_url', '') }}" placeholder="例如: https://auth.example.com" required>
                 <div class="form-hint">支持输入完整 URL 或主机域名</div>
             </div>
@@ -78,7 +78,7 @@
             <div class="form-group">
                 <label class="form-label">Docker 容器名称 (keycloak_container)</label>
                 <input type="text" class="input-box" name="keycloak_container" value="{{ config.get('keycloak_container', 'keycloak') }}" required>
-                <div class="form-hint">服务器上运行 Keycloak 的 Docker 容器名（默认: <code>keycloak</code>）</div>
+                <div class="form-hint">服务器上运行 Auth 的 Docker 容器名（默认: <code>keycloak</code>）</div>
             </div>
         </div>
 
@@ -96,6 +96,37 @@
                 <label class="form-label">1Panel API 密钥 (API Key)</label>
                 <input type="password" class="input-box" name="onepanel_api_key" placeholder="若不修改请留空">
                 <div class="form-hint">在 1Panel 面板设置 -> API 接口中生成的 API Key（选填）</div>
+            </div>
+        </div>
+
+        <!-- 4. Cloudflare DNS Config -->
+        <div class="card">
+            <div class="card-header">
+                <span class="card-title">☁️ Cloudflare DNS 联动配置</span>
+            </div>
+            <div class="form-group">
+                <label class="form-label">Cloudflare API 令牌 (API Token)</label>
+                <input type="password" class="input-box" name="cloudflare_api_token" placeholder="若不修改请留空">
+                <div class="form-hint">需在 Cloudflare 中创建具备「区域 (Zone) -> 读取」和「DNS -> 编辑」权限的 API Token</div>
+            </div>
+            
+            <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 12px; margin-bottom: 8px;">
+                <div>
+                    <label class="form-label">默认解析目标 IP (Server IP)</label>
+                    <input type="text" class="input-box" name="cloudflare_server_ip" value="{{ config.get('cloudflare_server_ip', '') }}" placeholder="留空则自动探测本服务器公网 IP">
+                    <div class="form-hint">用于自动添加 DNS A 记录的目标服务器 IP 地址</div>
+                </div>
+                <div>
+                    <label class="form-label">默认开启 CDN 代理 (Proxied)</label>
+                    <div style="display: flex; align-items: center; justify-content: space-between; height: 42px; padding: 0 12px; background: var(--card-sec); border-radius: 8px; border: 1px solid var(--border-subtle);">
+                        <span style="font-size: 13px; color: var(--text);">小黄云代理模式</span>
+                        <label class="switch">
+                            <input type="checkbox" name="cloudflare_proxied" {% if config.get('cloudflare_proxied') %}checked{% endif %}>
+                            <span class="slider"></span>
+                        </label>
+                    </div>
+                    <div class="form-hint">建议关闭（DNS Only）以确保 HTTP 证书验证与 Passkey 直连</div>
+                </div>
             </div>
         </div>
 

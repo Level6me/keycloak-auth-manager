@@ -58,6 +58,8 @@ if [ "$DB_TYPE" = "postgres" ]; then
         --network keycloak-net \
         --restart always \
         -p "$PORT":8080 \
+        -v /opt/keycloak/data:/opt/keycloak/data \
+        -v /opt/keycloak/themes:/opt/keycloak/themes \
         -e KEYCLOAK_ADMIN="$ADMIN_USER" \
         -e KEYCLOAK_ADMIN_PASSWORD="$ADMIN_PASSWORD" \
         -e KC_DB=postgres \
@@ -66,6 +68,7 @@ if [ "$DB_TYPE" = "postgres" ]; then
         -e KC_DB_PASSWORD="$DB_PASSWORD" \
         -e KC_PROXY_HEADERS=xforwarded \
         -e KC_HTTP_ENABLED=true \
+        -e JAVA_OPTS_APPEND="-Xms128m -Xmx192m -XX:MaxMetaspaceSize=128m -XX:+UseG1GC -Djava.awt.headless=true" \
         quay.io/keycloak/keycloak:26.1.0 \
         start
 else
@@ -74,10 +77,13 @@ else
         --name keycloak \
         --restart always \
         -p "$PORT":8080 \
+        -v /opt/keycloak/data:/opt/keycloak/data \
+        -v /opt/keycloak/themes:/opt/keycloak/themes \
         -e KEYCLOAK_ADMIN="$ADMIN_USER" \
         -e KEYCLOAK_ADMIN_PASSWORD="$ADMIN_PASSWORD" \
         -e KC_PROXY_HEADERS=xforwarded \
         -e KC_HTTP_ENABLED=true \
+        -e JAVA_OPTS_APPEND="-Xms128m -Xmx192m -XX:MaxMetaspaceSize=128m -XX:+UseG1GC -Djava.awt.headless=true" \
         quay.io/keycloak/keycloak:26.1.0 \
         start-dev
 fi

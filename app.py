@@ -59,10 +59,43 @@ KEYCLOAK_CONTAINER = "keycloak"
 ONEPANEL_API_KEY = ""
 ONEPANEL_PORT = 40455
 WEB_PORT = 8088
+CLOUDFLARE_API_TOKEN = ""
+CLOUDFLARE_SERVER_IP = ""
+CLOUDFLARE_PROXIED = False
+
+_CACHED_PUBLIC_IP = None
+_CACHED_PUBLIC_IP_TIME = 0
+
+def get_server_public_ip():
+    global _CACHED_PUBLIC_IP, _CACHED_PUBLIC_IP_TIME
+    if CLOUDFLARE_SERVER_IP and CLOUDFLARE_SERVER_IP.strip():
+        return CLOUDFLARE_SERVER_IP.strip()
+    now = time.time()
+    if _CACHED_PUBLIC_IP and (now - _CACHED_PUBLIC_IP_TIME < 300):
+        return _CACHED_PUBLIC_IP
+    ip_services = [
+        "https://api.ipify.org",
+        "https://icanhazip.com",
+        "https://ifconfig.me/ip",
+        "https://checkip.amazonaws.com"
+    ]
+    for s in ip_services:
+        try:
+            r = requests.get(s, timeout=3)
+            if r.status_code == 200:
+                ip = r.text.strip()
+                if re.match(r'^\d{1,3}(\.\d{1,3}){3}$', ip):
+                    _CACHED_PUBLIC_IP = ip
+                    _CACHED_PUBLIC_IP_TIME = now
+                    return ip
+        except Exception:
+            continue
+    return ""
 
 def load_config():
     global KEYCLOAK_URL, KEYCLOAK_ADMIN, KEYCLOAK_PASSWORD, KEYCLOAK_CONTAINER
     global WEB_PORT, ONEPANEL_API_KEY, ONEPANEL_PORT
+    global CLOUDFLARE_API_TOKEN, CLOUDFLARE_SERVER_IP, CLOUDFLARE_PROXIED
     try:
         if os.path.exists(CONFIG_FILE):
             with open(CONFIG_FILE, "r") as f:
@@ -70,9 +103,13 @@ def load_config():
             
             raw_password = cfg.get("keycloak_password", "")
             raw_api_key = cfg.get("onepanel_api_key", "")
+            raw_cf_token = cfg.get("cloudflare_api_token", "")
             
             KEYCLOAK_PASSWORD = decrypt_val(raw_password)
             ONEPANEL_API_KEY = decrypt_val(raw_api_key)
+            CLOUDFLARE_API_TOKEN = decrypt_val(raw_cf_token)
+            CLOUDFLARE_SERVER_IP = cfg.get("cloudflare_server_ip", "")
+            CLOUDFLARE_PROXIED = bool(cfg.get("cloudflare_proxied", False))
             
             need_rewrite = False
             if raw_password and not raw_password.startswith("gAAAA"):
@@ -80,6 +117,9 @@ def load_config():
                 need_rewrite = True
             if raw_api_key and not raw_api_key.startswith("gAAAA"):
                 cfg["onepanel_api_key"] = encrypt_val(raw_api_key)
+                need_rewrite = True
+            if raw_cf_token and not raw_cf_token.startswith("gAAAA"):
+                cfg["cloudflare_api_token"] = encrypt_val(raw_cf_token)
                 need_rewrite = True
                 
             raw_url = cfg.get("keycloak_url", "").strip()
@@ -312,6 +352,132 @@ def call_1panel_api(endpoint, method="POST", payload=None):
     except Exception as e:
         log(f"1Panel API 错误: {e}")
         return None
+
+def get_cloudflare_zones():
+    if not CLOUDFLARE_API_TOKEN:
+        return []
+    url = "https://api.cloudflare.com/client/v4/zones?status=active&per_page=50"
+    headers = {
+        "Authorization": f"Bearer {CLOUDFLARE_API_TOKEN}",
+        "Content-Type": "application/json"
+    }
+    try:
+        res = requests.get(url, headers=headers, timeout=10)
+        data = res.json()
+        if data.get("success") and data.get("result"):
+            zones = []
+            for z in data["result"]:
+                zones.append({
+                    "id": z.get("id"),
+                    "name": z.get("name"),
+                    "status": z.get("status")
+                })
+            return zones
+        else:
+            err_msg = data.get("errors", [{}])[0].get("message", "未知错误") if data.get("errors") else "请求失败"
+            log(f"获取 Cloudflare Zones 失败: {err_msg}")
+            return []
+    except Exception as e:
+        log(f"获取 Cloudflare Zones 异常: {e}")
+        return []
+
+def add_or_update_cloudflare_dns(full_domain, server_ip=None, proxied=None):
+    if not CLOUDFLARE_API_TOKEN:
+        return False, "未配置 Cloudflare API Token"
+    
+    full_domain = full_domain.strip().lower()
+    if not full_domain:
+        return False, "域名为空"
+        
+    zones = get_cloudflare_zones()
+    if not zones:
+        return False, "未能获取到 Cloudflare Zone 列表，请检查 Token 权限"
+        
+    matched_zone = None
+    for z in zones:
+        z_name = z["name"].lower()
+        if full_domain == z_name or full_domain.endswith("." + z_name):
+            if not matched_zone or len(z_name) > len(matched_zone["name"]):
+                matched_zone = z
+                
+    if not matched_zone:
+        return False, f"在 Cloudflare 中未找到与域名 {full_domain} 匹配的 Zone 托管区域"
+        
+    zone_id = matched_zone["id"]
+    zone_name = matched_zone["name"]
+    
+    target_ip = (server_ip or "").strip() or get_server_public_ip()
+    if not target_ip:
+        return False, "无法获取服务器公网 IP，请在设置中指定或手动输入"
+        
+    is_proxied = CLOUDFLARE_PROXIED if proxied is None else bool(proxied)
+    
+    headers = {
+        "Authorization": f"Bearer {CLOUDFLARE_API_TOKEN}",
+        "Content-Type": "application/json"
+    }
+    
+    log(f"[Cloudflare DNS] 正在自动配置 A 记录: {full_domain} -> {target_ip} (Zone: {zone_name}, Proxy: {is_proxied})")
+    
+    try:
+        query_url = f"https://api.cloudflare.com/client/v4/zones/{zone_id}/dns_records?type=A&name={full_domain}"
+        res = requests.get(query_url, headers=headers, timeout=10)
+        data = res.json()
+        
+        if not data.get("success"):
+            err_msg = data.get("errors", [{}])[0].get("message", "查询记录失败") if data.get("errors") else "查询失败"
+            log(f"[Cloudflare DNS] 查询 DNS 记录失败: {err_msg}")
+            return False, f"Cloudflare API: {err_msg}"
+            
+        records = data.get("result", [])
+        if records:
+            rec = records[0]
+            rec_id = rec["id"]
+            if rec.get("content") == target_ip and rec.get("proxied") == is_proxied:
+                log(f"[Cloudflare DNS] A 记录已存在且完全匹配 (IP: {target_ip}, Proxy: {is_proxied})，无需修改。")
+                return True, ""
+                
+            update_url = f"https://api.cloudflare.com/client/v4/zones/{zone_id}/dns_records/{rec_id}"
+            payload = {
+                "type": "A",
+                "name": full_domain,
+                "content": target_ip,
+                "ttl": 1,
+                "proxied": is_proxied,
+                "comment": "Managed by Auth Manager"
+            }
+            up_res = requests.put(update_url, headers=headers, json=payload, timeout=10)
+            up_data = up_res.json()
+            if up_data.get("success"):
+                log(f"[Cloudflare DNS] 成功更新 A 记录: {full_domain} -> {target_ip}")
+                return True, ""
+            else:
+                err_msg = up_data.get("errors", [{}])[0].get("message", "更新失败") if up_data.get("errors") else "更新失败"
+                log(f"[Cloudflare DNS] 更新 A 记录失败: {err_msg}")
+                return False, f"Cloudflare API: {err_msg}"
+        else:
+            create_url = f"https://api.cloudflare.com/client/v4/zones/{zone_id}/dns_records"
+            payload = {
+                "type": "A",
+                "name": full_domain,
+                "content": target_ip,
+                "ttl": 1,
+                "proxied": is_proxied,
+                "comment": "Managed by Auth Manager"
+            }
+            cr_res = requests.post(create_url, headers=headers, json=payload, timeout=10)
+            cr_data = cr_res.json()
+            if cr_data.get("success"):
+                log(f"[Cloudflare DNS] 成功创建 A 记录: {full_domain} -> {target_ip}")
+                return True, ""
+            else:
+                err_msg = cr_data.get("errors", [{}])[0].get("message", "创建失败") if cr_data.get("errors") else "创建失败"
+                log(f"[Cloudflare DNS] 创建 A 记录失败: {err_msg}")
+                return False, f"Cloudflare API: {err_msg}"
+                
+    except Exception as e:
+        log(f"[Cloudflare DNS] API 请求发生异常: {e}")
+        return False, str(e)
 
 def setup_keycloak_passkey_flow():
     # 获取 Token
@@ -735,7 +901,7 @@ def create_nginx_auth(domain, oauth_port, target_host, target_port):
             "AppType": "installed",
             "AppInstallId": 1,
             "Proxy": f"http://{target_upstream}",
-            "Remark": "Keycloak Auth Manager 自动创建"
+            "Remark": "Auth Manager 自动创建"
         }
         res = call_1panel_api("/api/v2/websites", "POST", api_payload)
         if res and res.get("code") == 200:
@@ -945,6 +1111,10 @@ def settings():
         onepanel_port = int(request.form.get('onepanel_port', 40455))
         onepanel_api_key = request.form.get('onepanel_api_key', '').strip()
         
+        cloudflare_api_token = request.form.get('cloudflare_api_token', '').strip()
+        cloudflare_server_ip = request.form.get('cloudflare_server_ip', '').strip()
+        cloudflare_proxied = request.form.get('cloudflare_proxied', 'false').lower() in ['true', '1', 'on']
+        
         cfg = {}
         if os.path.exists(CONFIG_FILE):
             try:
@@ -958,11 +1128,15 @@ def settings():
         cfg['keycloak_admin'] = keycloak_admin
         cfg['keycloak_container'] = keycloak_container
         cfg['onepanel_port'] = onepanel_port
+        cfg['cloudflare_server_ip'] = cloudflare_server_ip
+        cfg['cloudflare_proxied'] = cloudflare_proxied
         
         if keycloak_password:
             cfg['keycloak_password'] = encrypt_val(keycloak_password)
         if onepanel_api_key:
             cfg['onepanel_api_key'] = encrypt_val(onepanel_api_key)
+        if cloudflare_api_token:
+            cfg['cloudflare_api_token'] = encrypt_val(cloudflare_api_token)
             
         try:
             with open(CONFIG_FILE, "w") as f:
@@ -972,7 +1146,7 @@ def settings():
             return redirect('/settings')
             
         load_config()
-        flash('配置已成功保存！如果您修改了“面板监听端口 (web_port)”，需手动在服务器终端执行 "sudo systemctl restart keycloak-auth-manager" 才能生效。', 'success')
+        flash('配置已成功保存！如果您修改了“面板监听端口 (web_port)”，需手动在服务器终端执行 "sudo systemctl restart auth-manager.service" 才能生效。', 'success')
         return redirect('/settings')
         
     cfg = {}
@@ -999,6 +1173,10 @@ def api_settings():
         onepanel_port = int(request.form.get('onepanel_port', 40455))
         onepanel_api_key = request.form.get('onepanel_api_key', '').strip()
         
+        cloudflare_api_token = request.form.get('cloudflare_api_token', '').strip()
+        cloudflare_server_ip = request.form.get('cloudflare_server_ip', '').strip()
+        cloudflare_proxied = request.form.get('cloudflare_proxied', 'false').lower() in ['true', '1', 'on']
+        
         cfg = {}
         if os.path.exists(CONFIG_FILE):
             try:
@@ -1012,11 +1190,15 @@ def api_settings():
         cfg['keycloak_admin'] = keycloak_admin
         cfg['keycloak_container'] = keycloak_container
         cfg['onepanel_port'] = onepanel_port
+        cfg['cloudflare_server_ip'] = cloudflare_server_ip
+        cfg['cloudflare_proxied'] = cloudflare_proxied
         
         if keycloak_password:
             cfg['keycloak_password'] = encrypt_val(keycloak_password)
         if onepanel_api_key:
             cfg['onepanel_api_key'] = encrypt_val(onepanel_api_key)
+        if cloudflare_api_token:
+            cfg['cloudflare_api_token'] = encrypt_val(cloudflare_api_token)
             
         with open(CONFIG_FILE, "w") as f:
             json.dump(cfg, f, indent=2)
@@ -1025,6 +1207,17 @@ def api_settings():
         return json.dumps({"success": True})
     except Exception as e:
         return json.dumps({"success": False, "error": str(e)})
+
+@app.route('/api/cloudflare/zones')
+def api_cloudflare_zones():
+    zones = get_cloudflare_zones()
+    server_ip = get_server_public_ip()
+    return json.dumps({
+        "configured": bool(CLOUDFLARE_API_TOKEN),
+        "zones": zones,
+        "server_ip": server_ip,
+        "default_proxied": CLOUDFLARE_PROXIED
+    })
 
 @app.route('/favicon.ico')
 @app.route('/favicon.svg')
@@ -1141,6 +1334,24 @@ def api_create():
     data = load_data()
     if domain in data:
         return json.dumps({"success": False, "error": "该域名已配置"})
+    
+    # 1. 优先执行 Cloudflare DNS 记录添加 (若启用)
+    cf_add_dns = request.form.get('cf_add_dns', 'false').lower() in ['true', '1', 'on']
+    if cf_add_dns:
+        if not CLOUDFLARE_API_TOKEN:
+            return json.dumps({"success": False, "error": "未在设置中配置 Cloudflare API Token，无法自动添加 DNS"})
+        cf_proxied_form = request.form.get('cf_proxied')
+        cf_proxied_val = cf_proxied_form.lower() in ['true', '1', 'on'] if cf_proxied_form is not None else None
+        cf_server_ip = request.form.get('cf_server_ip', '').strip()
+        
+        log("----------------------------------------")
+        log(f"开始通过 Cloudflare API 解析域名 {domain}...")
+        dns_ok, dns_err = add_or_update_cloudflare_dns(domain, server_ip=cf_server_ip, proxied=cf_proxied_val)
+        if not dns_ok:
+            log(f"❌ Cloudflare DNS 配置失败: {dns_err}")
+            return json.dumps({"success": False, "error": f"Cloudflare DNS 解析失败: {dns_err}"})
+        log("✅ Cloudflare DNS 记录已就绪！")
+        log("----------------------------------------")
     
     client_id = domain.replace(".", "-")
     client_secret = generate_secret(32)
