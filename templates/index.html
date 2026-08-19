@@ -33,27 +33,35 @@
 
     <!-- ==================== PAGE 1: DOMAIN DASHBOARD ==================== -->
     <div id="p-domains" class="page active">
-        <!-- Stat Grid (Abit Large Value Style) -->
+        <!-- Stat Grid -->
         <div class="stat-grid">
-            <div class="card stat-card-abit">
-                <div class="val-sub" style="color: var(--accent);">🌐 已配置域名</div>
-                <div class="val-big" id="stat-total-domains">{{ auths|length }}</div>
-                <div class="val-hint">反向代理与保护站点</div>
+            <div class="stat-card">
+                <div class="stat-icon blue">🌐</div>
+                <div class="stat-content">
+                    <span class="stat-value" id="stat-total-domains">{{ auths|length }}</span>
+                    <span class="stat-label">已配置域名</span>
+                </div>
             </div>
-            <div class="card stat-card-abit">
-                <div class="val-sub" style="color: var(--success);">🛡️ 认证拦截中</div>
-                <div class="val-big" id="stat-auth-count" style="color: var(--success);">{{ auths.values()|selectattr('auth_enabled')|list|length }}</div>
-                <div class="val-hint">强制 Passkey 身份校验</div>
+            <div class="stat-card">
+                <div class="stat-icon green">🛡️</div>
+                <div class="stat-content">
+                    <span class="stat-value" id="stat-auth-count">{{ auths.values()|selectattr('auth_enabled')|list|length }}</span>
+                    <span class="stat-label">认证拦截中</span>
+                </div>
             </div>
-            <div class="card stat-card-abit">
-                <div class="val-sub" style="color: var(--purple);">🔒 HTTPS SSL 开启</div>
-                <div class="val-big" id="stat-ssl-count" style="color: var(--purple);">{{ auths.values()|selectattr('ssl_enabled')|list|length }}</div>
-                <div class="val-hint">443 端口加密通信</div>
+            <div class="stat-card">
+                <div class="stat-icon purple">🔒</div>
+                <div class="stat-content">
+                    <span class="stat-value" id="stat-ssl-count">{{ auths.values()|selectattr('ssl_enabled')|list|length }}</span>
+                    <span class="stat-label">HTTPS SSL 开启</span>
+                </div>
             </div>
-            <div class="card stat-card-abit">
-                <div class="val-sub" style="color: var(--warning);">🔄 反向代理运行</div>
-                <div class="val-big" id="stat-proxy-count" style="color: var(--warning);">{{ auths.values()|selectattr('proxy_enabled')|list|length }}</div>
-                <div class="val-hint">正常接收并转发流量</div>
+            <div class="stat-card">
+                <div class="stat-icon orange">🔄</div>
+                <div class="stat-content">
+                    <span class="stat-value" id="stat-proxy-count">{{ auths.values()|selectattr('proxy_enabled')|list|length }}</span>
+                    <span class="stat-label">反向代理启用</span>
+                </div>
             </div>
         </div>
 
