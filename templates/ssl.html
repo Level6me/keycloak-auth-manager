@@ -211,6 +211,75 @@ document.getElementById('auth_method').addEventListener('change', function(e) {
     }
 });
 
+function appendLogLine(text) {
+    const logs = document.getElementById('logs');
+    const line = document.createElement('div');
+    line.textContent = text;
+    if (text.includes('失败') || text.includes('error') || text.includes('Error') || text.includes('异常') || text.includes('Failed')) {
+        line.className = 'error';
+    } else if (text.includes('成功') || text.includes('完成') || text.includes('绑定成功') || text.includes('证书签发成功') || text.includes('🎉')) {
+        line.className = 'success';
+    } else if (text.startsWith('[系统]')) {
+        line.className = 'system';
+    } else {
+        line.className = 'info';
+    }
+    logs.appendChild(line);
+    logs.scrollTop = logs.scrollHeight;
+}
+
+let pollTimer = null;
+let lastLogId = 0;
+
+function startLogStream() {
+    lastLogId = 0;
+    if (eventSource) {
+        eventSource.close();
+    }
+    if (pollTimer) {
+        clearInterval(pollTimer);
+    }
+
+    try {
+        eventSource = new EventSource('/api/logs?last_id=0');
+        eventSource.onmessage = function(event) {
+            if (event.data && event.data !== 'heartbeat') {
+                appendLogLine(event.data);
+            }
+            if (event.lastEventId) {
+                lastLogId = parseInt(event.lastEventId) || lastLogId;
+            }
+        };
+    } catch (err) {
+        console.warn("EventSource 启动异常:", err);
+    }
+
+    // 保底轮询机制：解决域名反代下 SSE 缓冲阻塞导致无法实时输出的问题
+    pollTimer = setInterval(async () => {
+        try {
+            const res = await fetch(`/api/logs/poll?last_id=${lastLogId}`);
+            if (res.ok) {
+                const data = await res.json();
+                if (data.logs && data.logs.length > 0) {
+                    data.logs.forEach(entry => {
+                        appendLogLine(entry.text);
+                    });
+                    lastLogId = data.last_id;
+                }
+            }
+        } catch (e) {}
+    }, 800);
+}
+
+function stopLogStream() {
+    if (eventSource) {
+        setTimeout(() => eventSource.close(), 3000);
+    }
+    if (pollTimer) {
+        setTimeout(() => clearInterval(pollTimer), 3500);
+    }
+}
+
 // 提交表单
 document.getElementById('sslForm').addEventListener('submit', async function(e) {
     e.preventDefault();
@@ -243,27 +312,7 @@ document.getElementById('sslForm').addEventListener('submit', async function(e) 
     status.textContent = '申请中';
     logs.innerHTML = '<div class="system">[系统] 正在初始化 SSL 申请流程，连接实时日志流...</div>';
     
-    // 连接 EventSource 实时日志
-    if (eventSource) {
-        eventSource.close();
-    }
-    
-    eventSource = new EventSource('/api/logs');
-    eventSource.onmessage = function(event) {
-        if (event.data !== 'heartbeat') {
-            const line = document.createElement('div');
-            line.textContent = event.data;
-            if (event.data.includes('失败') || event.data.includes('error') || event.data.includes('Error') || event.data.includes('Failed')) {
-                line.className = 'error';
-            } else if (event.data.includes('成功') || event.data.includes('完成') || event.data.includes('绑定成功') || event.data.includes('证书签发成功')) {
-                line.className = 'success';
-            } else {
-                line.className = 'info';
-            }
-            logs.appendChild(line);
-            logs.scrollTop = logs.scrollHeight;
-        }
-    };
+    startLogStream();
 
     try {
         const formData = new FormData();
@@ -284,11 +333,7 @@ document.getElementById('sslForm').addEventListener('submit', async function(e) 
             status.className = 'badge bg-success';
             status.textContent = '签发成功';
             btn.innerHTML = '✅ 申请成功！';
-            const doneLine = document.createElement('div');
-            doneLine.className = 'success';
-            doneLine.textContent = '[系统] 证书已成功签发，并已在 1Panel 中启用 HTTPS 绑定重载。';
-            logs.appendChild(doneLine);
-            logs.scrollTop = logs.scrollHeight;
+            appendLogLine('[系统] 证书已成功签发，并已在 1Panel 中启用 HTTPS 绑定重载。');
             
             setTimeout(() => {
                 window.location.href = `/detail/${domain}`;
@@ -298,31 +343,16 @@ document.getElementById('sslForm').addEventListener('submit', async function(e) 
             status.textContent = '失败';
             btn.innerHTML = '🚀 重新申请';
             btn.disabled = false;
-            const errLine = document.createElement('div');
-            errLine.className = 'error';
-            errLine.textContent = '[系统] 错误提示: ' + (result.error || '未知错误');
-            logs.appendChild(errLine);
-            logs.scrollTop = logs.scrollHeight;
+            appendLogLine('[系统] 错误提示: ' + (result.error || '未知错误'));
         }
     } catch (err) {
         status.className = 'badge bg-danger';
         status.textContent = '网络错误';
         btn.innerHTML = '🚀 重新申请';
         btn.disabled = false;
-        const errLine = document.createElement('div');
-        errLine.className = 'error';
-        errLine.textContent = '[系统] 网络请求失败: ' + err;
-        logs.appendChild(errLine);
-        logs.scrollTop = logs.scrollHeight;
+        appendLogLine('[系统] 网络请求失败: ' + err);
     } finally {
-        if (eventSource) {
-            setTimeout(() => {
-                if (eventSource) {
-                    eventSource.close();
-                    eventSource = null;
-                }
-            }, 5000);
-        }
+        stopLogStream();
     }
 });
 </script>

@@ -61,6 +61,7 @@
         <div class="card-body p-0">
             <table class="table table-striped mb-0" style="font-size: 14px;">
                 <tr><th class="ps-3" style="width: 120px;">Client ID</th><td>{{ auth.client_id }}</td></tr>
+                <tr><th class="ps-3">目标地址</th><td><code>{{ auth.get('target_host', '127.0.0.1') }}:{{ auth.target_port }}</code></td></tr>
                 <tr><th class="ps-3">Client Secret</th><td><code class="user-select-all">{{ auth.client_secret }}</code></td></tr>
                 <tr><th class="ps-3">Cookie Secret</th><td><code class="user-select-all">{{ auth.cookie_secret }}</code></td></tr>
                 <tr><th class="ps-3">OAuth 端口</th><td>{{ auth.oauth_port }}</td></tr>
