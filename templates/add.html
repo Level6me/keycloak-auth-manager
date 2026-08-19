@@ -3,7 +3,7 @@
 <head>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
-    <title>添加认证 - Keycloak 认证管理</title>
+    <title>添加认证 - Auth 认证管理</title>
     <link rel="icon" type="image/svg+xml" href="/static/favicon.svg">
     <link rel="alternate icon" href="/favicon.ico">
     <link rel="stylesheet" href="/static/css/abit.css">
@@ -30,11 +30,55 @@
         <form id="authForm">
             <!-- 1. 域名输入 -->
             <div class="form-group">
-                <label class="form-label">🌐 网站域名</label>
-                <input type="text" name="domain" id="domain" class="input-box" 
-                       placeholder="例如: app.example.com" required 
-                       autocomplete="off" autocorrect="off" autocapitalize="off">
-                <div class="form-hint">请填写已解析到本服务器的访问域名（无需包含 http:// 或 https://）</div>
+                <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 6px;">
+                    <label class="form-label" style="margin-bottom: 0;">🌐 网站访问域名</label>
+                    <span id="add_cf_badge" class="badge accent" style="font-size: 11px; display: none;">☁️ Cloudflare 联动已开启</span>
+                </div>
+
+                <!-- 1. 组合模式：前缀 + CF下拉 -->
+                <div id="add_domain_combo_wrap" style="display: flex; align-items: center; gap: 8px;">
+                    <div style="flex: 1; position: relative;">
+                        <input type="text" id="add_subdomain" class="input-box" placeholder="二级前缀 (如 app 或 @)" 
+                               autocomplete="off" autocorrect="off" autocapitalize="off" oninput="updateCombinedDomain()">
+                    </div>
+                    <span style="font-weight: 800; font-size: 18px; color: var(--text-sec); user-select: none;">.</span>
+                    <div style="flex: 1.4;">
+                        <select id="add_root_domain" class="select-custom" onchange="handleRootDomainChange(this.value)">
+                            <option value="">正在加载 Cloudflare 域名...</option>
+                            <option value="__custom__">✏️ 手动输入完整域名...</option>
+                        </select>
+                    </div>
+                </div>
+
+                <!-- 2. 手动输入完整域名模式 -->
+                <div id="add_domain_custom_wrap" style="display: none; margin-top: 6px;">
+                    <div style="display: flex; gap: 8px; align-items: center;">
+                        <input type="text" id="add_custom_domain" class="input-box" placeholder="例如: app.example.com" 
+                               autocomplete="off" autocorrect="off" autocapitalize="off" oninput="updateCombinedDomain()">
+                        <button type="button" class="btn secondary sm" onclick="backToComboDomain()" style="padding: 10px 14px; white-space: nowrap; font-size: 12px;">
+                            ↩️ 返回下拉选择
+                        </button>
+                    </div>
+                </div>
+
+                <!-- 隐藏表单字段 -->
+                <input type="hidden" name="domain" id="add_domain_hidden" required>
+                <input type="hidden" name="cf_add_dns" id="add_cf_dns_hidden" value="false">
+                <input type="hidden" name="cf_proxied" id="add_cf_proxied_hidden" value="false">
+                <input type="hidden" name="cf_server_ip" id="add_cf_server_ip_hidden" value="">
+
+                <!-- 域名实时预览与 Cloudflare 解析提示卡片 -->
+                <div id="add_domain_preview_tip" style="margin-top: 8px; font-size: 12px; color: var(--text-sec); display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 8px;">
+                    <div>
+                        <span>完整域名: </span>
+                        <code id="add_preview_domain_val" style="font-weight: 700; color: var(--accent); background: var(--card-sec); padding: 2px 6px; border-radius: 4px;">未填写</code>
+                    </div>
+                    <label id="add_cf_proxied_container" style="display: none; align-items: center; gap: 6px; cursor: pointer; font-size: 12px; color: var(--text);">
+                        <input type="checkbox" id="add_cf_proxied_checkbox" onchange="document.getElementById('add_cf_proxied_hidden').value = this.checked ? 'true' : 'false'">
+                        <span>☁️ 开启 CF 小黄云 CDN 代理</span>
+                    </label>
+                </div>
+                <div class="form-hint" id="add_domain_hint">请填写或选择域名。若选择 Cloudflare 域名，创建时将自动添加 DNS A 记录。</div>
             </div>
 
             <!-- 2. 反代目标服务配置 -->
@@ -154,6 +198,133 @@ let eventSource = null;
 let pollTimer = null;
 let lastLogId = 0;
 let acmeAccountsLoaded = false;
+let cfZonesData = null;
+
+async function loadCloudflareZones() {
+    const select = document.getElementById('add_root_domain');
+    const badge = document.getElementById('add_cf_badge');
+    const proxiedContainer = document.getElementById('add_cf_proxied_container');
+    const proxiedCheckbox = document.getElementById('add_cf_proxied_checkbox');
+    const serverIpHidden = document.getElementById('add_cf_server_ip_hidden');
+    const dnsHidden = document.getElementById('add_cf_dns_hidden');
+
+    try {
+        const res = await fetch('/api/cloudflare/zones');
+        const data = await res.json();
+        cfZonesData = data;
+
+        if (data.server_ip) {
+            serverIpHidden.value = data.server_ip;
+        }
+
+        select.innerHTML = '';
+
+        if (data.configured && data.zones && data.zones.length > 0) {
+            if (badge) badge.style.display = 'inline-flex';
+            if (proxiedContainer) proxiedContainer.style.display = 'inline-flex';
+            if (proxiedCheckbox) {
+                proxiedCheckbox.checked = !!data.default_proxied;
+                document.getElementById('add_cf_proxied_hidden').value = data.default_proxied ? 'true' : 'false';
+            }
+
+            data.zones.forEach((z, idx) => {
+                const opt = document.createElement('option');
+                opt.value = z.name;
+                opt.textContent = `☁️ ${z.name}`;
+                if (idx === 0) opt.selected = true;
+                select.appendChild(opt);
+            });
+
+            const customOpt = document.createElement('option');
+            customOpt.value = '__custom__';
+            customOpt.textContent = '✏️ 手动输入完整域名...';
+            select.appendChild(customOpt);
+
+            dnsHidden.value = 'true';
+        } else {
+            if (badge) badge.style.display = 'none';
+            if (proxiedContainer) proxiedContainer.style.display = 'none';
+            dnsHidden.value = 'false';
+
+            const noCfOpt = document.createElement('option');
+            noCfOpt.value = '__custom__';
+            noCfOpt.textContent = data.configured ? '未找到托管域名 (点此手动输入)' : '未配置 Cloudflare (点此手动输入)';
+            select.appendChild(noCfOpt);
+
+            handleRootDomainChange('__custom__');
+        }
+        updateCombinedDomain();
+    } catch (e) {
+        console.error('加载 Cloudflare 域名失败:', e);
+        handleRootDomainChange('__custom__');
+    }
+}
+
+function handleRootDomainChange(val) {
+    const comboWrap = document.getElementById('add_domain_combo_wrap');
+    const customWrap = document.getElementById('add_domain_custom_wrap');
+    const proxiedContainer = document.getElementById('add_cf_proxied_container');
+    const dnsHidden = document.getElementById('add_cf_dns_hidden');
+    const hint = document.getElementById('add_domain_hint');
+
+    if (val === '__custom__') {
+        if (comboWrap) comboWrap.style.display = 'none';
+        if (customWrap) customWrap.style.display = 'block';
+        if (proxiedContainer) proxiedContainer.style.display = 'none';
+        dnsHidden.value = 'false';
+        if (hint) hint.textContent = '请填写已解析到本服务器的完整域名（如无需自动通过 Cloudflare 解析）。';
+        const customInput = document.getElementById('add_custom_domain');
+        if (customInput) customInput.focus();
+    } else {
+        if (comboWrap) comboWrap.style.display = 'flex';
+        if (customWrap) customWrap.style.display = 'none';
+        if (proxiedContainer && cfZonesData && cfZonesData.configured) proxiedContainer.style.display = 'inline-flex';
+        dnsHidden.value = 'true';
+        if (hint) hint.textContent = '已选择 Cloudflare 域名，创建服务时将自动添加 DNS A 记录并绑定到本机公网 IP。';
+    }
+    updateCombinedDomain();
+}
+
+function backToComboDomain() {
+    const select = document.getElementById('add_root_domain');
+    if (select && select.options.length > 0) {
+        select.selectedIndex = 0;
+        handleRootDomainChange(select.value);
+    }
+}
+
+function updateCombinedDomain() {
+    const customWrap = document.getElementById('add_domain_custom_wrap');
+    const isCustom = customWrap && customWrap.style.display !== 'none';
+    const hiddenDomain = document.getElementById('add_domain_hidden');
+    const previewVal = document.getElementById('add_preview_domain_val');
+
+    let fullDomain = '';
+    if (isCustom) {
+        fullDomain = (document.getElementById('add_custom_domain').value || '').trim().toLowerCase();
+    } else {
+        const sub = (document.getElementById('add_subdomain').value || '').trim().toLowerCase();
+        const root = (document.getElementById('add_root_domain').value || '').trim().toLowerCase();
+        if (root && root !== '__custom__') {
+            if (!sub || sub === '@') {
+                fullDomain = root;
+            } else {
+                fullDomain = `${sub}.${root}`;
+            }
+        }
+    }
+
+    fullDomain = fullDomain.replace(/^https?:\/\//, '').replace(/\/.*$/, '');
+    hiddenDomain.value = fullDomain;
+
+    if (previewVal) {
+        previewVal.textContent = fullDomain || '未填写完整';
+    }
+}
+
+document.addEventListener('DOMContentLoaded', () => {
+    loadCloudflareZones();
+});
 
 function selectTargetType(type) {
     document.getElementById('target_type').value = type;
@@ -282,6 +453,14 @@ function stopLogStream() {
 
 document.getElementById('authForm').addEventListener('submit', async function(e) {
     e.preventDefault();
+    updateCombinedDomain();
+
+    const domainVal = document.getElementById('add_domain_hidden').value.trim();
+    if (!domainVal) {
+        showToast('请先输入有效的域名！', 'warning');
+        return;
+    }
+
     const btn = document.getElementById('submitBtn');
     const logs = document.getElementById('logs');
     const status = document.getElementById('statusBadge');
@@ -308,7 +487,7 @@ document.getElementById('authForm').addEventListener('submit', async function(e)
             btn.innerHTML = '🎉 创建成功！';
             showToast('认证服务创建成功，正在跳转...', 'success');
             setTimeout(() => {
-                window.location.href = '/detail/' + document.getElementById('domain').value.trim();
+                window.location.href = '/detail/' + domainVal;
             }, 2500);
         } else {
             status.className = 'badge danger';

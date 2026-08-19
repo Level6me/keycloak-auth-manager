@@ -79,11 +79,11 @@
             </div>
         </div>
 
-        <!-- Switch 3: Keycloak 认证拦截 -->
+        <!-- Switch 3: Auth 认证拦截 -->
         <div class="setting-row">
             <div class="setting-info">
-                <span class="setting-label">🛡️ Keycloak Passkey 认证拦截</span>
-                <span class="setting-desc">开启时全站访问必须通过 Keycloak 登录认证；关闭则直通反代目标</span>
+                <span class="setting-label">🛡️ Auth Passkey 认证拦截</span>
+                <span class="setting-desc">开启时全站访问必须通过 Auth 登录认证；关闭则直通反代目标</span>
             </div>
             <div style="display: flex; align-items: center; gap: 8px;">
                 <span id="auth-status" class="badge {% if auth.auth_enabled %}accent{% else %}secondary{% endif %}">
@@ -115,7 +115,7 @@
         <div class="setting-row">
             <div class="setting-info">
                 <span class="setting-label">OAuth2 Client ID</span>
-                <span class="setting-desc">Keycloak 客户端标识</span>
+                <span class="setting-desc">Auth 客户端标识</span>
             </div>
             <div style="display: flex; align-items: center; gap: 6px;">
                 <code>{{ auth.client_id }}</code>
@@ -126,7 +126,7 @@
         <div class="setting-row">
             <div class="setting-info">
                 <span class="setting-label">Client Secret</span>
-                <span class="setting-desc">Keycloak 客户端通讯密钥</span>
+                <span class="setting-desc">Auth 客户端通讯密钥</span>
             </div>
             <div style="display: flex; align-items: center; gap: 6px;">
                 <code style="max-width: 180px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">{{ auth.client_secret }}</code>
@@ -197,7 +197,7 @@
             <span class="card-title" style="color: var(--danger);">⚠️ 危险操作区域</span>
         </div>
         <p style="font-size: 13px; color: var(--text-sec); margin-bottom: 14px;">
-            删除后将彻底移除该域名的 Keycloak Client、停止并销毁 OAuth2 Proxy 容器，并移除 Nginx 站点认证配置。
+            删除后将彻底移除该域名的 Auth Client、停止并销毁 OAuth2 Proxy 容器，并移除 Nginx 站点认证配置。
         </p>
         <form action="/delete/{{ domain }}" method="post" onsubmit="return confirm('确定要删除域名 {{ domain }} 的全部认证配置吗？\n此操作不可撤销！')">
             <button type="submit" class="btn danger w-full" style="padding: 10px;">
