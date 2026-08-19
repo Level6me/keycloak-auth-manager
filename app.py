@@ -962,6 +962,48 @@ def settings():
             pass
     return render_template('settings.html', config=cfg)
 
+@app.route('/api/settings', methods=['POST'])
+def api_settings():
+    try:
+        web_port = int(request.form.get('web_port', 8088))
+        keycloak_url = request.form.get('keycloak_url', '').strip()
+        if keycloak_url:
+            if not keycloak_url.startswith("http://") and not keycloak_url.startswith("https://"):
+                keycloak_url = "https://" + keycloak_url
+            keycloak_url = keycloak_url.rstrip("/")
+        keycloak_admin = request.form.get('keycloak_admin', '').strip()
+        keycloak_password = request.form.get('keycloak_password', '').strip()
+        keycloak_container = request.form.get('keycloak_container', '').strip()
+        onepanel_port = int(request.form.get('onepanel_port', 40455))
+        onepanel_api_key = request.form.get('onepanel_api_key', '').strip()
+        
+        cfg = {}
+        if os.path.exists(CONFIG_FILE):
+            try:
+                with open(CONFIG_FILE, "r") as f:
+                    cfg = json.load(f)
+            except Exception:
+                pass
+                
+        cfg['web_port'] = web_port
+        cfg['keycloak_url'] = keycloak_url
+        cfg['keycloak_admin'] = keycloak_admin
+        cfg['keycloak_container'] = keycloak_container
+        cfg['onepanel_port'] = onepanel_port
+        
+        if keycloak_password:
+            cfg['keycloak_password'] = encrypt_val(keycloak_password)
+        if onepanel_api_key:
+            cfg['onepanel_api_key'] = encrypt_val(onepanel_api_key)
+            
+        with open(CONFIG_FILE, "w") as f:
+            json.dump(cfg, f, indent=2)
+            
+        load_config()
+        return json.dumps({"success": True})
+    except Exception as e:
+        return json.dumps({"success": False, "error": str(e)})
+
 @app.route('/favicon.ico')
 @app.route('/favicon.svg')
 def favicon():
@@ -969,7 +1011,14 @@ def favicon():
 
 @app.route('/')
 def index():
-    return render_template('index.html', auths=load_data())
+    cfg = {}
+    if os.path.exists(CONFIG_FILE):
+        try:
+            with open(CONFIG_FILE, "r") as f:
+                cfg = json.load(f)
+        except Exception:
+            pass
+    return render_template('index.html', auths=load_data(), config=cfg)
 
 @app.route('/add')
 def add_page():
