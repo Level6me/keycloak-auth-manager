@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="zh-CN" data-theme="light">
+<html lang="zh-CN" data-theme="auto">
 <head>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
@@ -15,230 +15,535 @@
     <header class="header">
         <div class="header-left">
             <div class="header-title-group">
-                <span class="date-badge">PASSKEY AUTHENTICATION MANAGER</span>
-                <h1 class="title">Keycloak 认证管理</h1>
+                <span class="date-badge" id="header-badge">PASSKEY AUTHENTICATION MANAGER</span>
+                <h1 class="title" id="header-title">Keycloak 认证管理</h1>
             </div>
         </div>
         <div class="header-actions">
-            <button class="icon-btn" onclick="toggleTheme()" title="切换亮暗主题" style="width: 36px; height: 36px; font-size: 17px; background: var(--card); border: 1px solid var(--border); box-shadow: var(--shadow-sm);">
-                🌓
+            <!-- Abit Style Theme Cycle Button -->
+            <button class="icon-btn" id="btn-theme-toggle" onclick="cycleTheme()" title="切换明暗主题 (自动/浅色/深色)" style="width: 36px; height: 36px; font-size: 16px; background: var(--card); border: 1px solid var(--border); box-shadow: var(--shadow-sm); cursor: pointer;">
+                <span id="theme-icon">🌓</span>
             </button>
         </div>
     </header>
 
-    <!-- Flash Messages -->
-    {% with messages = get_flashed_messages(with_categories=true) %}
-        {% if messages %}
-            {% for category, message in messages %}
-                <div class="card" style="margin-bottom: 14px; padding: 12px 16px; border-left: 4px solid var(--{% if category == 'success' %}success{% else %}danger{% endif %});">
-                    <div style="font-size: 13px; font-weight: 600; color: var(--text);">
-                        {% if category == 'success' %}✅{% else %}⚠️{% endif %} {{ message }}
-                    </div>
+    <!-- ==================== PAGE 1: DOMAIN DASHBOARD ==================== -->
+    <div id="p-domains" class="page active">
+        <!-- Stat Grid -->
+        <div class="stat-grid">
+            <div class="stat-card">
+                <div class="stat-icon blue">🌐</div>
+                <div class="stat-content">
+                    <span class="stat-value" id="stat-total-domains">{{ auths|length }}</span>
+                    <span class="stat-label">已配置域名</span>
                 </div>
-            {% endfor %}
-        {% endif %}
-    {% endwith %}
-
-    <!-- Stat Grid -->
-    <div class="stat-grid">
-        <div class="stat-card">
-            <div class="stat-icon blue">🌐</div>
-            <div class="stat-content">
-                <span class="stat-value">{{ auths|length }}</span>
-                <span class="stat-label">已配置域名</span>
             </div>
-        </div>
-        <div class="stat-card">
-            <div class="stat-icon green">🛡️</div>
-            <div class="stat-content">
-                <span class="stat-value">{{ auths.values()|selectattr('auth_enabled')|list|length }}</span>
-                <span class="stat-label">认证拦截中</span>
-            </div>
-        </div>
-        <div class="stat-card">
-            <div class="stat-icon purple">🔒</div>
-            <div class="stat-content">
-                <span class="stat-value">{{ auths.values()|selectattr('ssl_enabled')|list|length }}</span>
-                <span class="stat-label">HTTPS SSL 开启</span>
-            </div>
-        </div>
-        <div class="stat-card">
-            <div class="stat-icon orange">🔄</div>
-            <div class="stat-content">
-                <span class="stat-value">{{ auths.values()|selectattr('proxy_enabled')|list|length }}</span>
-                <span class="stat-label">反向代理启用</span>
-            </div>
-        </div>
-    </div>
-
-    <!-- Toolbar: Search & View Mode Switch -->
-    <div style="display: flex; justify-content: space-between; align-items: center; gap: 10px; margin-bottom: 16px; flex-wrap: wrap;">
-        <div style="flex: 1; min-width: 220px; max-width: 420px; position: relative;">
-            <input type="text" id="domainSearch" class="input-box" placeholder="🔍 快速搜索域名或端口..." oninput="filterDomains(this.value)">
-        </div>
-        <div class="segmented-control" style="width: auto;">
-            <button class="segment-btn active" id="btnCardView" onclick="switchView('card')">📱 卡片流</button>
-            <button class="segment-btn" id="btnTableView" onclick="switchView('table')">📋 表格</button>
-        </div>
-    </div>
-
-    {% if auths %}
-    <!-- 1. Card Grid View -->
-    <div id="cardViewContainer" class="domain-grid">
-        {% for domain, auth in auths.items() %}
-        <div class="domain-card" data-domain="{{ domain }}" data-target="{{ auth.get('target_host', '127.0.0.1') }}:{{ auth.target_port }}" data-port="{{ auth.oauth_port }}">
-            <div>
-                <div class="domain-card-header">
-                    <div>
-                        <a href="/detail/{{ domain }}" class="domain-name" style="text-decoration: none;">
-                            <span class="status-dot {% if not auth.proxy_enabled %}offline{% endif %}"></span>
-                            {{ domain }}
-                        </a>
-                        <div class="domain-target">
-                            <span>🎯 目标:</span>
-                            <code style="background: var(--card-sec); padding: 2px 6px; border-radius: 6px; border: 1px solid var(--border-subtle);">{{ auth.get('target_host', '127.0.0.1') }}:{{ auth.target_port }}</code>
-                        </div>
-                    </div>
-                    <span class="badge secondary" style="font-family: monospace;">:{{ auth.oauth_port }}</span>
+            <div class="stat-card">
+                <div class="stat-icon green">🛡️</div>
+                <div class="stat-content">
+                    <span class="stat-value" id="stat-auth-count">{{ auths.values()|selectattr('auth_enabled')|list|length }}</span>
+                    <span class="stat-label">认证拦截中</span>
                 </div>
-
-                <div style="display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 8px; margin-top: 8px;">
-                    <div class="badges-wrap" style="margin: 0;">
-                        {% if auth.proxy_enabled %}
-                            <span class="badge success" title="反向代理已开启">🔄 反代已开</span>
-                        {% else %}
-                            <span class="badge secondary" title="反向代理已关闭">🔄 反代已关</span>
-                        {% endif %}
-
-                        {% if auth.ssl_enabled %}
-                            <span class="badge success" title="HTTPS SSL 证书已启用">🔒 SSL已开</span>
-                        {% else %}
-                            <span class="badge warning" title="未启用 SSL">⚠️ 无SSL</span>
-                        {% endif %}
-
-                        {% if auth.auth_enabled %}
-                            <span class="badge accent" title="Keycloak Passkey 认证拦截已开启">🛡️ 认证已开</span>
-                        {% else %}
-                            <span class="badge secondary" title="直通反代（未拦截认证）">🛡️ 认证已关</span>
-                        {% endif %}
-                    </div>
-
-                    <div style="display: inline-flex; align-items: center; gap: 6px; margin-left: auto;">
-                        <a href="/detail/{{ domain }}" class="btn secondary sm" style="padding: 4px 10px; font-size: 11px;">详情</a>
-                        <form action="/delete/{{ domain }}" method="post" onsubmit="return confirm('确定要删除域名 {{ domain }} 的认证配置吗？此操作不可撤销！')" style="margin: 0;">
-                            <button type="submit" class="btn danger sm" style="padding: 4px 8px; font-size: 11px;">🗑️</button>
-                        </form>
-                    </div>
+            </div>
+            <div class="stat-card">
+                <div class="stat-icon purple">🔒</div>
+                <div class="stat-content">
+                    <span class="stat-value" id="stat-ssl-count">{{ auths.values()|selectattr('ssl_enabled')|list|length }}</span>
+                    <span class="stat-label">HTTPS SSL 开启</span>
+                </div>
+            </div>
+            <div class="stat-card">
+                <div class="stat-icon orange">🔄</div>
+                <div class="stat-content">
+                    <span class="stat-value" id="stat-proxy-count">{{ auths.values()|selectattr('proxy_enabled')|list|length }}</span>
+                    <span class="stat-label">反向代理启用</span>
                 </div>
             </div>
         </div>
-        {% endfor %}
-    </div>
 
-    <!-- 2. Table View (Hidden by default or toggled) -->
-    <div id="tableViewContainer" class="table-container" style="display: none;">
-        <table class="table-modern">
-            <thead>
-                <tr>
-                    <th>域名</th>
-                    <th>功能状态</th>
-                    <th>目标服务</th>
-                    <th>OAuth 端口</th>
-                    <th style="text-align: right;">操作</th>
-                </tr>
-            </thead>
-            <tbody>
+        <div id="mainListContent" {% if not auths %}style="display:none;"{% endif %}>
+            <!-- Toolbar: Search & View Mode Switch -->
+            <div style="display: flex; justify-content: space-between; align-items: center; gap: 10px; margin-bottom: 16px; flex-wrap: wrap;">
+                <div style="flex: 1; min-width: 220px; max-width: 420px; position: relative;">
+                    <input type="text" id="domainSearch" class="input-box" placeholder="🔍 快速搜索域名或端口..." oninput="filterDomains(this.value)">
+                </div>
+                <div class="segmented-control" style="width: auto;">
+                    <button class="segment-btn active" id="btnCardView" onclick="switchView('card')">📱 卡片流</button>
+                    <button class="segment-btn" id="btnTableView" onclick="switchView('table')">📋 表格</button>
+                </div>
+            </div>
+
+            <!-- Card Grid View -->
+            <div id="cardViewContainer" class="domain-grid">
                 {% for domain, auth in auths.items() %}
-                <tr data-domain="{{ domain }}" data-target="{{ auth.get('target_host', '127.0.0.1') }}:{{ auth.target_port }}" data-port="{{ auth.oauth_port }}">
-                    <td>
-                        <a href="/detail/{{ domain }}" style="font-weight: 700; color: var(--text); text-decoration: none; display: flex; align-items: center; gap: 6px;">
-                            <span class="status-dot {% if not auth.proxy_enabled %}offline{% endif %}"></span>
-                            {{ domain }}
-                        </a>
-                    </td>
-                    <td>
-                        <div class="badges-wrap">
-                            {% if auth.proxy_enabled %}
-                                <span class="badge success">🔄 反代</span>
-                            {% else %}
-                                <span class="badge secondary">🔄 反代关</span>
-                            {% endif %}
-
-                            {% if auth.ssl_enabled %}
-                                <span class="badge success">🔒 SSL</span>
-                            {% else %}
-                                <span class="badge warning">⚠️ 无SSL</span>
-                            {% endif %}
-
-                            {% if auth.auth_enabled %}
-                                <span class="badge accent">🛡️ 认证</span>
-                            {% else %}
-                                <span class="badge secondary">🛡️ 认证关</span>
-                            {% endif %}
+                <div class="domain-card" data-domain="{{ domain }}" data-target="{{ auth.get('target_host', '127.0.0.1') }}:{{ auth.target_port }}" data-port="{{ auth.oauth_port }}">
+                    <div>
+                        <div class="domain-card-header">
+                            <div>
+                                <span class="domain-name" onclick="openDomainDetail('{{ domain }}')" style="cursor: pointer;">
+                                    <span class="status-dot {% if not auth.proxy_enabled %}offline{% endif %}"></span>
+                                    {{ domain }}
+                                </span>
+                                <div class="domain-target">
+                                    <span>🎯 目标:</span>
+                                    <code style="background: var(--card-sec); padding: 2px 6px; border-radius: 6px; border: 1px solid var(--border-subtle);">{{ auth.get('target_host', '127.0.0.1') }}:{{ auth.target_port }}</code>
+                                </div>
+                            </div>
+                            <span class="badge secondary" style="font-family: monospace;">:{{ auth.oauth_port }}</span>
                         </div>
-                    </td>
-                    <td>
-                        <code>{{ auth.get('target_host', '127.0.0.1') }}:{{ auth.target_port }}</code>
-                    </td>
-                    <td>
-                        <span class="badge secondary">{{ auth.oauth_port }}</span>
-                    </td>
-                    <td style="text-align: right;">
-                        <div style="display: inline-flex; gap: 6px;">
-                            <a href="/detail/{{ domain }}" class="btn secondary sm">详情</a>
-                            <form action="/delete/{{ domain }}" method="post" onsubmit="return confirm('确定要删除域名 {{ domain }} 吗？')">
-                                <button type="submit" class="btn danger sm">删除</button>
-                            </form>
+
+                        <div style="display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 8px; margin-top: 8px;">
+                            <div class="badges-wrap" style="margin: 0;">
+                                {% if auth.proxy_enabled %}
+                                    <span class="badge success">🔄 反代已开</span>
+                                {% else %}
+                                    <span class="badge secondary">🔄 反代已关</span>
+                                {% endif %}
+
+                                {% if auth.ssl_enabled %}
+                                    <span class="badge success">🔒 SSL已开</span>
+                                {% else %}
+                                    <span class="badge warning">⚠️ 无SSL</span>
+                                {% endif %}
+
+                                {% if auth.auth_enabled %}
+                                    <span class="badge accent">🛡️ 认证已开</span>
+                                {% else %}
+                                    <span class="badge secondary">🛡️ 认证已关</span>
+                                {% endif %}
+                            </div>
+
+                            <div style="display: inline-flex; align-items: center; gap: 6px; margin-left: auto;">
+                                <button class="btn secondary sm" onclick="openDomainDetail('{{ domain }}')" style="padding: 4px 10px; font-size: 11px;">详情</button>
+                                <button class="btn danger sm" onclick="deleteDomainAjax('{{ domain }}')" style="padding: 4px 8px; font-size: 11px;">🗑️</button>
+                            </div>
                         </div>
-                    </td>
-                </tr>
+                    </div>
+                </div>
                 {% endfor %}
-            </tbody>
-        </table>
+            </div>
+
+            <!-- Table View -->
+            <div id="tableViewContainer" class="table-container" style="display: none;">
+                <table class="table-modern">
+                    <thead>
+                        <tr>
+                            <th>域名</th>
+                            <th>功能状态</th>
+                            <th>目标服务</th>
+                            <th>OAuth 端口</th>
+                            <th style="text-align: right;">操作</th>
+                        </tr>
+                    </thead>
+                    <tbody id="tableBodyContainer">
+                        {% for domain, auth in auths.items() %}
+                        <tr data-domain="{{ domain }}" data-target="{{ auth.get('target_host', '127.0.0.1') }}:{{ auth.target_port }}" data-port="{{ auth.oauth_port }}">
+                            <td>
+                                <span onclick="openDomainDetail('{{ domain }}')" style="font-weight: 700; color: var(--text); cursor: pointer; display: flex; align-items: center; gap: 6px;">
+                                    <span class="status-dot {% if not auth.proxy_enabled %}offline{% endif %}"></span>
+                                    {{ domain }}
+                                </span>
+                            </td>
+                            <td>
+                                <div class="badges-wrap">
+                                    <span class="badge {% if auth.proxy_enabled %}success{% else %}secondary{% endif %}">🔄 反代{% if not auth.proxy_enabled %}关{% endif %}</span>
+                                    <span class="badge {% if auth.ssl_enabled %}success{% else %}warning{% endif %}">{% if auth.ssl_enabled %}🔒 SSL{% else %}⚠️ 无SSL{% endif %}</span>
+                                    <span class="badge {% if auth.auth_enabled %}accent{% else %}secondary{% endif %}">🛡️ 认证{% if not auth.auth_enabled %}关{% endif %}</span>
+                                </div>
+                            </td>
+                            <td><code>{{ auth.get('target_host', '127.0.0.1') }}:{{ auth.target_port }}</code></td>
+                            <td><span class="badge secondary">{{ auth.oauth_port }}</span></td>
+                            <td style="text-align: right;">
+                                <div style="display: inline-flex; gap: 6px;">
+                                    <button class="btn secondary sm" onclick="openDomainDetail('{{ domain }}')">详情</button>
+                                    <button class="btn danger sm" onclick="deleteDomainAjax('{{ domain }}')">删除</button>
+                                </div>
+                            </td>
+                        </tr>
+                        {% endfor %}
+                    </tbody>
+                </table>
+            </div>
+
+            <div id="emptySearchTip" class="card" style="display: none; text-align: center; padding: 30px; margin-top: 14px;">
+                <div style="font-size: 28px; margin-bottom: 8px;">🔍</div>
+                <div style="font-size: 14px; font-weight: 700; color: var(--text);">没有找到匹配的域名</div>
+                <div style="font-size: 12px; color: var(--text-sec); margin-top: 4px;">请尝试其他搜索词</div>
+            </div>
+        </div>
+
+        <!-- Empty State -->
+        <div id="emptyDomainView" class="card" style="text-align: center; padding: 48px 20px; {% if auths %}display: none;{% endif %}">
+            <div style="font-size: 40px; margin-bottom: 12px;">🛡️</div>
+            <h3 style="font-size: 18px; font-weight: 800; color: var(--text); margin-bottom: 6px;">暂无域名认证配置</h3>
+            <p style="font-size: 13px; color: var(--text-sec); max-width: 360px; margin: 0 auto 20px auto;">
+                点击下方按钮添加您的第一个域名反代并启用 Keycloak Passkey 身份验证保护。
+            </p>
+            <button class="btn" onclick="switchTab('p-add', '添加认证', document.getElementById('dock-btn-add'))" style="padding: 11px 24px;">➕ 立即添加域名认证</button>
+        </div>
     </div>
 
-    <div id="emptySearchTip" class="card" style="display: none; text-align: center; padding: 30px;">
-        <div style="font-size: 28px; margin-bottom: 8px;">🔍</div>
-        <div style="font-size: 14px; font-weight: 700; color: var(--text);">没有找到匹配的域名</div>
-        <div style="font-size: 12px; color: var(--text-sec); margin-top: 4px;">请尝试其他搜索词</div>
+    <!-- ==================== PAGE 2: ADD AUTHENTICATION ==================== -->
+    <div id="p-add" class="page">
+        <div class="card" style="max-width: 760px; margin: 0 auto;">
+            <form id="authAddForm">
+                <div class="form-group">
+                    <label class="form-label">🌐 网站域名</label>
+                    <input type="text" name="domain" id="add_domain" class="input-box" 
+                           placeholder="例如: app.example.com" required 
+                           autocomplete="off" autocorrect="off" autocapitalize="off">
+                    <div class="form-hint">请填写已解析到本服务器的访问域名（无需填写 http:// 或 https://）</div>
+                </div>
+
+                <div class="form-group">
+                    <label class="form-label">🎯 反代目标服务地址</label>
+                    <div class="segmented-control" style="margin-bottom: 10px;">
+                        <button type="button" class="segment-btn active" id="add_type_local_btn" onclick="selectAddTargetType('local')">
+                            🖥️ 本地服务 (127.0.0.1)
+                        </button>
+                        <button type="button" class="segment-btn" id="add_type_custom_btn" onclick="selectAddTargetType('custom')">
+                            🌍 自定义 IP / 域名
+                        </button>
+                    </div>
+                    <input type="hidden" name="target_type" id="add_target_type" value="local">
+
+                    <div id="add_custom_host_container" style="display: none; margin-bottom: 10px;">
+                        <input type="text" name="target_host" id="add_target_host" class="input-box" 
+                               placeholder="例如: 192.168.1.100 或 internal-service.lan">
+                        <div class="form-hint">反代目标服务器的主机名或 IP 地址</div>
+                    </div>
+
+                    <div>
+                        <input type="number" name="port" id="add_port" class="input-box" 
+                               placeholder="例如: 8080 或 3000" required min="1" max="65535">
+                        <div class="form-hint">目标后端服务监听的端口号</div>
+                    </div>
+                </div>
+
+                <div class="card" style="background: var(--card-sec); border-color: var(--border-subtle); padding: 16px; margin: 20px 0;">
+                    <div style="display: flex; justify-content: space-between; align-items: center;">
+                        <div style="display: flex; flex-direction: column;">
+                            <span style="font-size: 14px; font-weight: 700; color: var(--text);">🔒 联动申请 SSL 证书 (HTTPS)</span>
+                            <span style="font-size: 12px; color: var(--text-sec); margin-top: 2px;">添加完成后自动调用 1Panel ACME 签发免费证书并强制启用 HTTPS</span>
+                        </div>
+                        <label class="switch">
+                            <input type="checkbox" id="add_apply_ssl" name="apply_ssl" onchange="toggleAddSSLSection(this.checked)">
+                            <span class="slider"></span>
+                        </label>
+                    </div>
+
+                    <div id="add_ssl_config_container" style="display: none; margin-top: 14px; padding-top: 14px; border-top: 1px solid var(--border-subtle);">
+                        <div class="form-group">
+                            <label class="form-label" style="font-size: 12px;">ACME 账户</label>
+                            <select class="select-custom" id="add_acme_account" name="acme_id">
+                                <option value="">正在加载 1Panel ACME 账户...</option>
+                            </select>
+                        </div>
+
+                        <div class="form-group">
+                            <label class="form-label" style="font-size: 12px;">验证方式</label>
+                            <select class="select-custom" id="add_auth_method" onchange="toggleAddDNSSection(this.value)">
+                                <option value="http">HTTP 验证（默认，需域名 80 端口可公开访问）</option>
+                                <option value="dns">DNS 验证（需在 1Panel 提前配置 DNS 凭据，支持内网）</option>
+                            </select>
+                        </div>
+
+                        <div class="form-group" id="add_dns_container" style="display: none;">
+                            <label class="form-label" style="font-size: 12px;">DNS 账户</label>
+                            <select class="select-custom" id="add_dns_account" name="dns_id">
+                                <option value="">请选择 DNS 账户...</option>
+                            </select>
+                        </div>
+                    </div>
+                </div>
+
+                <button type="submit" id="addSubmitBtn" class="btn w-full" style="padding: 12px; font-size: 14px;">
+                    🚀 创建认证服务
+                </button>
+            </form>
+        </div>
+
+        <div class="terminal-card" style="max-width: 760px; margin: 20px auto 0 auto;">
+            <div class="terminal-header">
+                <div class="terminal-dots">
+                    <div class="terminal-dot red"></div>
+                    <div class="terminal-dot yellow"></div>
+                    <div class="terminal-dot green"></div>
+                </div>
+                <div class="terminal-title">DEPLOYMENT CONSOLE</div>
+                <div id="addStatusBadge" class="badge secondary" style="font-size: 10px;">IDLE</div>
+            </div>
+            <div id="addLogs" class="terminal-body">
+                <div class="system">[系统] 等待提交创建任务，实时安装日志将在此输出...</div>
+            </div>
+        </div>
     </div>
 
-    {% else %}
-    <!-- Empty State -->
-    <div class="card" style="text-align: center; padding: 48px 20px;">
-        <div style="font-size: 40px; margin-bottom: 12px;">🛡️</div>
-        <h3 style="font-size: 18px; font-weight: 800; color: var(--text); margin-bottom: 6px;">暂无域名认证配置</h3>
-        <p style="font-size: 13px; color: var(--text-sec); max-width: 360px; margin: 0 auto 20px auto;">
-            点击下方按钮添加您的第一个域名反代并启用 Keycloak Passkey 身份验证保护。
-        </p>
-        <a href="/add" class="btn" style="padding: 11px 24px;">➕ 立即添加域名认证</a>
+    <!-- ==================== PAGE 3: SSL CERTIFICATE ==================== -->
+    <div id="p-ssl" class="page">
+        <div class="card" style="max-width: 760px; margin: 0 auto;">
+            <form id="sslApplyForm">
+                <div class="form-group">
+                    <label class="form-label">🌐 申请域名</label>
+                    <input type="text" name="domain" id="ssl_domain" class="input-box" 
+                           placeholder="例如: app.example.com" required 
+                           autocomplete="off" autocorrect="off" autocapitalize="off">
+                    <div class="form-hint">请确保域名已完成 DNS 解析并指向本服务器</div>
+                </div>
+
+                <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 12px; margin-bottom: 16px;">
+                    <div>
+                        <label class="form-label">📧 ACME 账户</label>
+                        <select id="ssl_acme_account" class="select-custom" required>
+                            <option value="">正在加载 1Panel 账户...</option>
+                        </select>
+                        <div class="form-hint">Let's Encrypt / ZeroSSL 账户</div>
+                    </div>
+                    <div>
+                        <label class="form-label">🔑 验证方式</label>
+                        <select id="ssl_auth_method" class="select-custom" onchange="toggleSSLDNSSection(this.value)">
+                            <option value="http">HTTP 验证（默认）</option>
+                            <option value="dns">DNS 验证（需 DNS 账户）</option>
+                        </select>
+                        <div class="form-hint">HTTP 需放行 80 端口，DNS 支持泛域名</div>
+                    </div>
+                </div>
+
+                <div class="form-group" id="ssl_dns_container" style="display: none;">
+                    <label class="form-label">🌐 DNS 账户</label>
+                    <select id="ssl_dns_account" class="select-custom">
+                        <option value="">请选择 DNS 账户...</option>
+                    </select>
+                    <div class="form-hint">在 1Panel 中预先配置的 DNS 提供商 API 凭据</div>
+                </div>
+
+                <button type="submit" id="sslSubmitBtn" class="btn w-full" style="padding: 12px; font-size: 14px;">
+                    🚀 开始申请并自动绑定 HTTPS
+                </button>
+            </form>
+        </div>
+
+        <div class="terminal-card" style="max-width: 760px; margin: 20px auto 0 auto;">
+            <div class="terminal-header">
+                <div class="terminal-dots">
+                    <div class="terminal-dot red"></div>
+                    <div class="terminal-dot yellow"></div>
+                    <div class="terminal-dot green"></div>
+                </div>
+                <div class="terminal-title">ACME ISSUING CONSOLE</div>
+                <div id="sslStatusBadge" class="badge secondary" style="font-size: 10px;">IDLE</div>
+            </div>
+            <div id="sslLogs" class="terminal-body">
+                <div class="system">[系统] 准备就绪，提交表单后此处将实时显示 1Panel ACME 签发流水日志...</div>
+            </div>
+        </div>
     </div>
-    {% endif %}
+
+    <!-- ==================== PAGE 4: SYSTEM SETTINGS ==================== -->
+    <div id="p-settings" class="page">
+        <div class="card" style="max-width: 760px; margin: 0 auto 20px auto;">
+            <div class="card-header">
+                <span class="card-title">🖥️ Web 控制台配置</span>
+            </div>
+            <div class="form-group">
+                <label class="form-label">面板监听端口 (web_port)</label>
+                <input type="number" class="input-box" id="set_web_port" value="{{ config.get('web_port', 8088) }}" required>
+                <div class="form-hint" style="color: var(--warning);">⚠️ 修改面板监听端口后，需在服务器终端手动重启 keycloak-auth 服务</div>
+            </div>
+        </div>
+
+        <div class="card" style="max-width: 760px; margin: 0 auto 20px auto;">
+            <div class="card-header">
+                <span class="card-title">🔐 Keycloak 认证服务配置</span>
+            </div>
+            <div class="form-group">
+                <label class="form-label">Keycloak URL / 服务地址</label>
+                <input type="text" class="input-box" id="set_keycloak_url" value="{{ config.get('keycloak_url', '') }}" placeholder="例如: https://auth.example.com" required>
+                <div class="form-hint">支持输入完整 URL 或主机域名</div>
+            </div>
+            
+            <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 12px; margin-bottom: 16px;">
+                <div>
+                    <label class="form-label">超级管理员账号</label>
+                    <input type="text" class="input-box" id="set_keycloak_admin" value="{{ config.get('keycloak_admin', '') }}" required>
+                </div>
+                <div>
+                    <label class="form-label">超级管理员密码</label>
+                    <input type="password" class="input-box" id="set_keycloak_password" placeholder="若不修改请留空">
+                    <div class="form-hint">密码将在本地使用密钥高强度加密存储</div>
+                </div>
+            </div>
+
+            <div class="form-group">
+                <label class="form-label">Docker 容器名称 (keycloak_container)</label>
+                <input type="text" class="input-box" id="set_keycloak_container" value="{{ config.get('keycloak_container', 'keycloak') }}" required>
+                <div class="form-hint">服务器上运行 Keycloak 的 Docker 容器名</div>
+            </div>
+        </div>
+
+        <div class="card" style="max-width: 760px; margin: 0 auto 20px auto;">
+            <div class="card-header">
+                <span class="card-title">🌐 1Panel 面板联动配置</span>
+            </div>
+            <div class="form-group">
+                <label class="form-label">1Panel 端口 (onepanel_port)</label>
+                <input type="number" class="input-box" id="set_onepanel_port" value="{{ config.get('onepanel_port', 10427) }}" required>
+                <div class="form-hint">1Panel 运维面板的通信端口</div>
+            </div>
+            <div class="form-group">
+                <label class="form-label">1Panel API 密钥 (API Key)</label>
+                <input type="password" class="input-box" id="set_onepanel_api_key" placeholder="若不修改请留空">
+                <div class="form-hint">在 1Panel 面板设置中生成的 API Key</div>
+            </div>
+        </div>
+
+        <div style="max-width: 760px; margin: 0 auto 30px auto;">
+            <button type="button" onclick="saveSettingsAjax()" class="btn w-full" style="padding: 12px; font-size: 14px;">
+                💾 异步保存全局配置
+            </button>
+        </div>
+    </div>
 
 </div>
 
-<!-- Floating Glass Dock -->
-<nav class="dock">
-    <a href="/" class="dock-btn active">
+<!-- ==================== MODAL: DOMAIN DETAIL PANEL ==================== -->
+<div id="domainDetailModal" class="modal-overlay">
+    <div class="modal-dialog">
+        <div class="modal-header">
+            <div style="display: flex; align-items: center; gap: 8px;">
+                <span style="font-size: 20px;">🌐</span>
+                <span class="modal-title" id="modalDomainTitle">example.com</span>
+            </div>
+            <button class="icon-btn" onclick="closeDetailModal()" style="width: 32px; height: 32px; font-size: 14px; cursor: pointer;">✕</button>
+        </div>
+
+        <!-- 3 Switches -->
+        <div class="card" style="padding: 12px 16px; margin-bottom: 16px; background: var(--card-sec);">
+            <div class="setting-row" style="padding: 8px 0;">
+                <div class="setting-info">
+                    <span class="setting-label">🔄 反向代理转发</span>
+                    <span class="setting-desc">控制网站流量是否对外转发</span>
+                </div>
+                <div style="display: flex; align-items: center; gap: 8px;">
+                    <span id="modalBadgeProxy" class="badge secondary">已关闭</span>
+                    <label class="switch">
+                        <input type="checkbox" id="modalToggleProxy" onchange="handleModalToggle('proxy', this.checked, this)">
+                        <span class="slider"></span>
+                    </label>
+                </div>
+            </div>
+
+            <div class="setting-row" style="padding: 8px 0;">
+                <div class="setting-info">
+                    <span class="setting-label">🔒 HTTPS SSL 证书</span>
+                    <span class="setting-desc">控制 443 端口与 HTTPS 强制跳转</span>
+                </div>
+                <div style="display: flex; align-items: center; gap: 8px;">
+                    <span id="modalBadgeSsl" class="badge warning">未开启</span>
+                    <label class="switch">
+                        <input type="checkbox" id="modalToggleSsl" onchange="handleModalToggle('ssl', this.checked, this)">
+                        <span class="slider"></span>
+                    </label>
+                </div>
+            </div>
+
+            <div class="setting-row" style="padding: 8px 0;">
+                <div class="setting-info">
+                    <span class="setting-label">🛡️ Keycloak 认证拦截</span>
+                    <span class="setting-desc">控制是否强制 Passkey 身份认证</span>
+                </div>
+                <div style="display: flex; align-items: center; gap: 8px;">
+                    <span id="modalBadgeAuth" class="badge secondary">已关闭</span>
+                    <label class="switch">
+                        <input type="checkbox" id="modalToggleAuth" onchange="handleModalToggle('auth', this.checked, this)">
+                        <span class="slider"></span>
+                    </label>
+                </div>
+            </div>
+        </div>
+
+        <!-- Details Info -->
+        <div class="card" style="padding: 12px 16px; margin-bottom: 16px;">
+            <div class="setting-row" style="padding: 6px 0;">
+                <span class="setting-label" style="font-size: 13px;">🎯 目标服务</span>
+                <code id="modalTargetHost" style="background: var(--card-sec); padding: 2px 6px; border-radius: 6px;">127.0.0.1:8080</code>
+            </div>
+            <div class="setting-row" style="padding: 6px 0;">
+                <span class="setting-label" style="font-size: 13px;">OAuth 端口</span>
+                <span id="modalOauthPort" class="badge secondary">:4180</span>
+            </div>
+            <div class="setting-row" style="padding: 6px 0;">
+                <span class="setting-label" style="font-size: 13px;">Client ID</span>
+                <div style="display: flex; align-items: center; gap: 6px;">
+                    <code id="modalClientId" style="max-width: 160px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;"></code>
+                    <button class="pill-btn" onclick="copyToClipboard(document.getElementById('modalClientId').textContent, 'Client ID')" style="padding: 2px 8px; font-size: 11px;">📋</button>
+                </div>
+            </div>
+            <div class="setting-row" style="padding: 6px 0;">
+                <span class="setting-label" style="font-size: 13px;">Client Secret</span>
+                <div style="display: flex; align-items: center; gap: 6px;">
+                    <code id="modalClientSecret" style="max-width: 160px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;"></code>
+                    <button class="pill-btn" onclick="copyToClipboard(document.getElementById('modalClientSecret').textContent, 'Client Secret')" style="padding: 2px 8px; font-size: 11px;">📋</button>
+                </div>
+            </div>
+            <div class="setting-row" style="padding: 6px 0;">
+                <span class="setting-label" style="font-size: 13px;">Cookie Secret</span>
+                <div style="display: flex; align-items: center; gap: 6px;">
+                    <code id="modalCookieSecret" style="max-width: 160px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;"></code>
+                    <button class="pill-btn" onclick="copyToClipboard(document.getElementById('modalCookieSecret').textContent, 'Cookie Secret')" style="padding: 2px 8px; font-size: 11px;">📋</button>
+                </div>
+            </div>
+            <div class="setting-row" style="padding: 6px 0;">
+                <span class="setting-label" style="font-size: 13px;">容器名称</span>
+                <span id="modalContainerName" style="font-size: 12px; font-family: monospace; color: var(--text-sec);"></span>
+            </div>
+            <div class="setting-row" style="padding: 6px 0;">
+                <span class="setting-label" style="font-size: 13px;">创建时间</span>
+                <span id="modalCreatedAt" style="font-size: 11px; font-family: monospace; color: var(--text-sec);"></span>
+            </div>
+        </div>
+
+        <!-- Nginx snippet -->
+        <div class="card" style="padding: 12px 16px; margin-bottom: 16px;">
+            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 6px;">
+                <span style="font-size: 13px; font-weight: 700;">📝 Nginx 配置片段</span>
+                <button class="pill-btn" onclick="copyToClipboard(document.getElementById('modalNginxPre').textContent, 'Nginx 配置')" style="padding: 2px 8px; font-size: 11px;">📋 复制</button>
+            </div>
+            <pre id="modalNginxPre" class="terminal-body" style="height: 120px; font-size: 11px; color: #5ac8fa;"></pre>
+        </div>
+
+        <!-- Danger Zone -->
+        <button type="button" class="btn danger w-full" onclick="deleteDomainAjax(currentDetailDomain)" style="padding: 10px; font-size: 13px;">
+            🗑️ 彻底删除此认证服务
+        </button>
+    </div>
+</div>
+
+<!-- ==================== FLOATING GLASS DOCK ==================== -->
+<div class="dock">
+    <button class="dock-btn active" id="dock-btn-domains" onclick="switchTab('p-domains', '域名管理', this)">
         <svg viewBox="0 0 24 24"><path d="M10 20v-6h4v6h5v-8h3L12 3 2 12h3v8z"/></svg>
         <span>域名</span>
-    </a>
-    <a href="/add" class="dock-btn">
+    </button>
+    <button class="dock-btn" id="dock-btn-add" onclick="switchTab('p-add', '添加认证', this)">
         <svg viewBox="0 0 24 24"><path d="M19 13h-6v6h-2v-6H5v-2h6V5h2v6h6v2z"/></svg>
         <span>添加</span>
-    </a>
-    <a href="/ssl" class="dock-btn">
+    </button>
+    <button class="dock-btn" id="dock-btn-ssl" onclick="switchTab('p-ssl', '证书申请', this)">
         <svg viewBox="0 0 24 24"><path d="M18 8h-1V6c0-2.76-2.24-5-5-5S7 3.24 7 6v2H6c-1.1 0-2 .9-2 2v10c0 1.1.9 2 2 2h12c1.1 0 2-.9 2-2V10c0-1.1-.9-2-2-2zm-6 9c-1.1 0-2-.9-2-2s.9-2 2-2 2 .9 2 2-.9 2-2 2zm3.1-9H8.9V6c0-1.71 1.39-3.1 3.1-3.1 1.71 0 3.1 1.39 3.1 3.1v2z"/></svg>
         <span>证书</span>
-    </a>
-    <a href="/settings" class="dock-btn">
+    </button>
+    <button class="dock-btn" id="dock-btn-settings" onclick="switchTab('p-settings', '系统配置', this)">
         <svg viewBox="0 0 24 24"><path d="M19.14 12.94c.04-.3.06-.61.06-.94 0-.32-.02-.64-.07-.94l2.03-1.58c.18-.14.23-.41.12-.61l-1.92-3.32c-.12-.22-.37-.29-.59-.22l-2.39.96c-.5-.38-1.03-.7-1.62-.94l-.36-2.54c-.04-.24-.24-.41-.48-.41h-3.84c-.24 0-.43.17-.47.41l-.36 2.54c-.59.24-1.13.57-1.62.94l-2.39-.96c-.22-.08-.47 0-.59.22L2.74 8.87c-.12.21-.08.47.12.61l2.03 1.58c-.05.3-.09.63-.09.94s.02.64.07.94l-2.03 1.58c-.18.14-.23.41-.12.61l1.92 3.32c.12.22.37.29.59.22l2.39-.96c.5.38 1.03.7 1.62.94l.36 2.54c.05.24.24.41.48.41h3.84c.24 0 .44-.17.47-.41l.36-2.54c.59-.24 1.13-.56 1.62-.94l2.39.96c.22.08.47 0 .59-.22l1.92-3.32c.12-.22.07-.47-.12-.61l-2.01-1.58zM12 15.6c-1.98 0-3.6-1.62-3.6-3.6s1.62-3.6 3.6-3.6 3.6 1.62 3.6 3.6-1.62 3.6-3.6 3.6z"/></svg>
         <span>设置</span>
-    </a>
-</nav>
+    </button>
+</div>
 
 <script src="/static/js/abit.js"></script>
 <script>
+// 初始化缓存现有数据
+cachedDomainsData = {{ auths|tojson }};
+
 function switchView(mode) {
     const cardContainer = document.getElementById('cardViewContainer');
     const tableContainer = document.getElementById('tableViewContainer');
@@ -295,11 +600,235 @@ function filterDomains(query) {
     }
 }
 
-// Restore View Mode
-document.addEventListener('DOMContentLoaded', () => {
-    const savedView = localStorage.getItem('abit_view_mode') || 'card';
-    switchView(savedView);
+// --- Page 2: Add Form AJAX Interactions ---
+function selectAddTargetType(type) {
+    document.getElementById('add_target_type').value = type;
+    const btnLocal = document.getElementById('add_type_local_btn');
+    const btnCustom = document.getElementById('add_type_custom_btn');
+    const customContainer = document.getElementById('add_custom_host_container');
+    const hostInput = document.getElementById('add_target_host');
+
+    if (type === 'custom') {
+        btnCustom.classList.add('active');
+        btnLocal.classList.remove('active');
+        customContainer.style.display = 'block';
+        hostInput.required = true;
+        hostInput.focus();
+    } else {
+        btnLocal.classList.add('active');
+        btnCustom.classList.remove('active');
+        customContainer.style.display = 'none';
+        hostInput.required = false;
+    }
+}
+
+function toggleAddSSLSection(checked) {
+    const container = document.getElementById('add_ssl_config_container');
+    container.style.display = checked ? 'block' : 'none';
+    if (checked) load1PanelAccounts();
+}
+
+function toggleAddDNSSection(val) {
+    document.getElementById('add_dns_container').style.display = (val === 'dns') ? 'block' : 'none';
+}
+
+async function load1PanelAccounts() {
+    try {
+        const res = await fetch('/api/acme_accounts');
+        const acmes = await res.json();
+        const select = document.getElementById('add_acme_account');
+        select.innerHTML = '';
+        if (acmes.length === 0) {
+            select.innerHTML = '<option value="">未找到 1Panel ACME 账户</option>';
+        } else {
+            acmes.forEach(acc => {
+                const opt = document.createElement('option');
+                opt.value = acc.id;
+                opt.textContent = `${acc.email} (ID: ${acc.id})`;
+                select.appendChild(opt);
+            });
+        }
+
+        const dnsRes = await fetch('/api/dns_accounts');
+        const dnss = await dnsRes.json();
+        const dnsSelect = document.getElementById('add_dns_account');
+        dnsSelect.innerHTML = '';
+        if (dnss.length === 0) {
+            dnsSelect.innerHTML = '<option value="">未配置 DNS 账户</option>';
+        } else {
+            dnss.forEach(acc => {
+                const opt = document.createElement('option');
+                opt.value = acc.id;
+                opt.textContent = `${acc.name} (ID: ${acc.id})`;
+                dnsSelect.appendChild(opt);
+            });
+        }
+    } catch (e) {}
+}
+
+document.getElementById('authAddForm').addEventListener('submit', async function(e) {
+    e.preventDefault();
+    const btn = document.getElementById('addSubmitBtn');
+    const logs = document.getElementById('addLogs');
+    const badge = document.getElementById('addStatusBadge');
+
+    btn.disabled = true;
+    btn.innerHTML = '⏳ 正在部署中...';
+    badge.className = 'badge warning';
+    badge.textContent = 'RUNNING';
+    logs.innerHTML = '<div class="system">[系统] 正在初始化环境并启动流式日志...</div>';
+
+    startLogStream('addLogs');
+
+    const formData = new FormData(this);
+    try {
+        const res = await fetch('/api/create', { method: 'POST', body: formData });
+        const result = await res.json();
+        if (result.success) {
+            badge.className = 'badge success';
+            badge.textContent = 'SUCCESS';
+            btn.innerHTML = '🎉 创建成功！';
+            showToast('认证服务创建成功！', 'success');
+            await loadDomainsAjax();
+            setTimeout(() => {
+                switchTab('p-domains', '域名管理', document.getElementById('dock-btn-domains'));
+                btn.disabled = false;
+                btn.innerHTML = '🚀 创建认证服务';
+                badge.className = 'badge secondary';
+                badge.textContent = 'IDLE';
+                document.getElementById('authAddForm').reset();
+            }, 2000);
+        } else {
+            badge.className = 'badge danger';
+            badge.textContent = 'FAILED';
+            btn.disabled = false;
+            btn.innerHTML = '🚀 重新创建';
+            showToast('创建失败: ' + (result.error || '未知错误'), 'error');
+        }
+    } catch (err) {
+        badge.className = 'badge danger';
+        badge.textContent = 'ERROR';
+        btn.disabled = false;
+        btn.innerHTML = '🚀 重新创建';
+        showToast('网络请求异常', 'error');
+    } finally {
+        stopLogStream();
+    }
 });
+
+// --- Page 3: SSL Apply Form AJAX Interactions ---
+function toggleSSLDNSSection(val) {
+    document.getElementById('ssl_dns_container').style.display = (val === 'dns') ? 'block' : 'none';
+}
+
+async function loadSSLAccounts() {
+    try {
+        const res = await fetch('/api/acme_accounts');
+        const acmes = await res.json();
+        const select = document.getElementById('ssl_acme_account');
+        select.innerHTML = '';
+        acmes.forEach(acc => {
+            const opt = document.createElement('option');
+            opt.value = acc.id;
+            opt.textContent = `${acc.email} (ID: ${acc.id})`;
+            select.appendChild(opt);
+        });
+
+        const dnsRes = await fetch('/api/dns_accounts');
+        const dnss = await dnsRes.json();
+        const dnsSelect = document.getElementById('ssl_dns_account');
+        dnsSelect.innerHTML = '';
+        dnss.forEach(acc => {
+            const opt = document.createElement('option');
+            opt.value = acc.id;
+            opt.textContent = `${acc.name} (ID: ${acc.id})`;
+            dnsSelect.appendChild(opt);
+        });
+    } catch (e) {}
+}
+
+document.getElementById('sslApplyForm').addEventListener('submit', async function(e) {
+    e.preventDefault();
+    const btn = document.getElementById('sslSubmitBtn');
+    const logs = document.getElementById('sslLogs');
+    const badge = document.getElementById('sslStatusBadge');
+
+    const domain = document.getElementById('ssl_domain').value.trim();
+    const acmeId = document.getElementById('ssl_acme_account').value;
+    const authMethod = document.getElementById('ssl_auth_method').value;
+    const dnsId = document.getElementById('ssl_dns_account').value;
+
+    btn.disabled = true;
+    btn.innerHTML = '⏳ 正在签发中...';
+    badge.className = 'badge warning';
+    badge.textContent = 'ISSUING';
+    logs.innerHTML = '<div class="system">[系统] 正在向 1Panel ACME 提交申请...</div>';
+
+    startLogStream('sslLogs');
+
+    const formData = new FormData();
+    formData.append('domain', domain);
+    formData.append('acme_id', acmeId);
+    if (authMethod === 'dns') formData.append('dns_id', dnsId);
+
+    try {
+        const res = await fetch('/api/apply_ssl', { method: 'POST', body: formData });
+        const result = await res.json();
+        if (result.success) {
+            badge.className = 'badge success';
+            badge.textContent = 'SUCCESS';
+            btn.innerHTML = '✅ 申请成功！';
+            showToast('SSL 证书已成功签发并开启 HTTPS！', 'success');
+            await loadDomainsAjax();
+            setTimeout(() => {
+                switchTab('p-domains', '域名管理', document.getElementById('dock-btn-domains'));
+                btn.disabled = false;
+                btn.innerHTML = '🚀 开始申请并自动绑定 HTTPS';
+                badge.className = 'badge secondary';
+                badge.textContent = 'IDLE';
+                document.getElementById('sslApplyForm').reset();
+            }, 2000);
+        } else {
+            badge.className = 'badge danger';
+            badge.textContent = 'FAILED';
+            btn.disabled = false;
+            btn.innerHTML = '🚀 重新申请';
+            showToast('申请失败: ' + (result.error || '未知错误'), 'error');
+        }
+    } catch (e) {
+        badge.className = 'badge danger';
+        badge.textContent = 'ERROR';
+        btn.disabled = false;
+        btn.innerHTML = '🚀 重新申请';
+        showToast('网络请求异常', 'error');
+    } finally {
+        stopLogStream();
+    }
+});
+
+// --- Page 4: Save Settings AJAX ---
+async function saveSettingsAjax() {
+    const formData = new FormData();
+    formData.append('web_port', document.getElementById('set_web_port').value);
+    formData.append('keycloak_url', document.getElementById('set_keycloak_url').value);
+    formData.append('keycloak_admin', document.getElementById('set_keycloak_admin').value);
+    formData.append('keycloak_password', document.getElementById('set_keycloak_password').value);
+    formData.append('keycloak_container', document.getElementById('set_keycloak_container').value);
+    formData.append('onepanel_port', document.getElementById('set_onepanel_port').value);
+    formData.append('onepanel_api_key', document.getElementById('set_onepanel_api_key').value);
+
+    try {
+        const res = await fetch('/api/settings', { method: 'POST', body: formData });
+        const result = await res.json();
+        if (result.success) {
+            showToast('系统全局设置已成功保存！', 'success');
+        } else {
+            showToast('保存失败: ' + (result.error || '未知错误'), 'error');
+        }
+    } catch (e) {
+        showToast('网络通信异常', 'error');
+    }
+}
 </script>
 </body>
 </html>
