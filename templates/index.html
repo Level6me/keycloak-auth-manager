@@ -21,12 +21,14 @@
         </div>
         <div class="header-actions">
             <!-- Abit Style Refresh Button -->
-            <button class="icon-btn" onclick="loadDomainsAjax(); showToast('已刷新数据', 'success');" title="刷新数据">
+            <button class="pill-btn" onclick="loadDomainsAjax(); showToast('已刷新数据', 'success');" title="刷新数据">
                 <span>🔄</span>
+                <span class="pill-text">刷新</span>
             </button>
             <!-- Abit Style Theme Cycle Button -->
-            <button class="icon-btn" id="btn-theme-toggle" onclick="cycleTheme()" title="切换明暗主题 (自动 / 浅色 / 深色)">
+            <button class="pill-btn" id="btn-theme-toggle" onclick="cycleTheme()" title="切换明暗主题 (自动 / 浅色 / 深色)">
                 <span id="theme-icon">🌓</span>
+                <span id="theme-label" class="pill-text">自动</span>
             </button>
         </div>
     </header>
@@ -99,15 +101,15 @@
                         <div style="display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 8px; margin-top: 8px;">
                             <div class="badges-wrap" style="margin: 0;">
                                 {% if auth.proxy_enabled %}
-                                    <span class="badge success">🔄 反代已开</span>
+                                    <span class="badge success">🔄 反代</span>
                                 {% endif %}
 
                                 {% if auth.ssl_enabled %}
-                                    <span class="badge success">🔒 SSL已开</span>
+                                    <span class="badge success">🔒 SSL</span>
                                 {% endif %}
 
                                 {% if auth.auth_enabled %}
-                                    <span class="badge accent">🛡️ 认证已开</span>
+                                    <span class="badge accent">🛡️ 认证</span>
                                 {% endif %}
                             </div>
 

@@ -212,9 +212,9 @@ function renderDomainsUI(auths) {
             const targetPort = auth.target_port || auth.port || 80;
             const targetStr = `${targetHost}:${targetPort}`;
 
-            const proxyBadge = auth.proxy_enabled ? '<span class="badge success">🔄 反代已开</span>' : '';
-            const sslBadge = auth.ssl_enabled ? '<span class="badge success">🔒 SSL已开</span>' : '';
-            const authBadge = auth.auth_enabled ? '<span class="badge accent">🛡️ 认证已开</span>' : '';
+            const proxyBadge = auth.proxy_enabled ? '<span class="badge success">🔄 反代</span>' : '';
+            const sslBadge = auth.ssl_enabled ? '<span class="badge success">🔒 SSL</span>' : '';
+            const authBadge = auth.auth_enabled ? '<span class="badge accent">🛡️ 认证</span>' : '';
 
             return `
             <div class="domain-card" data-domain="${domain}" data-target="${targetStr}" data-port="${auth.oauth_port}">
