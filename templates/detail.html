@@ -1,90 +1,238 @@
 <!DOCTYPE html>
-<html lang="zh-CN">
+<html lang="zh-CN" data-theme="light">
 <head>
     <meta charset="utf-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-    <title>{{ domain }} 详情</title>
-    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3/dist/css/bootstrap.min.css" rel="stylesheet">
-    <style>
-        @media (max-width: 576px) {
-            h2 { font-size: 18px; word-break: break-all; }
-            .card { margin: 0 -15px; border-radius: 0; }
-            pre { font-size: 10px; overflow-x: auto; }
-            code { font-size: 11px; word-break: break-all; }
-        }
-        pre { white-space: pre-wrap; word-wrap: break-word; }
-    </style>
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
+    <title>{{ domain }} - 站点详情</title>
+    <link rel="stylesheet" href="/static/css/abit.css">
 </head>
-<body class="bg-light">
-<div class="container-fluid px-3 mt-4">
-    <h2>🔍 {{ domain }}</h2>
-    <a href="/" class="btn btn-outline-secondary mb-3">← 返回列表</a>
-    
-    <!-- 紧凑型状态控制面板 -->
-    <div class="card shadow-sm mb-3">
-        <div class="card-body py-2 px-3">
-            <div class="d-flex flex-wrap justify-content-around align-items-center">
-                <div class="d-flex align-items-center py-1">
-                    <span class="fw-bold me-2" style="font-size: 14px;">🔄 反代</span>
-                    <div class="form-check form-switch me-1 mb-0">
-                        <input class="form-check-input" type="checkbox" id="toggle-proxy" {% if auth.proxy_enabled %}checked{% endif %}>
-                    </div>
-                    <span class="text-muted small" id="proxy-status" style="font-size: 13px;">{% if auth.proxy_enabled %}已开{% else %}已关{% endif %}</span>
-                </div>
-                <div class="d-flex align-items-center py-1">
-                    <span class="fw-bold me-2" style="font-size: 14px;">🔒 SSL</span>
-                    <div class="form-check form-switch me-1 mb-0">
-                        <input class="form-check-input" type="checkbox" id="toggle-ssl" {% if auth.ssl_enabled %}checked{% endif %}>
-                    </div>
-                    <span class="text-muted small" id="ssl-status" style="font-size: 13px;">{% if auth.ssl_enabled %}已开{% else %}已关{% endif %}</span>
-                </div>
-                <div class="d-flex align-items-center py-1">
-                    <span class="fw-bold me-2" style="font-size: 14px;">🛡️ 认证</span>
-                    <div class="form-check form-switch me-1 mb-0">
-                        <input class="form-check-input" type="checkbox" id="toggle-auth" {% if auth.auth_enabled %}checked{% endif %}>
-                    </div>
-                    <span class="text-muted small" id="auth-status" style="font-size: 13px;">{% if auth.auth_enabled %}已开{% else %}已关{% endif %}</span>
-                </div>
+<body>
+
+<div class="container" style="max-width: 860px;">
+    <!-- Header -->
+    <header class="header">
+        <div class="header-left">
+            <a href="/" class="icon-btn" title="返回主列表" style="text-decoration: none; width: 38px; height: 38px; border-radius: 50%; background: var(--card); border: 1px solid var(--border); display: inline-flex; align-items: center; justify-content: center; font-size: 16px;">
+                ←
+            </a>
+            <div class="header-title-group">
+                <span class="date-badge">DOMAIN CONTROLLER</span>
+                <h1 class="title" style="word-break: break-all;">{{ domain }}</h1>
+            </div>
+        </div>
+        <div class="header-actions">
+            <button class="pill-btn" onclick="toggleTheme()" title="切换亮暗主题">
+                <span class="theme-icon">🌓</span>
+            </button>
+        </div>
+    </header>
+
+    <!-- SSL Warning Banner if disabled -->
+    {% if not auth.ssl_enabled %}
+    <div id="ssl-apply-alert" class="card" style="background: var(--warning-bg); border-color: var(--warning); padding: 14px 18px; margin-bottom: 16px; display: flex; justify-content: space-between; align-items: center; gap: 10px; flex-wrap: wrap;">
+        <div style="font-size: 13px; font-weight: 700; color: var(--warning); display: flex; align-items: center; gap: 6px;">
+            <span>⚠️</span> <span>当前域名未开启 HTTPS。建议申请 SSL 证书以启用 Passkey 身份验证！</span>
+        </div>
+        <a href="/ssl?domain={{ domain }}" class="btn sm" style="background: var(--warning); color: #000; font-weight: 800;">
+            🔑 立即申请证书
+        </a>
+    </div>
+    {% endif %}
+
+    <!-- 1. Quick Control Switches Card -->
+    <div class="card">
+        <div class="card-header">
+            <span class="card-title">🎛️ 服务开关控制</span>
+            <span class="badge secondary">实时生效</span>
+        </div>
+
+        <!-- Switch 1: 反向代理 -->
+        <div class="setting-row">
+            <div class="setting-info">
+                <span class="setting-label">🔄 反向代理 (Reverse Proxy)</span>
+                <span class="setting-desc">控制网站流量转发。关闭时网站将直接返回 503 维护状态</span>
+            </div>
+            <div style="display: flex; align-items: center; gap: 8px;">
+                <span id="proxy-status" class="badge {% if auth.proxy_enabled %}success{% else %}secondary{% endif %}">
+                    {% if auth.proxy_enabled %}已开启{% else %}已关闭{% endif %}
+                </span>
+                <label class="switch">
+                    <input type="checkbox" id="toggle-proxy" {% if auth.proxy_enabled %}checked{% endif %}>
+                    <span class="slider"></span>
+                </label>
+            </div>
+        </div>
+
+        <!-- Switch 2: SSL 证书 -->
+        <div class="setting-row">
+            <div class="setting-info">
+                <span class="setting-label">🔒 HTTPS SSL 保护</span>
+                <span class="setting-desc">控制 1Panel 443 SSL 证书绑定与全站 HTTPS 强制跳转</span>
+            </div>
+            <div style="display: flex; align-items: center; gap: 8px;">
+                <span id="ssl-status" class="badge {% if auth.ssl_enabled %}success{% else %}warning{% endif %}">
+                    {% if auth.ssl_enabled %}已开启{% else %}未开启{% endif %}
+                </span>
+                <label class="switch">
+                    <input type="checkbox" id="toggle-ssl" {% if auth.ssl_enabled %}checked{% endif %}>
+                    <span class="slider"></span>
+                </label>
+            </div>
+        </div>
+
+        <!-- Switch 3: Keycloak 认证拦截 -->
+        <div class="setting-row">
+            <div class="setting-info">
+                <span class="setting-label">🛡️ Keycloak Passkey 认证拦截</span>
+                <span class="setting-desc">开启时全站访问必须通过 Keycloak 登录认证；关闭则直通反代目标</span>
+            </div>
+            <div style="display: flex; align-items: center; gap: 8px;">
+                <span id="auth-status" class="badge {% if auth.auth_enabled %}accent{% else %}secondary{% endif %}">
+                    {% if auth.auth_enabled %}已开启{% else %}已关闭{% endif %}
+                </span>
+                <label class="switch">
+                    <input type="checkbox" id="toggle-auth" {% if auth.auth_enabled %}checked{% endif %}>
+                    <span class="slider"></span>
+                </label>
             </div>
         </div>
     </div>
-    
-    {% if not auth.ssl_enabled %}
-    <div class="alert alert-warning d-flex justify-content-between align-items-center py-2 px-3 mb-3" style="font-size: 14px;" id="ssl-apply-alert">
-        <span>⚠️ 当前域名未启用 SSL (HTTPS) 保护。强烈建议申请证书以启用 Passkey 登录！</span>
-        <a href="/ssl?domain={{ domain }}" class="btn btn-sm btn-warning fw-bold text-nowrap ms-2">🔑 立即申请证书</a>
-    </div>
-    {% endif %}
-    
-    <div class="card shadow-sm mb-3">
-        <div class="card-header bg-dark text-white py-2">认证配置</div>
-        <div class="card-body p-0">
-            <table class="table table-striped mb-0" style="font-size: 14px;">
-                <tr><th class="ps-3" style="width: 120px;">Client ID</th><td>{{ auth.client_id }}</td></tr>
-                <tr><th class="ps-3">目标地址</th><td><code>{{ auth.get('target_host', '127.0.0.1') }}:{{ auth.target_port }}</code></td></tr>
-                <tr><th class="ps-3">Client Secret</th><td><code class="user-select-all">{{ auth.client_secret }}</code></td></tr>
-                <tr><th class="ps-3">Cookie Secret</th><td><code class="user-select-all">{{ auth.cookie_secret }}</code></td></tr>
-                <tr><th class="ps-3">OAuth 端口</th><td>{{ auth.oauth_port }}</td></tr>
-                <tr><th class="ps-3">容器名</th><td>{{ auth.container_name }}</td></tr>
-                <tr><th class="ps-3">容器状态</th><td><span class="badge bg-{% if 'Up' in auth.status %}success{% else %}danger{% endif %}">{{ auth.status }}</span></td></tr>
-                <tr><th class="ps-3">创建时间</th><td>{{ auth.created_at }}</td></tr>
-            </table>
+
+    <!-- 2. Configuration Details Card -->
+    <div class="card">
+        <div class="card-header">
+            <span class="card-title">📋 认证与容器配置</span>
+            <span class="badge secondary" style="font-family: monospace;">{{ auth.container_name }}</span>
+        </div>
+
+        <div class="setting-row">
+            <div class="setting-info">
+                <span class="setting-label">目标服务地址</span>
+                <span class="setting-desc">实际反代转发的后端地址</span>
+            </div>
+            <code>{{ auth.get('target_host', '127.0.0.1') }}:{{ auth.target_port }}</code>
+        </div>
+
+        <div class="setting-row">
+            <div class="setting-info">
+                <span class="setting-label">OAuth2 Client ID</span>
+                <span class="setting-desc">Keycloak 客户端标识</span>
+            </div>
+            <div style="display: flex; align-items: center; gap: 6px;">
+                <code>{{ auth.client_id }}</code>
+                <button class="pill-btn" onclick="copyToClipboard('{{ auth.client_id }}', 'Client ID')">📋</button>
+            </div>
+        </div>
+
+        <div class="setting-row">
+            <div class="setting-info">
+                <span class="setting-label">Client Secret</span>
+                <span class="setting-desc">Keycloak 客户端通讯密钥</span>
+            </div>
+            <div style="display: flex; align-items: center; gap: 6px;">
+                <code style="max-width: 180px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">{{ auth.client_secret }}</code>
+                <button class="pill-btn" onclick="copyToClipboard('{{ auth.client_secret }}', 'Client Secret')">📋</button>
+            </div>
+        </div>
+
+        <div class="setting-row">
+            <div class="setting-info">
+                <span class="setting-label">Cookie Secret</span>
+                <span class="setting-desc">OAuth2 Proxy 会话加密密钥</span>
+            </div>
+            <div style="display: flex; align-items: center; gap: 6px;">
+                <code style="max-width: 180px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">{{ auth.cookie_secret }}</code>
+                <button class="pill-btn" onclick="copyToClipboard('{{ auth.cookie_secret }}', 'Cookie Secret')">📋</button>
+            </div>
+        </div>
+
+        <div class="setting-row">
+            <div class="setting-info">
+                <span class="setting-label">OAuth 本地监听端口</span>
+            </div>
+            <span class="badge secondary" style="font-family: monospace;">:{{ auth.oauth_port }}</span>
+        </div>
+
+        <div class="setting-row">
+            <div class="setting-info">
+                <span class="setting-label">OAuth 容器运行状态</span>
+            </div>
+            <span class="badge {% if 'Up' in auth.status %}success{% else %}danger{% endif %}">
+                <span class="status-dot {% if 'Up' not in auth.status %}offline{% endif %}"></span>
+                {{ auth.status }}
+            </span>
+        </div>
+
+        <div class="setting-row">
+            <div class="setting-info">
+                <span class="setting-label">创建时间</span>
+            </div>
+            <span style="font-size: 12px; color: var(--text-sec); font-family: monospace;">{{ auth.created_at }}</span>
         </div>
     </div>
-    
-    <div class="card shadow-sm">
-        <div class="card-header py-2">Nginx 配置片段</div>
-        <div class="card-body py-2">
-            <pre class="bg-dark text-success p-2 rounded mb-2" style="font-size: 12px;"><small>{{ auth.nginx_config }}</small></pre>
-            <button class="btn btn-outline-secondary btn-sm" style="font-size: 12px;" onclick="navigator.clipboard.writeText(document.querySelector('pre').textContent)">📋 复制配置</button>
+
+    <!-- 3. Nginx Configuration Preview Card -->
+    <div class="card">
+        <div class="card-header">
+            <span class="card-title">📝 Nginx 站点配置片段</span>
+            <button class="pill-btn" onclick="copyToClipboard(document.getElementById('nginxPre').textContent, 'Nginx 配置')">
+                📋 复制配置
+            </button>
+        </div>
+        <div class="terminal-card" style="margin-top: 0;">
+            <div class="terminal-header">
+                <div class="terminal-dots">
+                    <div class="terminal-dot red"></div>
+                    <div class="terminal-dot yellow"></div>
+                    <div class="terminal-dot green"></div>
+                </div>
+                <div class="terminal-title">proxy/root.conf</div>
+            </div>
+            <pre id="nginxPre" class="terminal-body" style="height: 180px; color: #5ac8fa;">{{ auth.nginx_config }}</pre>
         </div>
     </div>
-    
-    <form action="/delete/{{ domain }}" method="post" class="mt-3 mb-4" onsubmit="return confirm('确定要删除域名 {{ domain }} 的全部认证配置吗？\n此操作将同时删除 Keycloak Client、OAuth2 容器及 Nginx 配置，且不可撤销！')">
-        <button class="btn btn-danger btn-sm w-100 py-2">🗑️ 删除此认证</button>
-    </form>
+
+    <!-- 4. Danger Zone -->
+    <div class="card" style="border-color: var(--danger-bg);">
+        <div class="card-header" style="border-bottom-color: var(--danger-bg);">
+            <span class="card-title" style="color: var(--danger);">⚠️ 危险操作区域</span>
+        </div>
+        <p style="font-size: 13px; color: var(--text-sec); margin-bottom: 14px;">
+            删除后将彻底移除该域名的 Keycloak Client、停止并销毁 OAuth2 Proxy 容器，并移除 Nginx 站点认证配置。
+        </p>
+        <form action="/delete/{{ domain }}" method="post" onsubmit="return confirm('确定要删除域名 {{ domain }} 的全部认证配置吗？\n此操作不可撤销！')">
+            <button type="submit" class="btn danger w-full" style="padding: 10px;">
+                🗑️ 彻底删除此认证服务
+            </button>
+        </form>
+    </div>
 </div>
-<script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3/dist/js/bootstrap.bundle.min.js"></script>
+
+<!-- Floating Glass Dock -->
+<nav class="dock">
+    <a href="/" class="dock-btn active">
+        <svg viewBox="0 0 24 24"><path d="M10 20v-6h4v6h5v-8h3L12 3 2 12h3v8z"/></svg>
+        <span>域名</span>
+    </a>
+    <a href="/add" class="dock-btn">
+        <svg viewBox="0 0 24 24"><path d="M19 13h-6v6h-2v-6H5v-2h6V5h2v6h6v2z"/></svg>
+        <span>添加</span>
+    </a>
+    <a href="/ssl" class="dock-btn">
+        <svg viewBox="0 0 24 24"><path d="M18 8h-1V6c0-2.76-2.24-5-5-5S7 3.24 7 6v2H6c-1.1 0-2 .9-2 2v10c0 1.1.9 2 2 2h12c1.1 0 2-.9 2-2V10c0-1.1-.9-2-2-2zm-6 9c-1.1 0-2-.9-2-2s.9-2 2-2 2 .9 2 2-.9 2-2 2zm3.1-9H8.9V6c0-1.71 1.39-3.1 3.1-3.1 1.71 0 3.1 1.39 3.1 3.1v2z"/></svg>
+        <span>证书</span>
+    </a>
+    <a href="/settings" class="dock-btn">
+        <svg viewBox="0 0 24 24"><path d="M19.14 12.94c.04-.3.06-.61.06-.94 0-.32-.02-.64-.07-.94l2.03-1.58c.18-.14.23-.41.12-.61l-1.92-3.32c-.12-.22-.37-.29-.59-.22l-2.39.96c-.5-.38-1.03-.7-1.62-.94l-.36-2.54c-.04-.24-.24-.41-.48-.41h-3.84c-.24 0-.43.17-.47.41l-.36 2.54c-.59.24-1.13.57-1.62.94l-2.39-.96c-.22-.08-.47 0-.59.22L2.74 8.87c-.12.21-.08.47.12.61l2.03 1.58c-.05.3-.09.63-.09.94s.02.64.07.94l-2.03 1.58c-.18.14-.23.41-.12.61l1.92 3.32c.12.22.37.29.59.22l2.39-.96c.5.38 1.03.7 1.62.94l.36 2.54c.05.24.24.41.48.41h3.84c.24 0 .44-.17.47-.41l.36-2.54c.59-.24 1.13-.56 1.62-.94l2.39.96c.22.08.47 0 .59-.22l1.92-3.32c.12-.22.07-.47-.12-.61l-2.01-1.58zM12 15.6c-1.98 0-3.6-1.62-3.6-3.6s1.62-3.6 3.6-3.6 3.6 1.62 3.6 3.6-1.62 3.6-3.6 3.6z"/></svg>
+        <span>设置</span>
+    </a>
+    <button class="dock-btn" onclick="toggleTheme()">
+        <svg viewBox="0 0 24 24"><path d="M12 3c-4.97 0-9 4.03-9 9s4.03 9 9 9 9-4.03 9-9c0-.46-.04-.92-.1-1.36-.98 1.37-2.58 2.26-4.4 2.26-3.03 0-5.5-2.47-5.5-5.5 0-1.82.89-3.42 2.26-4.4-.44-.06-.9-.1-1.36-.1z"/></svg>
+        <span>外观</span>
+    </button>
+</nav>
+
+<script src="/static/js/abit.js"></script>
 <script>
 document.addEventListener('DOMContentLoaded', function() {
     function setupToggle(elementId, statusId, apiType) {
@@ -93,7 +241,7 @@ document.addEventListener('DOMContentLoaded', function() {
         
         toggle.addEventListener('change', function() {
             const enabled = toggle.checked;
-            status.textContent = "中...";
+            status.textContent = "处理中...";
             toggle.disabled = true;
             
             const formData = new FormData();
@@ -107,33 +255,39 @@ document.addEventListener('DOMContentLoaded', function() {
             .then(data => {
                 toggle.disabled = false;
                 if (data.success) {
-                    status.textContent = enabled ? "已开" : "已关";
+                    if (apiType === 'proxy') {
+                        status.className = enabled ? 'badge success' : 'badge secondary';
+                        status.textContent = enabled ? "已开启" : "已关闭";
+                    } else if (apiType === 'ssl') {
+                        status.className = enabled ? 'badge success' : 'badge warning';
+                        status.textContent = enabled ? "已开启" : "未开启";
+                    } else if (apiType === 'auth') {
+                        status.className = enabled ? 'badge accent' : 'badge secondary';
+                        status.textContent = enabled ? "已开启" : "已关闭";
+                    }
+                    
+                    showToast(`${apiType.toUpperCase()} 状态已更新为：${enabled ? '开启' : '关闭'}`, 'success');
+                    
                     if (data.nginx_config) {
-                        document.querySelector('pre small').textContent = data.nginx_config;
+                        document.getElementById('nginxPre').textContent = data.nginx_config;
                     }
                     if (apiType === 'ssl') {
                         const alertEl = document.getElementById('ssl-apply-alert');
                         if (alertEl) {
-                            if (enabled) {
-                                alertEl.style.setProperty('display', 'none', 'important');
-                            } else {
-                                alertEl.style.setProperty('display', 'flex', 'important');
-                            }
-                        } else if (!enabled) {
-                            window.location.reload();
+                            alertEl.style.display = enabled ? 'none' : 'flex';
                         }
                     }
                 } else {
                     toggle.checked = !enabled;
-                    status.textContent = enabled ? "已关" : "已开";
-                    alert("操作失败: " + data.error);
+                    status.textContent = enabled ? "已关闭" : "已开启";
+                    showToast("操作失败: " + data.error, 'error');
                 }
             })
             .catch(err => {
                 toggle.disabled = false;
                 toggle.checked = !enabled;
-                status.textContent = enabled ? "已关" : "已开";
-                alert("网络请求失败");
+                status.textContent = enabled ? "已关闭" : "已开启";
+                showToast("网络通信发生异常", 'error');
             });
         });
     }
