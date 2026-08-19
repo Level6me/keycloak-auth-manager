@@ -118,8 +118,10 @@ except Exception as e:
     print(f"警告: 无法读取持久化 secret_key，使用随机密钥 ({e})")
     app.secret_key = secrets.token_hex(32)
 
-# 线程安全的日志列表
-current_logs = []
+# 线程安全且支持断点重连的日志缓冲区
+MAX_LOG_HISTORY = 500
+log_history = []
+log_seq = 0
 logs_lock = threading.Lock()
 
 def load_data():
@@ -135,6 +137,8 @@ def load_data():
                         auth['cookie_secret'] = decrypt_val(auth['cookie_secret'])
                     
                     # 默认状态注入与向前兼容
+                    if 'target_host' not in auth:
+                        auth['target_host'] = '127.0.0.1'
                     if 'proxy_enabled' not in auth:
                         auth['proxy_enabled'] = True
                     if 'auth_enabled' not in auth:
@@ -172,10 +176,20 @@ def generate_secret(length=32):
     return ''.join(secrets.choice(string.ascii_letters + string.digits) for _ in range(length))
 
 def log(msg):
+    global log_seq
     line = "[{}] {}".format(datetime.now().strftime("%H:%M:%S"), msg)
     with logs_lock:
-        current_logs.append(line)
+        log_seq += 1
+        entry = {"id": log_seq, "text": line}
+        log_history.append(entry)
+        if len(log_history) > MAX_LOG_HISTORY:
+            log_history.pop(0)
     print(line)
+
+def clear_logs():
+    global log_history
+    with logs_lock:
+        log_history.clear()
 
 def run_cmd_args(args):
     # 安全地以列表形式调用命令，不经过 Shell
@@ -453,11 +467,14 @@ def get_proxy_conf_path(domain):
             return os.path.join(proxy_dir, "root.conf")
     return None
 
-def update_nginx_config(domain, oauth_port, target_port, auth_enabled, proxy_enabled):
+def update_nginx_config(domain, oauth_port, target_host, target_port, auth_enabled, proxy_enabled):
     proxy_conf = get_proxy_conf_path(domain)
     if not proxy_conf:
         log("未找到 1Panel 配置文件，请确认网站创建成功")
         return None
+    
+    target_host = target_host.strip() if target_host else "127.0.0.1"
+    target_upstream = f"{target_host}:{target_port}"
         
     if not proxy_enabled:
         # 如果反代被关闭，返回 503 状态码
@@ -470,7 +487,7 @@ location / {
         # 普通反向代理（未开启 Keycloak 认证）
         new_content = """# 普通反代（未开启 Keycloak 认证）
 location ^~ / {{
-    proxy_pass http://127.0.0.1:{};
+    proxy_pass http://{};
     proxy_set_header Host $host;
     proxy_set_header X-Real-IP $remote_addr;
     proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
@@ -479,7 +496,7 @@ location ^~ / {{
     proxy_set_header Upgrade $http_upgrade;
     proxy_set_header Connection $http_connection;
 }}
-""".format(target_port)
+""".format(target_upstream)
     else:
         # 完整认证反代
         new_content = """# OAuth2 认证路径 - 需要大缓冲区处理 cookie
@@ -516,7 +533,7 @@ location ^~ / {{
     error_page 401 = @login;
     add_header Cache-Control "no-cache, no-store, must-revalidate";
     
-    proxy_pass http://127.0.0.1:{};
+    proxy_pass http://{};
     proxy_set_header Host $host;
     proxy_set_header X-Real-IP $remote_addr;
     proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
@@ -525,7 +542,7 @@ location ^~ / {{
     proxy_set_header Upgrade $http_upgrade;
     proxy_set_header Connection $http_connection;
 }}
-""".format(oauth_port, oauth_port, domain, target_port)
+""".format(oauth_port, oauth_port, domain, target_upstream)
 
     try:
         with open(proxy_conf, 'w') as f:
@@ -611,8 +628,10 @@ def delete_1panel_website(domain):
     log(f"1Panel 网站删除失败: {del_res}")
     return False
 
-def create_nginx_auth(domain, oauth_port, target_port):
+def create_nginx_auth(domain, oauth_port, target_host, target_port):
     log("修改 Nginx 配置...")
+    target_host = target_host.strip() if target_host else "127.0.0.1"
+    target_upstream = f"{target_host}:{target_port}"
     
     # 尝试通过 1Panel API 自动建站
     api_payload = {
@@ -623,7 +642,7 @@ def create_nginx_auth(domain, oauth_port, target_port):
         "Domains": [{"Domain": domain, "Port": 80}],
         "AppType": "installed",
         "AppInstallId": 1,
-        "Proxy": f"http://127.0.0.1:{target_port}",
+        "Proxy": f"http://{target_upstream}",
         "Remark": "Keycloak Auth Manager 自动创建"
     }
     res = call_1panel_api("/api/v2/websites", "POST", api_payload)
@@ -638,21 +657,116 @@ def create_nginx_auth(domain, oauth_port, target_port):
             log("跳过 1Panel API 调用")
     
     proxy_conf = get_proxy_conf_path(domain)
-    
     if not proxy_conf:
         log("未找到 1Panel 配置文件，请确认网站创建成功")
         return None
     
-    with open(proxy_conf, 'r') as f:
-        content = f.read()
-    
-    old_proxy_match = re.search(r'proxy_pass http://127\.0\.0\.1:([0-9]+)', content)
-    if old_proxy_match:
-        found_port = old_proxy_match.group(1)
-        log("检测到原目标端口: {}".format(found_port))
-    
-    new_conf = update_nginx_config(domain, oauth_port, target_port, auth_enabled=True, proxy_enabled=True)
+    new_conf = update_nginx_config(domain, oauth_port, target_host, target_port, auth_enabled=True, proxy_enabled=True)
     return new_conf
+
+def do_apply_ssl(domain, acme_id, dns_id=None):
+    if not domain or not acme_id:
+        return False, "域名或 ACME 账户参数不足"
+        
+    log(f"开始为 {domain} 申请 SSL 证书...")
+    ssl_payload = {
+        "PrimaryDomain": domain,
+        "Provider": "dnsAccount" if dns_id else "http",
+        "AcmeAccountID": int(acme_id),
+        "AutoRenew": True,
+        "Description": "Auto SSL by KAM",
+        "Apply": True,
+        "KeyType": "P256",
+    }
+    if dns_id:
+        ssl_payload["DNSAccountID"] = int(dns_id)
+    
+    log("正在向 1Panel 提交 SSL 申请...")
+    ssl_res = call_1panel_api("/api/v2/websites/ssl", "POST", ssl_payload)
+    if not (ssl_res and ssl_res.get("code") == 200 and ssl_res.get("data")):
+        err_msg = ssl_res.get('message', '未知错误') if ssl_res else '1Panel 无响应'
+        log(f"提交 SSL 申请失败: {err_msg}")
+        return False, f"提交 SSL 申请失败: {err_msg}"
+        
+    ssl_id = ssl_res["data"]["id"]
+    log(f"申请已提交 (SSL ID: {ssl_id})，等待证书签发中 (通常需要 15-60 秒)...")
+    
+    ssl_ready = False
+    last_log_size = 0
+    log_file = None
+    
+    def read_1panel_log(current_last_size, current_log_file):
+        try:
+            import glob
+            if not current_log_file:
+                possible_logs = glob.glob(f"/opt/1panel/log/ssl/*{domain}-ssl-{ssl_id}.log")
+                if not possible_logs:
+                    possible_logs = glob.glob(f"/opt/1panel/log/ssl/{domain}-ssl-{ssl_id}.log")
+                if possible_logs:
+                    current_log_file = possible_logs[0]
+            
+            if current_log_file and os.path.exists(current_log_file):
+                with open(current_log_file, 'r', encoding='utf-8') as f:
+                    f.seek(current_last_size)
+                    new_content = f.read()
+                    if new_content:
+                        for line in new_content.strip().split('\n'):
+                            if line:
+                                log(f"[1Panel SSL] {line}")
+                    current_last_size = f.tell()
+        except Exception as e:
+            log(f"[Debug] 读取日志异常: {str(e)}")
+        return current_last_size, current_log_file
+    
+    for _ in range(36): # 最多轮询等待 3 分钟
+        time.sleep(5)
+        last_log_size, log_file = read_1panel_log(last_log_size, log_file)
+        
+        search_res = call_1panel_api("/api/v2/websites/ssl/search", "POST", {"Page": 1, "PageSize": 100})
+        if search_res and search_res.get("code") == 200 and search_res.get("data") and search_res["data"]["items"]:
+            item = next((x for x in search_res["data"]["items"] if x["id"] == ssl_id), None)
+            if item:
+                status = item.get("status", "")
+                if status in ["Ready", "Success", "Issued", "ready", "success", "issued"]:
+                    ssl_ready = True
+                    last_log_size, log_file = read_1panel_log(last_log_size, log_file)
+                    log("证书签发成功！")
+                    break
+                elif "Error" in status or "Failed" in status or "error" in status.lower() or "fail" in status.lower():
+                    err_msg = item.get('message', status)
+                    last_log_size, log_file = read_1panel_log(last_log_size, log_file)
+                    log(f"证书申请失败: {err_msg}")
+                    return False, f"1Panel API返回失败状态: {err_msg}"
+                    
+    if not ssl_ready:
+        log("证书申请超时 (超过3分钟)，请前往 1Panel 后台查看详情")
+        return False, "证书申请超过3分钟超时，请前往 1Panel 后台查看详情"
+        
+    log("正在将证书绑定到网站并开启 HTTPS...")
+    ws_res = call_1panel_api("/api/v2/websites/search", "POST", {"Page": 1, "PageSize": 10, "Info": domain, "OrderBy": "created_at", "Order": "null"})
+    if ws_res and ws_res.get("code") == 200 and ws_res.get("data") and ws_res["data"]["items"]:
+        ws_item = next((x for x in ws_res["data"]["items"] if x.get("primaryDomain") == domain or domain in x.get("domains", [])), None)
+        if ws_item:
+            ws_id = ws_item["id"]
+            https_payload = {
+                "WebsiteID": ws_id,
+                "Enable": True,
+                "WebsiteSSLID": ssl_id,
+                "Type": "existed",
+                "HttpConfig": "HTTPToHTTPS",
+                "HttpsPorts": [443]
+            }
+            call_1panel_api(f"/api/v2/websites/{ws_id}/https", "POST", https_payload)
+            log("HTTPS 绑定成功，网站配置已重载！")
+            
+            fresh_data = load_data()
+            if domain in fresh_data:
+                fresh_data[domain]['ssl_enabled'] = True
+                save_data(fresh_data)
+            return True, ""
+            
+    log("绑定失败：未能找到 1Panel 反代网站信息")
+    return False, "未找到对应的反代网站信息"
 
 @app.route('/settings', methods=['GET', 'POST'])
 def settings():
@@ -718,22 +832,54 @@ def add_page():
 
 @app.route('/api/logs')
 def api_logs():
-    def gen():
+    last_id_param = request.args.get('last_id')
+    header_last_id = request.headers.get('Last-Event-ID')
+    try:
+        client_last_id = int(last_id_param if last_id_param is not None else (header_last_id or 0))
+    except (ValueError, TypeError):
+        client_last_id = 0
+
+    def gen(start_id):
+        cur_id = start_id
         try:
             while True:
+                new_entries = []
                 with logs_lock:
-                    if current_logs:
-                        lines = list(current_logs)
-                        current_logs[:] = []
-                    else:
-                        lines = []
-                for l in lines:
-                    yield "data: {}\n\n".format(l)
-                yield "data: heartbeat\n\n"
+                    for item in log_history:
+                        if item['id'] > cur_id:
+                            new_entries.append(item)
+                for entry in new_entries:
+                    cur_id = entry['id']
+                    yield f"id: {entry['id']}\ndata: {entry['text']}\n\n"
+                # 心跳包保证连接不被反代关闭，同时规避缓存
+                yield ": heartbeat\n\n"
                 time.sleep(0.5)
         except GeneratorExit:
             pass
-    return Response(stream_with_context(gen()), mimetype='text/event-stream')
+
+    res = Response(stream_with_context(gen(client_last_id)), mimetype='text/event-stream')
+    res.headers['Cache-Control'] = 'no-cache, no-transform'
+    res.headers['X-Accel-Buffering'] = 'no'
+    res.headers['Connection'] = 'keep-alive'
+    res.headers['Content-Type'] = 'text/event-stream'
+    return res
+
+@app.route('/api/logs/poll')
+def api_logs_poll():
+    last_id_param = request.args.get('last_id', '0')
+    try:
+        client_last_id = int(last_id_param)
+    except (ValueError, TypeError):
+        client_last_id = 0
+    new_entries = []
+    max_id = client_last_id
+    with logs_lock:
+        for item in log_history:
+            if item['id'] > client_last_id:
+                new_entries.append(item)
+                if item['id'] > max_id:
+                    max_id = item['id']
+    return json.dumps({"logs": new_entries, "last_id": max_id})
 
 @app.route('/api/acme_accounts')
 def api_acme_accounts():
@@ -755,15 +901,26 @@ def api_dns_accounts():
 
 @app.route('/api/create', methods=['POST'])
 def api_create():
-    with logs_lock:
-        current_logs[:] = []
+    clear_logs()
     domain = request.form.get('domain', '').strip().lower()
     port = request.form.get('port', '').strip()
+    target_type = request.form.get('target_type', 'local').strip()
+    target_host = request.form.get('target_host', '').strip()
+    
+    if target_type == 'custom':
+        if not target_host:
+            return json.dumps({"success": False, "error": "自定义模式下目标主机/IP必填"})
+        # 清理用户误输入的 http:// 或 https://
+        target_host = re.sub(r'^https?://', '', target_host).rstrip('/')
+    else:
+        target_host = '127.0.0.1'
     
     if not domain or not port:
         return json.dumps({"success": False, "error": "域名和端口必填"})
-    try: port = int(port)
-    except: return json.dumps({"success": False, "error": "端口必须是数字"})
+    try:
+        port = int(port)
+    except Exception:
+        return json.dumps({"success": False, "error": "端口必须是数字"})
     
     data = load_data()
     if domain in data:
@@ -772,29 +929,28 @@ def api_create():
     client_id = domain.replace(".", "-")
     client_secret = generate_secret(32)
     
-    log("开始配置 {}...".format(domain))
+    log(f"开始配置 {domain} (目标地址: {target_host}:{port})...")
     
     used = get_used_ports()
-    log("已用端口: {}".format(list(used)))
+    log(f"已用端口: {list(used)}")
     
     oauth_port = 4180
-    while oauth_port in used: oauth_port += 1
-    log("分配端口: {}".format(oauth_port))
+    while oauth_port in used:
+        oauth_port += 1
+    log(f"分配 OAuth 端口: {oauth_port}")
     
     ok, err = create_keycloak_client(domain, client_id, client_secret)
     if not ok:
-        return json.dumps({"success": False, "error": "Keycloak: {}".format(err)})
+        return json.dumps({"success": False, "error": f"Keycloak: {err}"})
     
     ok, cid, csecret, err = create_oauth2_container(domain, oauth_port, client_id, client_secret)
     if not ok:
         delete_keycloak_client(client_id)
         return json.dumps({"success": False, "error": err})
     
-    conf = create_nginx_auth(domain, oauth_port, port)
+    conf = create_nginx_auth(domain, oauth_port, target_host, port)
     if not conf:
-        log("Nginx 配置失败，请手动添加")
-    
-    log("完成!")
+        log("Nginx 配置失败，请手动检查")
     
     fresh_data = load_data()
     fresh_data[domain] = {
@@ -802,6 +958,7 @@ def api_create():
         'client_secret': client_secret, 
         'cookie_secret': csecret, 
         'oauth_port': oauth_port,
+        'target_host': target_host,
         'target_port': port,
         'container_name': cid, 
         'nginx_config': conf, 
@@ -811,139 +968,52 @@ def api_create():
         'auth_enabled': True
     }
     save_data(fresh_data)
-    return json.dumps({"success": True})
+    
+    # 检查是否勾选了同时申请 SSL 证书
+    apply_ssl = request.form.get('apply_ssl', 'false').lower() in ['true', '1', 'on']
+    if apply_ssl:
+        acme_id = request.form.get('acme_id')
+        dns_id = request.form.get('dns_id')
+        log("----------------------------------------")
+        log(f"检测到勾选申请证书，正在为 {domain} 申请 SSL 证书...")
+        ssl_ok, ssl_err = do_apply_ssl(domain, acme_id, dns_id)
+        if ssl_ok:
+            log("🎉 认证配置与 SSL 证书申请已全部成功就绪！")
+        else:
+            log(f"⚠️ 认证配置已完成，但 SSL 申请未完成: {ssl_err}")
+            log("您可以在后续前往“证书申请”页面重新提交申请。")
+    else:
+        log("🎉 认证配置完成!")
+        
+    return json.dumps({"success": True, "ssl_applied": apply_ssl})
 
 @app.route('/api/apply_ssl', methods=['POST'])
 def api_apply_ssl():
-    with logs_lock:
-        current_logs[:] = []
+    clear_logs()
     domain = request.form.get('domain', '').strip().lower()
     acme_id = request.form.get('acme_id')
     dns_id = request.form.get('dns_id')
     
-    if not domain or not acme_id:
-        return json.dumps({"success": False, "error": "参数不足"})
-        
-    log(f"开始为 {domain} 申请 SSL 证书...")
-    
-    ssl_payload = {
-        "PrimaryDomain": domain,
-        "Provider": "dnsAccount" if dns_id else "http",
-        "AcmeAccountID": int(acme_id),
-        "AutoRenew": True,
-        "Description": "Auto SSL by KAM",
-        "Apply": True,
-        "KeyType": "P256",
-    }
-    if dns_id:
-        ssl_payload["DNSAccountID"] = int(dns_id)
-    
-    log("正在向 1Panel 提交 SSL 申请...")
-    ssl_res = call_1panel_api("/api/v2/websites/ssl", "POST", ssl_payload)
-    if ssl_res and ssl_res.get("code") == 200:
-        ssl_id = ssl_res["data"]["id"]
-        log(f"申请已提交，等待证书签发中 (此过程可能需要 1-3 分钟)...")
-        # 轮询等待 SSL 就绪
-        ssl_ready = False
-        last_log_size = 0
-        log_file = None
-        
-        def read_1panel_log(current_last_size, current_log_file):
-            try:
-                import glob
-                if not current_log_file:
-                    possible_logs = glob.glob(f"/opt/1panel/log/ssl/*{domain}-ssl-{ssl_id}.log")
-                    if not possible_logs:
-                        possible_logs = glob.glob(f"/opt/1panel/log/ssl/{domain}-ssl-{ssl_id}.log")
-                    if possible_logs:
-                        current_log_file = possible_logs[0]
-                
-                if current_log_file and os.path.exists(current_log_file):
-                    with open(current_log_file, 'r', encoding='utf-8') as f:
-                        f.seek(current_last_size)
-                        new_content = f.read()
-                        if new_content:
-                            for line in new_content.strip().split('\n'):
-                                if line:
-                                    log(f"[1Panel SSL] {line}")
-                        current_last_size = f.tell()
-            except Exception as e:
-                log(f"[Debug] 读取日志异常: {str(e)}")
-            return current_last_size, current_log_file
-        
-        for _ in range(36): # wait up to 3 minutes
-            time.sleep(5)
-            
-            # 尝试寻找并读取1Panel的SSL申请日志并输出
-            last_log_size, log_file = read_1panel_log(last_log_size, log_file)
-
-            # 使用 pageSize=100 并且不依赖接口内置 of domain 过滤参数以防由于过滤失效被分页吞掉
-            search_res = call_1panel_api("/api/v2/websites/ssl/search", "POST", {"Page": 1, "PageSize": 100})
-            if search_res and search_res.get("code") == 200 and search_res.get("data") and search_res["data"]["items"]:
-                item = next((x for x in search_res["data"]["items"] if x["id"] == ssl_id), None)
-                if item:
-                    status = item.get("status", "")
-                    if status in ["Ready", "Success", "Issued", "ready", "success", "issued"]:
-                        ssl_ready = True
-                        last_log_size, log_file = read_1panel_log(last_log_size, log_file)
-                        log("证书签发成功！")
-                        break
-                    elif "Error" in status or "Failed" in status or "error" in status.lower() or "fail" in status.lower():
-                        err_msg = item.get('message', status)
-                        last_log_size, log_file = read_1panel_log(last_log_size, log_file)
-                        log(f"证书申请失败: {err_msg}")
-                        # 让前端有时间拉取最后一条SSE日志
-                        time.sleep(2)
-                        return json.dumps({"success": False, "error": f"1Panel API返回失败状态: {err_msg}"})
-        
-        if ssl_ready:
-            log("正在将证书绑定到网站并开启 HTTPS...")
-            ws_res = call_1panel_api("/api/v2/websites/search", "POST", {"Page": 1, "PageSize": 10, "Info": domain, "OrderBy": "created_at", "Order": "null"})
-            if ws_res and ws_res.get("code") == 200 and ws_res.get("data") and ws_res["data"]["items"]:
-                ws_item = next((x for x in ws_res["data"]["items"] if x.get("primaryDomain") == domain or domain in x.get("domains", [])), None)
-                if ws_item:
-                    ws_id = ws_item["id"]
-                    https_payload = {
-                        "WebsiteID": ws_id,
-                        "Enable": True,
-                        "WebsiteSSLID": ssl_id,
-                        "Type": "existed",
-                        "HttpConfig": "HTTPToHTTPS",
-                        "HttpsPorts": [443]
-                    }
-                    call_1panel_api(f"/api/v2/websites/{ws_id}/https", "POST", https_payload)
-                    log("HTTPS 绑定成功，网站配置已重载！")
-                    log("全部完成!")
-                    
-                    # 同步将本地 ssl_enabled 状态设为 True
-                    fresh_data = load_data()
-                    if domain in fresh_data:
-                        fresh_data[domain]['ssl_enabled'] = True
-                        save_data(fresh_data)
-                        
-                    return json.dumps({"success": True})
-            log(f"绑定失败：未能找到对应的反代网站信息。API 响应: {ws_res}")
-            return json.dumps({"success": False, "error": "未找到对应的反代网站信息"})
+    ssl_ok, ssl_err = do_apply_ssl(domain, acme_id, dns_id)
+    if ssl_ok:
+        log("全部完成!")
+        return json.dumps({"success": True})
     else:
-        err_msg = f"提交 SSL 申请失败: {ssl_res.get('message', '未知错误') if ssl_res else '无响应'}"
-        log(err_msg)
-        return json.dumps({"success": False, "error": err_msg})
-        
-    return json.dumps({"success": False, "error": "证书申请超过3分钟超时，请去1Panel后台查看详情"})
+        return json.dumps({"success": False, "error": ssl_err})
 
 @app.route('/detail/<domain>')
 def detail(domain):
     domain = domain.strip().lower()
     data = load_data()
-    if domain not in data: return redirect(url_for('index'))
+    if domain not in data:
+        return redirect(url_for('index'))
     auth = data[domain]
     
-    # 实时从 1Panel 查询此站点的 HTTPS 开启状态，修复：加入 OrderBy 和 Order 必填字段支持 API 成功拉取
+    # 实时从 1Panel 查询此站点的 HTTPS 开启状态
     ws_res = call_1panel_api("/api/v2/websites/search", "POST", {"Page": 1, "PageSize": 10, "Info": domain, "OrderBy": "created_at", "Order": "null"})
     if ws_res and ws_res.get("code") == 200 and ws_res.get("data") and ws_res["data"]["items"]:
         ws_item = next((x for x in ws_res["data"]["items"] if x.get("primaryDomain") == domain or domain in x.get("domains", [])), None)
         if ws_item:
-            # 1Panel 启用了 HTTPS 时，protocol 为 "HTTPS"
             real_ssl_state = ws_item.get("protocol", "").upper() == "HTTPS"
             if auth.get('ssl_enabled') != real_ssl_state:
                 auth['ssl_enabled'] = real_ssl_state
@@ -1001,39 +1071,37 @@ def api_toggle(domain, feature):
         
     auth = data[domain]
     
+    if 'target_host' not in auth: auth['target_host'] = '127.0.0.1'
     if 'proxy_enabled' not in auth: auth['proxy_enabled'] = True
     if 'ssl_enabled' not in auth: auth['ssl_enabled'] = False
     if 'auth_enabled' not in auth: auth['auth_enabled'] = True
     
-    # 尝试从现有配置中提取目标端口（优先使用实际配置，以兼容用户在1Panel中的手动修改）
-    target_port = None
+    # 尝试从现有配置中提取目标主机与端口
+    target_host = auth.get('target_host', '127.0.0.1')
+    target_port = auth.get('target_port', 80)
     proxy_conf = get_proxy_conf_path(domain)
     if proxy_conf:
         try:
             with open(proxy_conf, 'r') as f:
                 content = f.read()
-            matches = re.findall(r'proxy_pass http://127\.0\.0\.1:([0-9]+)', content)
+            # 提取 proxy_pass http://host:port;
+            matches = re.findall(r'proxy_pass http://([^:/;\s]+):([0-9]+);', content)
             if matches:
-                oauth_port = auth.get('oauth_port', 4180)
-                for m in matches:
-                    if int(m) != int(oauth_port):
-                        target_port = int(m)
+                oauth_port = str(auth.get('oauth_port', 4180))
+                for h, p in matches:
+                    if p != oauth_port:
+                        target_host = h
+                        target_port = int(p)
                         break
-                else:
-                    target_port = int(matches[-1])
         except Exception as e:
-            log(f"提取原目标端口失败: {e}")
+            log(f"提取原目标地址失败: {e}")
             
-    # 如果提取失败（例如反代被关闭没有 proxy_pass），则使用缓存的数据
-    if not target_port:
-        target_port = auth.get('target_port', 80)
-        
-    # 保存最新正确的端口
+    auth['target_host'] = target_host
     auth['target_port'] = target_port
             
     if feature == 'proxy':
         auth['proxy_enabled'] = enabled
-        new_conf = update_nginx_config(domain, auth['oauth_port'], target_port, auth['auth_enabled'], enabled)
+        new_conf = update_nginx_config(domain, auth['oauth_port'], target_host, target_port, auth['auth_enabled'], enabled)
         if new_conf:
             auth['nginx_config'] = new_conf
             save_data(data)
@@ -1042,7 +1110,7 @@ def api_toggle(domain, feature):
         
     elif feature == 'auth':
         auth['auth_enabled'] = enabled
-        new_conf = update_nginx_config(domain, auth['oauth_port'], target_port, enabled, auth['proxy_enabled'])
+        new_conf = update_nginx_config(domain, auth['oauth_port'], target_host, target_port, enabled, auth['proxy_enabled'])
         if new_conf:
             auth['nginx_config'] = new_conf
             save_data(data)
@@ -1068,7 +1136,5 @@ def ssl_page():
     return render_template('ssl.html')
 
 if __name__ == '__main__':
-    # 修复：生产环境禁用 debug 模式（debug=True 会暴露交互式调试器，存在严重安全风险）
-    # 如需开启调试，请设置环境变量 FLASK_DEBUG=1
     debug_mode = os.environ.get('FLASK_DEBUG', '0') == '1'
     app.run(host='0.0.0.0', port=WEB_PORT, debug=debug_mode, threaded=True)
