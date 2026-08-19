@@ -185,6 +185,26 @@ def load_data():
                     # 默认状态注入与向前兼容
                     if 'target_host' not in auth:
                         auth['target_host'] = '127.0.0.1'
+                    if 'target_port' not in auth:
+                        t_port = auth.get('port')
+                        if not t_port:
+                            proxy_conf = get_proxy_conf_path(domain)
+                            if proxy_conf and os.path.exists(proxy_conf):
+                                try:
+                                    with open(proxy_conf, 'r') as pf:
+                                        content = pf.read()
+                                    oauth_port = str(auth.get('oauth_port', 4180))
+                                    matches = re.findall(r'proxy_pass http://([^:/;\s]+):([0-9]+);', content)
+                                    for h, p in matches:
+                                        if p != oauth_port:
+                                            auth['target_host'] = h
+                                            t_port = int(p)
+                                            break
+                                except Exception:
+                                    pass
+                        auth['target_port'] = t_port or 80
+                        changed = True
+
                     if 'proxy_enabled' not in auth:
                         auth['proxy_enabled'] = True
                     if 'auth_enabled' not in auth:
@@ -195,6 +215,8 @@ def load_data():
                     if auth.get('ssl_enabled') != real_ssl:
                         auth['ssl_enabled'] = real_ssl
                         changed = True
+            if changed:
+                save_data(data)
             return data
         except Exception as e:
             print("加载数据失败:", str(e))

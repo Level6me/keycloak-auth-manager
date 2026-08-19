@@ -207,8 +207,17 @@ function renderDomainsUI(auths) {
     }
 
     if (cardGrid) {
-        cardGrid.innerHTML = domainList.map(([domain, auth]) => `
-            <div class="domain-card" data-domain="${domain}" data-target="${auth.target_host || '127.0.0.1'}:${auth.target_port}" data-port="${auth.oauth_port}">
+        cardGrid.innerHTML = domainList.map(([domain, auth]) => {
+            const targetHost = auth.target_host || '127.0.0.1';
+            const targetPort = auth.target_port || auth.port || 80;
+            const targetStr = `${targetHost}:${targetPort}`;
+
+            const proxyBadge = auth.proxy_enabled ? '<span class="badge success">🔄 反代已开</span>' : '';
+            const sslBadge = auth.ssl_enabled ? '<span class="badge success">🔒 SSL已开</span>' : '';
+            const authBadge = auth.auth_enabled ? '<span class="badge accent">🛡️ 认证已开</span>' : '';
+
+            return `
+            <div class="domain-card" data-domain="${domain}" data-target="${targetStr}" data-port="${auth.oauth_port}">
                 <div>
                     <div class="domain-card-header">
                         <div>
@@ -218,7 +227,7 @@ function renderDomainsUI(auths) {
                             </span>
                             <div class="domain-target">
                                 <span>🎯 目标:</span>
-                                <code style="background: var(--card-sec); padding: 2px 6px; border-radius: 6px; border: 1px solid var(--border-subtle);">${auth.target_host || '127.0.0.1'}:${auth.target_port}</code>
+                                <code style="background: var(--card-sec); padding: 2px 6px; border-radius: 6px; border: 1px solid var(--border-subtle);">${targetStr}</code>
                             </div>
                         </div>
                         <span class="badge secondary" style="font-family: monospace;">:${auth.oauth_port}</span>
@@ -226,9 +235,9 @@ function renderDomainsUI(auths) {
 
                     <div style="display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 8px; margin-top: 8px;">
                         <div class="badges-wrap" style="margin: 0;">
-                            <span class="badge ${auth.proxy_enabled ? 'success' : 'secondary'}">🔄 反代${auth.proxy_enabled ? '已开' : '已关'}</span>
-                            <span class="badge ${auth.ssl_enabled ? 'success' : 'warning'}">${auth.ssl_enabled ? '🔒 SSL已开' : '⚠️ 无SSL'}</span>
-                            <span class="badge ${auth.auth_enabled ? 'accent' : 'secondary'}">🛡️ 认证${auth.auth_enabled ? '已开' : '已关'}</span>
+                            ${proxyBadge}
+                            ${sslBadge}
+                            ${authBadge}
                         </div>
 
                         <div style="display: inline-flex; align-items: center; gap: 6px; margin-left: auto;">
@@ -238,12 +247,22 @@ function renderDomainsUI(auths) {
                     </div>
                 </div>
             </div>
-        `).join('');
+            `;
+        }).join('');
     }
 
     if (tableBody) {
-        tableBody.innerHTML = domainList.map(([domain, auth]) => `
-            <tr data-domain="${domain}" data-target="${auth.target_host || '127.0.0.1'}:${auth.target_port}" data-port="${auth.oauth_port}">
+        tableBody.innerHTML = domainList.map(([domain, auth]) => {
+            const targetHost = auth.target_host || '127.0.0.1';
+            const targetPort = auth.target_port || auth.port || 80;
+            const targetStr = `${targetHost}:${targetPort}`;
+
+            const proxyBadge = auth.proxy_enabled ? '<span class="badge success">🔄 反代</span>' : '';
+            const sslBadge = auth.ssl_enabled ? '<span class="badge success">🔒 SSL</span>' : '';
+            const authBadge = auth.auth_enabled ? '<span class="badge accent">🛡️ 认证</span>' : '';
+
+            return `
+            <tr data-domain="${domain}" data-target="${targetStr}" data-port="${auth.oauth_port}">
                 <td>
                     <span onclick="openDomainDetail('${domain}')" style="font-weight: 700; color: var(--text); cursor: pointer; display: flex; align-items: center; gap: 6px;">
                         <span class="status-dot ${!auth.proxy_enabled ? 'offline' : ''}"></span>
@@ -252,12 +271,12 @@ function renderDomainsUI(auths) {
                 </td>
                 <td>
                     <div class="badges-wrap">
-                        <span class="badge ${auth.proxy_enabled ? 'success' : 'secondary'}">🔄 反代${auth.proxy_enabled ? '' : '关'}</span>
-                        <span class="badge ${auth.ssl_enabled ? 'success' : 'warning'}">${auth.ssl_enabled ? '🔒 SSL' : '⚠️ 无SSL'}</span>
-                        <span class="badge ${auth.auth_enabled ? 'accent' : 'secondary'}">🛡️ 认证${auth.auth_enabled ? '' : '关'}</span>
+                        ${proxyBadge}
+                        ${sslBadge}
+                        ${authBadge}
                     </div>
                 </td>
-                <td><code>${auth.target_host || '127.0.0.1'}:${auth.target_port}</code></td>
+                <td><code>${targetStr}</code></td>
                 <td><span class="badge secondary">${auth.oauth_port}</span></td>
                 <td style="text-align: right;">
                     <div style="display: inline-flex; gap: 6px;">
@@ -266,7 +285,8 @@ function renderDomainsUI(auths) {
                     </div>
                 </td>
             </tr>
-        `).join('');
+            `;
+        }).join('');
     }
 }
 
@@ -282,8 +302,10 @@ function openDomainDetail(domain) {
     currentDetailDomain = domain;
 
     // 填充详情模态窗内容
+    const targetHost = auth.target_host || '127.0.0.1';
+    const targetPort = auth.target_port || auth.port || 80;
     document.getElementById('modalDomainTitle').textContent = domain;
-    document.getElementById('modalTargetHost').textContent = `${auth.target_host || '127.0.0.1'}:${auth.target_port}`;
+    document.getElementById('modalTargetHost').textContent = `${targetHost}:${targetPort}`;
     document.getElementById('modalClientId').textContent = auth.client_id || '';
     document.getElementById('modalClientSecret').textContent = auth.client_secret || '';
     document.getElementById('modalCookieSecret').textContent = auth.cookie_secret || '';
