@@ -399,11 +399,19 @@ elif command -v apt-get >/dev/null 2>&1; then
 fi
 
 # 2. pip 安装 / 补齐
+python3 -m pip install --upgrade pip -q 2>/dev/null || pip3 install --upgrade pip -q 2>/dev/null || true
+
 pip3 install flask "$CRYPTO_PKG" requests -q 2>/dev/null || \
 pip install flask "$CRYPTO_PKG" requests -q 2>/dev/null || \
 pip3 install flask "$CRYPTO_PKG" requests --break-system-packages -q 2>/dev/null || \
 python3 -m pip install flask "$CRYPTO_PKG" requests -q 2>/dev/null || \
 pip3 install flask requests -q 2>/dev/null || true
+
+# 安全安装 cryptography：若最新版需要 Rust 编译环境失败，则自动回退至免 Rust 版本的 <=3.3.2
+if ! python3 -c "import cryptography" 2>/dev/null; then
+    pip3 install "cryptography<=3.3.2" -q 2>/dev/null || \
+    pip install "cryptography<=3.3.2" -q 2>/dev/null || true
+fi
 
 # 3. 校验核心依赖 (flask 与 requests 必须具备)
 if python3 -c "import flask, requests" 2>/dev/null; then

@@ -122,6 +122,15 @@ echo "    ✓ 所有历史配置与站点数据校验完毕，完整无损"
 
 # 6. 检查并增量更新 Python 依赖
 echo "[5/6] 检查 Python 运行依赖库..."
+# 优先尝试系统包管理器安装系统级已编译依赖（免 Rust 编译）
+if command -v yum >/dev/null 2>&1; then
+    yum install -y -q epel-release 2>/dev/null || true
+    yum install -y -q python3-pip python3-flask python3-cryptography python3-requests 2>/dev/null || true
+elif command -v apt-get >/dev/null 2>&1; then
+    export DEBIAN_FRONTEND=noninteractive
+    apt-get install -y -q python3-pip python3-flask python3-cryptography python3-requests 2>/dev/null || true
+fi
+
 PIP_CMD=""
 if command -v pip3 >/dev/null 2>&1; then
     PIP_CMD="pip3"
@@ -130,19 +139,51 @@ elif command -v pip >/dev/null 2>&1; then
 fi
 
 if [ -n "$PIP_CMD" ]; then
-    $PIP_CMD install --upgrade --break-system-packages flask cryptography requests 2>/dev/null || \
-    $PIP_CMD install --upgrade flask cryptography requests 2>/dev/null || true
+    # 尝试升级 pip 以支持现代 manylinux wheel
+    $PIP_CMD install --upgrade pip -q 2>/dev/null || true
+    
+    # 安装核心 Web 与网络依赖
+    $PIP_CMD install --upgrade --break-system-packages flask requests -q 2>/dev/null || \
+    $PIP_CMD install --upgrade flask requests -q 2>/dev/null || \
+    $PIP_CMD install flask requests -q 2>/dev/null || true
+
+    # 安全安装 cryptography：若最新版需要 Rust 编译环境失败，则自动回退至免 Rust 版本的 <=3.3.2
+    if ! python3 -c "import cryptography" 2>/dev/null; then
+        $PIP_CMD install cryptography -q 2>/dev/null || \
+        $PIP_CMD install "cryptography<=3.3.2" -q 2>/dev/null || true
+    fi
     echo "    ✓ Python 依赖库检查完成"
 fi
 
 # 7. 重启 systemd 服务并验证
 echo "[6/6] 正在平滑重启服务..."
-systemctl daemon-reload
-if systemctl is-enabled --quiet $SERVICE_NAME 2>/dev/null; then
-    systemctl restart $SERVICE_NAME
-else
-    systemctl enable --now $SERVICE_NAME
+# 自动检测并修复缺失的 systemd 服务单元
+if [ ! -f "/etc/systemd/system/$SERVICE_NAME.service" ]; then
+    echo "    ! 未检测到 systemd 服务文件，正在自动创建修复..."
+    PYTHON_BIN=$(command -v python3 2>/dev/null || echo "/usr/bin/python3")
+    cat > "/etc/systemd/system/$SERVICE_NAME.service" << SERVICE
+[Unit]
+Description=Keycloak Auth Manager Web Console
+After=network.target docker.service
+Wants=docker.service
+
+[Service]
+Type=simple
+User=root
+WorkingDirectory=$INSTALL_DIR
+ExecStart=$PYTHON_BIN $INSTALL_DIR/app.py
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
+SERVICE
+    chmod 644 "/etc/systemd/system/$SERVICE_NAME.service" 2>/dev/null || true
 fi
+
+systemctl daemon-reload
+systemctl enable $SERVICE_NAME 2>/dev/null || true
+systemctl restart $SERVICE_NAME
 
 sleep 2
 
