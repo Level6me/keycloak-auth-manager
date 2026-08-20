@@ -162,6 +162,24 @@ fi
 
 # 7. 重启 systemd 服务并验证
 echo "[6/6] 正在平滑重启服务..."
+# 读取配置中的 Web 端口
+WEB_PORT=8088
+if [ -f "$INSTALL_DIR/config.json" ]; then
+    CFG_PORT=$(grep -o '"web_port"[[:space:]]*:[[:space:]]*[0-9]*' "$INSTALL_DIR/config.json" | grep -o '[0-9]*' || echo "")
+    if [ -n "$CFG_PORT" ]; then
+        WEB_PORT="$CFG_PORT"
+    fi
+fi
+
+# 停止旧服务并清理可能占用端口的残留 Python 孤儿进程
+systemctl stop $SERVICE_NAME 2>/dev/null || true
+pkill -9 -f "python.*${INSTALL_DIR}/app.py" 2>/dev/null || true
+if command -v fuser >/dev/null 2>&1; then
+    fuser -k "${WEB_PORT}/tcp" 2>/dev/null || true
+elif command -v lsof >/dev/null 2>&1; then
+    lsof -ti :${WEB_PORT} | xargs kill -9 2>/dev/null || true
+fi
+
 # 自动检测并修复缺失的 systemd 服务单元
 if [ ! -f "/etc/systemd/system/$SERVICE_NAME.service" ]; then
     echo "    ! 未检测到 systemd 服务文件，正在自动创建修复..."
@@ -199,15 +217,6 @@ else
     echo "    ⚠️ 服务重启异常，正在尝试读取错误日志..."
     journalctl -u $SERVICE_NAME -n 15 --no-pager
     exit 1
-fi
-
-# 读取配置中的 Web 端口
-WEB_PORT=8000
-if [ -f "$INSTALL_DIR/config.json" ]; then
-    CFG_PORT=$(grep -o '"web_port"[[:space:]]*:[[:space:]]*[0-9]*' "$INSTALL_DIR/config.json" | grep -o '[0-9]*' || echo "")
-    if [ -n "$CFG_PORT" ]; then
-        WEB_PORT="$CFG_PORT"
-    fi
 fi
 
 PUBLIC_IP=$(curl -s --connect-timeout 3 ifconfig.me || curl -s --connect-timeout 3 icanhazip.com || echo "127.0.0.1")
