@@ -651,6 +651,12 @@ def delete_keycloak_client(client_id):
     else:
         log("未找到对应的 Client UUID，跳过删除")
 
+def stop_oauth2_container(container_name):
+    if not container_name:
+        return
+    log(f"停止并强制销毁容器: {container_name}")
+    run_cmd_args(["docker", "rm", "-f", container_name])
+
 def create_oauth2_container(domain, oauth_port, client_id, client_secret):
     container_name = "oauth2-" + domain.replace(".", "-")
     cookie_secret = generate_secret(32)
@@ -1454,36 +1460,73 @@ def detail(domain):
     auth['status'] = out.strip() or "未运行"
     return render_template('detail.html', domain=domain, auth=auth)
 
+def async_cleanup_domain_resources(client_id, container_name, domain):
+    """在后台线程中异步彻底清理 Keycloak Client 与 1Panel 站点，避免阻塞 Web 响应导致超时"""
+    if container_name:
+        try:
+            stop_oauth2_container(container_name)
+        except Exception as e:
+            log(f"[后台释放] 删除容器 {container_name} 异常: {e}")
+            
+    if client_id:
+        try:
+            delete_keycloak_client(client_id)
+        except Exception as e:
+            log(f"[后台释放] 删除 Keycloak Client {client_id} 异常: {e}")
+            
+    if domain:
+        try:
+            delete_1panel_website(domain)
+        except Exception as e:
+            log(f"[后台释放] 删除 1Panel 网站 {domain} 异常: {e}")
+            
+    log(f"[后台释放] 域名 {domain} 的底层关联资源已全部销毁清理完成")
+
 @app.route('/delete/<domain>', methods=['POST'])
 def delete(domain):
     domain = domain.strip().lower()
     log(f"收到删除请求，domain: '{domain}'")
     data = load_data()
-    if domain not in data: 
-        log("域名不在数据中，直接返回")
-        return redirect(url_for('index'))
-    auth = data[domain]
-    try:
-        delete_keycloak_client(auth['client_id'])
-    except Exception as e:
-        log(f"删除 keycloak client 异常: {e}")
-    try:
-        stop_oauth2_container(auth['container_name'])
-    except Exception as e:
-        log(f"停止容器异常: {e}")
-        
-    try:
-        delete_1panel_website(domain)
-    except Exception as e:
-        log(f"删除 1Panel 网站异常: {e}")
     
-    fresh_data = load_data()
-    if domain in fresh_data:
-        del fresh_data[domain]
-        save_data(fresh_data)
+    is_ajax = (
+        request.headers.get('X-Requested-With') == 'XMLHttpRequest' or
+        'application/json' in request.headers.get('Accept', '') or
+        request.is_json
+    )
+    
+    if domain not in data: 
+        log(f"域名 {domain} 不在数据中，直接返回成功")
+        if is_ajax:
+            return jsonify({"success": True, "msg": f"域名 {domain} 已被移除"})
+        return redirect(url_for('index'))
         
-    log("删除并保存成功")
-    flash('已删除', 'success')
+    auth = data[domain]
+    client_id = auth.get('client_id')
+    container_name = auth.get('container_name') or f"oauth2-{domain.replace('.', '-')}"
+    
+    # 1. 优先立即从持久化数据中移除并保存，确保状态即刻生效
+    del data[domain]
+    save_data(data)
+    log(f"域名 {domain} 已立即从配置文件中移除保存")
+    
+    # 2. 立即极速停止本地 Docker 容器 (通常 < 0.2 秒)
+    try:
+        stop_oauth2_container(container_name)
+    except Exception as e:
+        log(f"快速停止容器异常: {e}")
+        
+    # 3. 异步启动后台线程清理耗时的 Keycloak 和 1Panel 站点（耗时 10-20 秒，不阻塞用户界面）
+    threading.Thread(
+        target=async_cleanup_domain_resources,
+        args=(client_id, container_name, domain),
+        daemon=True
+    ).start()
+    
+    log(f"域名 {domain} 删除请求处理完毕，立即响应前端")
+    if is_ajax:
+        return jsonify({"success": True, "msg": f"已成功删除域名 {domain} 及所有关联配置"})
+        
+    flash('已成功删除域名及关联配置', 'success')
     return redirect(url_for('index'))
 
 @app.route('/api/toggle/<domain>/<feature>', methods=['POST'])
