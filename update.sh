@@ -107,6 +107,11 @@ chmod +x "$INSTALL_DIR/app.py" 2>/dev/null || true
 rm -rf "$TMP_SRC"
 echo "    ✓ 程序核心文件与静态资源已更新"
 
+# 如果当前脚本不是由 reload 拉起的，则立即 exec 替换为最新的 update.sh 执行后续步骤
+if [ "$1" != "--post-update" ]; then
+    exec bash "$INSTALL_DIR/update.sh" --post-update "$BACKUP_DIR"
+fi
+
 # 5. 校验并还原关键配置文件与加密密钥（双重保障）
 echo "[4/6] 校验核心配置与加密密钥完整性..."
 [ -f "$BACKUP_DIR/config.json" ] && cp -f "$BACKUP_DIR/config.json" "$INSTALL_DIR/"
