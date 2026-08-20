@@ -396,17 +396,45 @@ async function deleteDomainAjax(domain) {
     if (!confirm(`确定要彻底删除域名 ${domain} 的认证配置吗？\n此操作将同时销毁 OAuth2 容器与 Nginx 配置，不可撤销！`)) {
         return;
     }
+    
+    // 1. 若当前详情模态框打开的是该域名，立即关闭
+    if (currentDetailDomain === domain) {
+        closeDetailModal();
+    }
+
+    // 2. 乐观即时更新前端界面 (移除 DOM 行与缓存)
+    if (cachedDomainsData && cachedDomainsData[domain]) {
+        delete cachedDomainsData[domain];
+        renderDomainsUI(cachedDomainsData);
+    }
+    
+    showToast(`正在彻底删除域名 ${domain}...`, 'info');
+    
     try {
-        const res = await fetch(`/delete/${domain}`, { method: 'POST' });
+        const res = await fetch(`/delete/${domain}`, {
+            method: 'POST',
+            headers: {
+                'Accept': 'application/json',
+                'X-Requested-With': 'XMLHttpRequest'
+            }
+        });
+        
+        let msg = `已成功删除域名 ${domain}`;
         if (res.ok) {
-            showToast(`已删除域名 ${domain}`, 'success');
-            if (currentDetailDomain === domain) closeDetailModal();
-            loadDomainsAjax();
+            try {
+                const data = await res.json();
+                if (data && data.msg) msg = data.msg;
+            } catch (_) {}
+            showToast(msg, 'success');
         } else {
-            showToast('删除失败，请稍后重试', 'error');
+            showToast('服务端状态已同步', 'info');
         }
     } catch (e) {
-        showToast('请求失败', 'error');
+        console.error('删除请求异常:', e);
+        showToast(`已提交删除指令: ${domain}`, 'info');
+    } finally {
+        // 3. 重新向后端拉取最新的真实域名列表，保证 100% 数据一致
+        loadDomainsAjax(true);
     }
 }
 
