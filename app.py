@@ -1104,21 +1104,30 @@ def delete_1panel_website(domain):
     return False
 
 def do_apply_ssl(domain, acme_id, dns_id=None):
-    if not domain or not acme_id:
-        return False, "域名或 ACME 账户参数不足"
+    if not domain:
+        return False, "域名参数缺失"
         
+    # 若未指定 acme_id，自动从 1Panel 查询默认 ACME 账户
+    if not acme_id:
+        acme_res = call_1panel_api("/api/v1/websites/acme/search", "POST", {"page": 1, "pageSize": 10, "orderBy": "created_at", "order": "null"})
+        if acme_res and acme_res.get("code") == 200 and acme_res.get("data") and acme_res["data"].get("items"):
+            acme_id = acme_res["data"]["items"][0]["id"]
+            
+    if not acme_id:
+        return False, "未在 1Panel 中找到可用的 ACME 账户 (请先在 1Panel -> 证书 中添加 ACME 账户)"
+
     log(f"开始为 {domain} 申请 SSL 证书...")
     ssl_payload = {
         "primaryDomain": domain,
         "provider": "dnsAccount" if dns_id else "http",
-        "acmeAccountID": int(acme_id),
+        "acmeAccountId": int(acme_id),
         "autoRenew": True,
         "description": "Auto SSL by KAM",
         "apply": True,
-        "keyType": "P256",
+        "keyType": "2048",
     }
     if dns_id:
-        ssl_payload["dnsAccountID"] = int(dns_id)
+        ssl_payload["dnsAccountId"] = int(dns_id)
     
     log("正在向 1Panel 提交 SSL 申请...")
     ssl_res = call_1panel_api("/api/v1/websites/ssl", "POST", ssl_payload)
@@ -1403,14 +1412,15 @@ def api_logs_poll():
 
 @app.route('/api/acme_accounts')
 def api_acme_accounts():
-    res = call_1panel_api("/api/v1/websites/ca/search", "POST", {"page":1, "pageSize":100, "orderBy":"created_at", "order":"null"})
+    res = call_1panel_api("/api/v1/websites/acme/search", "POST", {"page": 1, "pageSize": 100, "orderBy": "created_at", "order": "null"})
     if not res or res.get("code") != 200:
-        res = call_1panel_api("/api/v1/websites/acme/search", "POST", {"page":1, "pageSize":100, "orderBy":"created_at", "order":"null"})
+        res = call_1panel_api("/api/v1/websites/ca/search", "POST", {"page": 1, "pageSize": 100, "orderBy": "created_at", "order": "null"})
     accounts = []
     if res and res.get("code") == 200 and res.get("data") and res["data"].get("items"):
         for item in res["data"]["items"]:
-            email = item.get("acmeAccount", {}).get("email") or item.get("email") or f"{item.get('ca', 'ACME')} (#{item.get('id')})"
-            accounts.append({"id": item["id"], "email": email})
+            email = item.get("email") or item.get("acmeAccount", {}).get("email") or f"ACME #{item.get('id')}"
+            acc_type = f" ({item.get('type')})" if item.get('type') else ""
+            accounts.append({"id": item["id"], "email": f"{email}{acc_type}"})
     return json.dumps(accounts)
 
 @app.route('/api/dns_accounts')
