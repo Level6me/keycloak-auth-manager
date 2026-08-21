@@ -507,38 +507,110 @@ def add_or_update_cloudflare_dns(full_domain, server_ip=None, proxied=None):
         log(f"[Cloudflare DNS] API 请求发生异常: {e}")
         return False, str(e)
 
+def get_keycloak_admin_credentials():
+    global KEYCLOAK_ADMIN, KEYCLOAK_PASSWORD, KEYCLOAK_URL, KEYCLOAK_CONTAINER
+    admin_user = KEYCLOAK_ADMIN
+    admin_pass = KEYCLOAK_PASSWORD
+    kc_url = KEYCLOAK_URL
+
+    # 若未在配置中指定账号密码，自动从 Keycloak 容器环境变量中嗅探
+    if not admin_user or not admin_pass:
+        try:
+            rc, out, _ = run_cmd_args(["docker", "inspect", KEYCLOAK_CONTAINER, "--format", "{{range .Config.Env}}{{println .}}{{end}}"])
+            if rc == 0 and out:
+                env_map = {}
+                for line in out.strip().splitlines():
+                    if "=" in line:
+                        k, v = line.split("=", 1)
+                        env_map[k.strip()] = v.strip()
+                if not admin_user:
+                    admin_user = env_map.get("KC_BOOTSTRAP_ADMIN_USERNAME") or env_map.get("KEYCLOAK_ADMIN") or "admin"
+                if not admin_pass:
+                    admin_pass = env_map.get("KC_BOOTSTRAP_ADMIN_PASSWORD") or env_map.get("KEYCLOAK_ADMIN_PASSWORD") or ""
+        except Exception:
+            pass
+
+    # 若 Keycloak 公共 URL 未指定，尝试从已运行的 oauth2 容器中嗅探 Issuer URL
+    if not kc_url:
+        try:
+            rc, out, _ = run_cmd_args(["docker", "ps", "-a", "--filter", "name=oauth2-", "--format", "{{.Names}}"])
+            if rc == 0 and out:
+                for cname in out.strip().splitlines():
+                    cname = cname.strip()
+                    if cname:
+                        rc_i, out_i, _ = run_cmd_args(["docker", "inspect", cname, "--format", "{{range .Config.Env}}{{println .}}{{end}}"])
+                        if rc_i == 0 and out_i:
+                            for line in out_i.splitlines():
+                                if line.startswith("OAUTH2_PROXY_OIDC_ISSUER_URL="):
+                                    iss = line.split("=", 1)[1].strip()
+                                    if "/realms/" in iss:
+                                        kc_url = iss.split("/realms/")[0].rstrip("/")
+                                        break
+                    if kc_url:
+                        break
+        except Exception:
+            pass
+
+    if not kc_url:
+        kc_url = "http://127.0.0.1:8080"
+
+    if not kc_url.startswith("http://") and not kc_url.startswith("https://"):
+        kc_url = "https://" + kc_url
+    kc_url = kc_url.rstrip("/")
+
+    return admin_user or "admin", admin_pass or "", kc_url
+
 def setup_keycloak_passkey_flow():
-    # 获取 Token
-    url = f"{KEYCLOAK_URL}/realms/master/protocol/openid-connect/token"
+    admin_user, admin_pass, kc_base = get_keycloak_admin_credentials()
+    if not admin_pass:
+        return None
+
+    # 获取 Token (优先使用内部直连地址 http://127.0.0.1:8080，如失败再尝试公共 URL)
+    endpoints = ["http://127.0.0.1:8080"]
+    if kc_base not in endpoints:
+        endpoints.append(kc_base)
+
+    token = None
+    active_base = None
+    for base in endpoints:
+        token_url = f"{base}/realms/master/protocol/openid-connect/token"
+        try:
+            res = requests.post(token_url, data={
+                "client_id": "admin-cli",
+                "username": admin_user,
+                "password": admin_pass,
+                "grant_type": "password"
+            }, timeout=6)
+            if res.status_code == 200:
+                token = res.json().get("access_token")
+                if token:
+                    active_base = base
+                    break
+        except Exception:
+            continue
+
+    if not token or not active_base:
+        log("提示: 暂未连接到 Keycloak API (可忽略)，跳过 Passkey 自定义认证流配置")
+        return None
+
     try:
-        res = requests.post(url, data={
-            "client_id": "admin-cli",
-            "username": KEYCLOAK_ADMIN,
-            "password": KEYCLOAK_PASSWORD,
-            "grant_type": "password"
-        }, timeout=10)
-        token = res.json().get("access_token")
-        if not token:
-            log("获取 Keycloak Admin Token 失败，无法配置 Passkey 认证流")
-            return
-            
         headers = {"Authorization": f"Bearer {token}", "Content-Type": "application/json"}
-        base_url = f"{KEYCLOAK_URL}/admin/realms/master/authentication"
+        api_base = f"{active_base}/admin/realms/master/authentication"
         
         # 1. 强制注册时绑定 Passkey
-        req_actions_url = f"{base_url}/required-actions"
-        actions_res = requests.get(req_actions_url, headers=headers)
+        req_actions_url = f"{api_base}/required-actions"
+        actions_res = requests.get(req_actions_url, headers=headers, timeout=6)
         if actions_res.status_code == 200:
             for action in actions_res.json():
                 if action.get("alias") == "webauthn-register-passwordless":
                     action["enabled"] = True
                     action["defaultAction"] = True
-                    requests.put(f"{req_actions_url}/{action['alias']}", headers=headers, json=action)
+                    requests.put(f"{req_actions_url}/{action['alias']}", headers=headers, json=action, timeout=6)
                     log("成功将 WebAuthn Passwordless 设为注册时的默认必填项")
                     break
 
         # 2. 检查或创建专属的 passkey-only-browser 流
-        flows_res = requests.get(f"{base_url}/flows", headers=headers)
+        flows_res = requests.get(f"{api_base}/flows", headers=headers, timeout=6)
         if flows_res.status_code == 200:
             flows = flows_res.json()
             existing_flow = next((f for f in flows if f.get("alias") == "passkey-only-browser"), None)
@@ -546,43 +618,46 @@ def setup_keycloak_passkey_flow():
                 return existing_flow["id"]
                 
         # 创建 Flow
-        res_create = requests.post(f"{base_url}/flows", headers=headers, json={
+        requests.post(f"{api_base}/flows", headers=headers, json={
             "alias": "passkey-only-browser",
             "providerId": "basic-flow",
             "topLevel": True,
             "builtIn": False,
             "description": "Auth manager passkey only flow"
-        })
+        }, timeout=6)
         
         # 获取新创建的 Flow ID
-        flows_res = requests.get(f"{base_url}/flows", headers=headers)
+        flows_res = requests.get(f"{api_base}/flows", headers=headers, timeout=6)
         if flows_res.status_code != 200:
-            log(f"获取 Flow 列表失败: HTTP {flows_res.status_code}")
             return None
         flows = flows_res.json()
         new_flow_id = next((f["id"] for f in flows if f.get("alias") == "passkey-only-browser"), None)
+        if not new_flow_id:
+            return None
         
         # 添加执行器: auth-cookie
-        requests.post(f"{base_url}/flows/passkey-only-browser/executions/execution", headers=headers, json={"provider": "auth-cookie"})
+        requests.post(f"{api_base}/flows/passkey-only-browser/executions/execution", headers=headers, json={"provider": "auth-cookie"}, timeout=6)
         # 添加执行器: webauthn-authenticator-passwordless
-        requests.post(f"{base_url}/flows/passkey-only-browser/executions/execution", headers=headers, json={"provider": "webauthn-authenticator-passwordless"})
+        requests.post(f"{api_base}/flows/passkey-only-browser/executions/execution", headers=headers, json={"provider": "webauthn-authenticator-passwordless"}, timeout=6)
         
-        # 将他们的 requirement 改为 ALTERNATIVE
-        execs_res = requests.get(f"{base_url}/flows/passkey-only-browser/executions", headers=headers)
+        # 将其 requirement 改为 ALTERNATIVE
+        execs_res = requests.get(f"{api_base}/flows/passkey-only-browser/executions", headers=headers, timeout=6)
         if execs_res.status_code == 200:
             for ex in execs_res.json():
                 ex["requirement"] = "ALTERNATIVE"
-                requests.put(f"{base_url}/flows/passkey-only-browser/executions", headers=headers, json=ex)
+                requests.put(f"{api_base}/flows/passkey-only-browser/executions", headers=headers, json=ex, timeout=6)
                 
         log("成功创建 passkey-only-browser 自定义认证流")
         return new_flow_id
         
     except Exception as e:
-        log(f"设置 Passkey 认证流时发生异常: {e}")
+        log(f"设置 Passkey 认证流异常: {e}")
         return None
 
 def create_keycloak_client(domain, client_id, client_secret):
     log("创建 Keycloak Client: {}".format(client_id))
+    
+    admin_user, admin_pass, _ = get_keycloak_admin_credentials()
     
     # 确保 Passkey 配置已就绪并获取 Flow ID
     passkey_flow_id = setup_keycloak_passkey_flow()
@@ -593,8 +668,8 @@ def create_keycloak_client(domain, client_id, client_secret):
         "/opt/keycloak/bin/kcadm.sh", "config", "credentials",
         "--server", "http://localhost:8080",
         "--realm", "master",
-        "--user", KEYCLOAK_ADMIN,
-        "--password", KEYCLOAK_PASSWORD
+        "--user", admin_user,
+        "--password", admin_pass
     ])
     if cred_rc != 0:
         return False, f"Keycloak 登录验证失败: {cred_err.strip()}"
@@ -690,6 +765,8 @@ def create_oauth2_container(domain, oauth_port, client_id, client_secret):
     cookie_secret = generate_secret(32)
     log("创建容器: {} (端口 {})".format(container_name, oauth_port))
     
+    _, _, kc_issuer_base = get_keycloak_admin_credentials()
+    
     run_cmd_args(["docker", "rm", "-f", container_name])
     
     run_args = [
@@ -698,7 +775,7 @@ def create_oauth2_container(domain, oauth_port, client_id, client_secret):
         "--restart", "always",
         "--network", "host",
         "-e", "OAUTH2_PROXY_PROVIDER=oidc",
-        "-e", f"OAUTH2_PROXY_OIDC_ISSUER_URL={KEYCLOAK_URL}/realms/master",
+        "-e", f"OAUTH2_PROXY_OIDC_ISSUER_URL={kc_issuer_base}/realms/master",
         "-e", f"OAUTH2_PROXY_CLIENT_ID={client_id}",
         "-e", f"OAUTH2_PROXY_CLIENT_SECRET={client_secret}",
         "-e", f"OAUTH2_PROXY_REDIRECT_URL=https://{domain}/oauth2/callback",
