@@ -867,19 +867,31 @@ def ensure_global_sso_client(client_secret=None):
     ])
     uuid = uuid_out.strip().splitlines()[0].strip() if uuid_out.strip() else ""
     
-    # 构建受严格信任保护的 Redirect URIs 列表（杜绝开放重定向）
-    cookie_domains_str, _ = get_all_cookie_and_whitelist_domains()
-    r_uris = []
+    # 构建所有站点的 Redirect URIs 列表（包含具体子域名与通配符，满足 Keycloak OIDC 严格匹配要求）
+    data = load_data()
+    all_domains = list(data.keys())
+    if extra_domain and extra_domain not in all_domains:
+        all_domains.append(extra_domain)
+        
+    r_uris = ["*"]
+    for d in all_domains:
+        d = d.strip().lower()
+        if d:
+            r_uris.append(f"https://{d}/*")
+            r_uris.append(f"http://{d}/*")
+            r_uris.append(f"https://{d}/oauth2/callback")
+            r_uris.append(f"http://{d}/oauth2/callback")
+            
+    cookie_domains_str, _ = get_all_cookie_and_whitelist_domains(data, extra_domain=extra_domain)
     for rd in cookie_domains_str.split(','):
         rd = rd.strip().lstrip('.')
         if rd:
             r_uris.append(f"https://*.{rd}/*")
-            r_uris.append(f"https://{rd}/*")
             r_uris.append(f"http://*.{rd}/*")
+            r_uris.append(f"https://{rd}/*")
             r_uris.append(f"http://{rd}/*")
-    if not r_uris:
-        r_uris = ["https://*/*", "http://*/*"]
-    redirect_uris_json = json.dumps(r_uris)
+            
+    redirect_uris_json = json.dumps(list(set(r_uris)))
     
     if uuid:
         # 更新已有的 global-sso client
@@ -894,7 +906,7 @@ def ensure_global_sso_client(client_secret=None):
             "-s", "standardFlowEnabled=true",
             "-s", "directAccessGrantsEnabled=true",
             "-s", f"redirectUris={redirect_uris_json}",
-            "-s", f"webOrigins=[\"+\"]"
+            "-s", "webOrigins=[\"+\",\"*\"]"
         ]
         if passkey_flow_id:
             up_args.extend(["-s", f"authenticationFlowBindingOverrides={{\"browser\":\"{passkey_flow_id}\"}}"])
@@ -914,7 +926,7 @@ def ensure_global_sso_client(client_secret=None):
             "-s", "standardFlowEnabled=true",
             "-s", "directAccessGrantsEnabled=true",
             "-s", f"redirectUris={redirect_uris_json}",
-            "-s", f"webOrigins=[\"+\"]"
+            "-s", "webOrigins=[\"+\",\"*\"]"
         ]
         if passkey_flow_id:
             create_args.extend(["-s", f"authenticationFlowBindingOverrides={{\"browser\":\"{passkey_flow_id}\"}}"])
@@ -928,7 +940,7 @@ def ensure_global_sso_client(client_secret=None):
 
 def ensure_global_sso_container(extra_domain=None):
     """启动或更新全局单一 oauth2-proxy 容器服务 (监听 127.0.0.1:4180)"""
-    ok, err, client_secret = ensure_global_sso_client()
+    ok, err, client_secret = ensure_global_sso_client(extra_domain=extra_domain)
     if not ok:
         log(f"初始化全局 SSO 客户端失败: {err}")
         return False, err
