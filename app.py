@@ -1426,39 +1426,43 @@ def api_settings():
     except Exception as e:
         return json.dumps({"success": False, "error": str(e)})
 
+def redeploy_all_security():
+    """安全加固与重载：收敛所有容器到 127.0.0.1 并刷新加固 Nginx 配置"""
+    data = load_data()
+    results = []
+    for domain, auth in data.items():
+        if not isinstance(auth, dict):
+            continue
+        try:
+            oauth_port = auth.get("oauth_port")
+            client_id = auth.get("client_id")
+            client_secret = auth.get("client_secret")
+            target_host = auth.get("target_host", "127.0.0.1")
+            target_port = auth.get("target_port", 80)
+            auth_enabled = auth.get("auth_enabled", True)
+            proxy_enabled = auth.get("proxy_enabled", True)
+            
+            if oauth_port and client_id and client_secret:
+                ok, c_name, _, err = create_oauth2_container(domain, oauth_port, client_id, client_secret)
+                if ok:
+                    auth['container_name'] = c_name
+                    new_conf = update_nginx_config(domain, oauth_port, target_host, target_port, auth_enabled, proxy_enabled)
+                    if new_conf:
+                        auth['nginx_config'] = new_conf
+                    results.append({"domain": domain, "status": "success"})
+                else:
+                    results.append({"domain": domain, "status": "failed", "error": err})
+        except Exception as e:
+            results.append({"domain": domain, "status": "error", "error": str(e)})
+            
+    save_data(data)
+    log(f"已完成所有站点的安全加固与重载: {len(results)} 个站点")
+    return results
+
 @app.route('/api/security/redeploy_all', methods=['POST'])
 def api_security_redeploy_all():
-    """安全加固与重载接口：收敛所有容器到 127.0.0.1 并刷新加固 Nginx 配置"""
     try:
-        data = load_data()
-        results = []
-        for domain, auth in data.items():
-            if not isinstance(auth, dict):
-                continue
-            try:
-                oauth_port = auth.get("oauth_port")
-                client_id = auth.get("client_id")
-                client_secret = auth.get("client_secret")
-                target_host = auth.get("target_host", "127.0.0.1")
-                target_port = auth.get("target_port", 80)
-                auth_enabled = auth.get("auth_enabled", True)
-                proxy_enabled = auth.get("proxy_enabled", True)
-                
-                if oauth_port and client_id and client_secret:
-                    ok, c_name, _, err = create_oauth2_container(domain, oauth_port, client_id, client_secret)
-                    if ok:
-                        auth['container_name'] = c_name
-                        new_conf = update_nginx_config(domain, oauth_port, target_host, target_port, auth_enabled, proxy_enabled)
-                        if new_conf:
-                            auth['nginx_config'] = new_conf
-                        results.append({"domain": domain, "status": "success"})
-                    else:
-                        results.append({"domain": domain, "status": "failed", "error": err})
-            except Exception as e:
-                results.append({"domain": domain, "status": "error", "error": str(e)})
-                
-        save_data(data)
-        log(f"已完成所有站点的安全加固与重载: {len(results)} 个站点")
+        results = redeploy_all_security()
         return json.dumps({"success": True, "results": results})
     except Exception as e:
         return json.dumps({"success": False, "error": str(e)})
