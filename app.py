@@ -867,6 +867,20 @@ def ensure_global_sso_client(client_secret=None):
     ])
     uuid = uuid_out.strip().splitlines()[0].strip() if uuid_out.strip() else ""
     
+    # 构建受严格信任保护的 Redirect URIs 列表（杜绝开放重定向）
+    cookie_domains_str, _ = get_all_cookie_and_whitelist_domains()
+    r_uris = []
+    for rd in cookie_domains_str.split(','):
+        rd = rd.strip().lstrip('.')
+        if rd:
+            r_uris.append(f"https://*.{rd}/*")
+            r_uris.append(f"https://{rd}/*")
+            r_uris.append(f"http://*.{rd}/*")
+            r_uris.append(f"http://{rd}/*")
+    if not r_uris:
+        r_uris = ["https://*/*", "http://*/*"]
+    redirect_uris_json = json.dumps(r_uris)
+    
     if uuid:
         # 更新已有的 global-sso client
         up_args = [
@@ -879,7 +893,7 @@ def ensure_global_sso_client(client_secret=None):
             "-s", "protocol=openid-connect",
             "-s", "standardFlowEnabled=true",
             "-s", "directAccessGrantsEnabled=true",
-            "-s", f"redirectUris=[\"https://*/*\",\"http://*/*\",\"*\"]",
+            "-s", f"redirectUris={redirect_uris_json}",
             "-s", f"webOrigins=[\"+\"]"
         ]
         if passkey_flow_id:
@@ -899,7 +913,7 @@ def ensure_global_sso_client(client_secret=None):
             "-s", "protocol=openid-connect",
             "-s", "standardFlowEnabled=true",
             "-s", "directAccessGrantsEnabled=true",
-            "-s", f"redirectUris=[\"https://*/*\",\"http://*/*\",\"*\"]",
+            "-s", f"redirectUris={redirect_uris_json}",
             "-s", f"webOrigins=[\"+\"]"
         ]
         if passkey_flow_id:
