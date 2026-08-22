@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 import os, json, subprocess, secrets, string, time, re, hashlib, requests, threading, base64
+import concurrent.futures
 from flask import Flask, render_template, request, redirect, url_for, flash, Response, stream_with_context, send_from_directory, session, jsonify
 from datetime import datetime
 from urllib.parse import urlparse
@@ -7,7 +8,14 @@ from collections import defaultdict
 import shlex
 import copy
 
+# 全局高性能 HTTP 连接池 Session（复用 TCP/TLS 保持长连接，大幅降低 Keycloak REST API 往返延迟）
+_HTTP_SESSION = requests.Session()
+_HTTP_ADAPTER = requests.adapters.HTTPAdapter(pool_connections=30, pool_maxsize=100, max_retries=1)
+_HTTP_SESSION.mount('http://', _HTTP_ADAPTER)
+_HTTP_SESSION.mount('https://', _HTTP_ADAPTER)
+
 # 配置文件路径
+
 CONFIG_FILE = "/opt/keycloak-auth-manager/config.json"
 DATA_FILE = "/opt/keycloak-auth-manager/data.json"
 ENCRYPTION_KEY_FILE = "/opt/keycloak-auth-manager/encryption.key"
@@ -702,91 +710,72 @@ def add_or_update_cloudflare_dns(full_domain, server_ip=None, proxied=None):
         log(f"[Cloudflare DNS] API 请求发生异常: {e}")
         return False, str(e)
 
-def get_keycloak_admin_credentials():
-    global KEYCLOAK_ADMIN, KEYCLOAK_PASSWORD, KEYCLOAK_URL, KEYCLOAK_CONTAINER
-    admin_user = KEYCLOAK_ADMIN
-    admin_pass = KEYCLOAK_PASSWORD
-    kc_url = KEYCLOAK_URL
+_KC_CREDS_CACHE = {"data": None, "expires_at": 0}
+_KC_CREDS_LOCK = threading.Lock()
 
-    container_user = ""
-    container_pass = ""
-    container_host = ""
-    try:
-        rc, out, _ = run_cmd_args(["docker", "inspect", KEYCLOAK_CONTAINER, "--format", "{{range .Config.Env}}{{println .}}{{end}}"])
-        if rc == 0 and out:
-            env_map = {}
-            for line in out.strip().splitlines():
-                if "=" in line:
-                    k, v = line.split("=", 1)
-                    env_map[k.strip()] = v.strip()
-            container_user = env_map.get("KC_BOOTSTRAP_ADMIN_USERNAME") or env_map.get("KEYCLOAK_ADMIN") or "admin"
-            container_pass = env_map.get("KC_BOOTSTRAP_ADMIN_PASSWORD") or env_map.get("KEYCLOAK_ADMIN_PASSWORD") or ""
-            container_host = env_map.get("KC_HOSTNAME", "")
-    except Exception:
-        pass
+def get_keycloak_admin_credentials(force_refresh=False):
+    global KEYCLOAK_ADMIN, KEYCLOAK_PASSWORD, KEYCLOAK_URL, KEYCLOAK_CONTAINER, _KC_CREDS_CACHE
+    now = time.time()
+    with _KC_CREDS_LOCK:
+        if not force_refresh and _KC_CREDS_CACHE["data"] and now < _KC_CREDS_CACHE["expires_at"]:
+            return _KC_CREDS_CACHE["data"]
 
-    # 优先使用配置中的密码，若未配置则使用容器密码
-    if not admin_pass:
-        admin_pass = container_pass
-        admin_user = container_user or "admin"
-    elif not admin_user:
-        admin_user = container_user or "admin"
+        admin_user = KEYCLOAK_ADMIN
+        admin_pass = KEYCLOAK_PASSWORD
+        kc_url = KEYCLOAK_URL
 
-    # 若配置的账号密码无法登录 kcadm，自动尝试容器环境变量中的账号密码
-    if admin_user and admin_pass:
-        chk_rc, _, _ = run_cmd_args([
-            "docker", "exec", KEYCLOAK_CONTAINER,
-            "/opt/keycloak/bin/kcadm.sh", "config", "credentials",
-            "--server", "http://localhost:8080",
-            "--realm", "master",
-            "--user", admin_user,
-            "--password", admin_pass
-        ])
-        if chk_rc != 0 and container_pass:
-            chk2_rc, _, _ = run_cmd_args([
-                "docker", "exec", KEYCLOAK_CONTAINER,
-                "/opt/keycloak/bin/kcadm.sh", "config", "credentials",
-                "--server", "http://localhost:8080",
-                "--realm", "master",
-                "--user", container_user or "admin",
-                "--password", container_pass
-            ])
-            if chk2_rc == 0:
-                admin_user = container_user or "admin"
+        # 优先从本地已保存的 config.json 中快速读取
+        if not admin_pass or not kc_url:
+            cfg = {}
+            if os.path.exists(CONFIG_FILE):
+                try:
+                    with open(CONFIG_FILE, 'r') as f:
+                        cfg = json.load(f)
+                except Exception:
+                    pass
+            if not admin_user:
+                admin_user = cfg.get("keycloak_admin", "admin")
+            if not admin_pass:
+                admin_pass = decrypt_val(cfg.get("keycloak_password", ""))
+            if not kc_url:
+                kc_url = cfg.get("keycloak_url", "")
+
+        # 若仍未获取到，则仅在首次从容器环境变量中提取（不启动耗时的 kcadm JVM）
+        if not admin_pass or not kc_url:
+            container_user = ""
+            container_pass = ""
+            container_host = ""
+            try:
+                rc, out, _ = run_cmd_args(["docker", "inspect", KEYCLOAK_CONTAINER, "--format", "{{range .Config.Env}}{{println .}}{{end}}"])
+                if rc == 0 and out:
+                    env_map = {}
+                    for line in out.strip().splitlines():
+                        if "=" in line:
+                            k, v = line.split("=", 1)
+                            env_map[k.strip()] = v.strip()
+                    container_user = env_map.get("KC_BOOTSTRAP_ADMIN_USERNAME") or env_map.get("KEYCLOAK_ADMIN") or "admin"
+                    container_pass = env_map.get("KC_BOOTSTRAP_ADMIN_PASSWORD") or env_map.get("KEYCLOAK_ADMIN_PASSWORD") or ""
+                    container_host = env_map.get("KC_HOSTNAME", "")
+            except Exception:
+                pass
+            if not admin_pass:
                 admin_pass = container_pass
+            if not admin_user:
+                admin_user = container_user or "admin"
+            if not kc_url and container_host:
+                kc_url = container_host
 
-    # 若 Keycloak 公共 URL 未指定，尝试从 KC_HOSTNAME 或已运行的 oauth2 容器中嗅探 Issuer URL
-    if not kc_url and container_host:
-        kc_url = container_host
+        if not kc_url:
+            kc_url = "http://127.0.0.1:8080"
 
-    if not kc_url:
-        try:
-            rc, out, _ = run_cmd_args(["docker", "ps", "-a", "--filter", "name=oauth2-", "--format", "{{.Names}}"])
-            if rc == 0 and out:
-                for cname in out.strip().splitlines():
-                    cname = cname.strip()
-                    if cname:
-                        rc_i, out_i, _ = run_cmd_args(["docker", "inspect", cname, "--format", "{{range .Config.Env}}{{println .}}{{end}}"])
-                        if rc_i == 0 and out_i:
-                            for line in out_i.splitlines():
-                                if line.startswith("OAUTH2_PROXY_OIDC_ISSUER_URL="):
-                                    iss = line.split("=", 1)[1].strip()
-                                    if "/realms/" in iss:
-                                        kc_url = iss.split("/realms/")[0].rstrip("/")
-                                        break
-                    if kc_url:
-                        break
-        except Exception:
-            pass
+        if not kc_url.startswith("http://") and not kc_url.startswith("https://"):
+            kc_url = "https://" + kc_url
+        kc_url = kc_url.rstrip("/")
 
-    if not kc_url:
-        kc_url = "http://127.0.0.1:8080"
-
-    if not kc_url.startswith("http://") and not kc_url.startswith("https://"):
-        kc_url = "https://" + kc_url
-    kc_url = kc_url.rstrip("/")
-
-    return admin_user or "admin", admin_pass or "", kc_url
+        res = (admin_user or "admin", admin_pass or "", kc_url)
+        _KC_CREDS_CACHE["data"] = res
+        _KC_CREDS_CACHE["expires_at"] = now + 300 # 缓存 5 分钟
+        return res
 
 # ─── Keycloak Admin REST API 统一封装与 Token 缓存 ───
 _KC_TOKEN_CACHE = {"token": None, "expires_at": 0, "base": None}
@@ -803,8 +792,9 @@ def get_keycloak_admin_token(force_refresh=False):
         if not admin_pass:
             return None, None
             
+        # 优先使用本地极速回路 127.0.0.1:8080，避免公网回路和 DNS 解析延迟
         endpoints = ["http://127.0.0.1:8080"]
-        if kc_base not in endpoints:
+        if kc_base and kc_base not in endpoints:
             endpoints.append(kc_base)
             
         token = None
@@ -812,12 +802,12 @@ def get_keycloak_admin_token(force_refresh=False):
         for base in endpoints:
             token_url = f"{base}/realms/master/protocol/openid-connect/token"
             try:
-                res = requests.post(token_url, data={
+                res = _HTTP_SESSION.post(token_url, data={
                     "client_id": "admin-cli",
                     "username": admin_user,
                     "password": admin_pass,
                     "grant_type": "password"
-                }, timeout=5)
+                }, timeout=3)
                 if res.status_code == 200:
                     data = res.json()
                     token = data.get("access_token")
@@ -847,13 +837,13 @@ def call_keycloak_api(endpoint, method="GET", json_data=None, params=None):
     }
     try:
         if method == "GET":
-            res = requests.get(url, headers=headers, params=params, timeout=10)
+            res = _HTTP_SESSION.get(url, headers=headers, params=params, timeout=5)
         elif method == "POST":
-            res = requests.post(url, headers=headers, json=json_data, timeout=10)
+            res = _HTTP_SESSION.post(url, headers=headers, json=json_data, timeout=5)
         elif method == "PUT":
-            res = requests.put(url, headers=headers, json=json_data, timeout=10)
+            res = _HTTP_SESSION.put(url, headers=headers, json=json_data, timeout=5)
         elif method == "DELETE":
-            res = requests.delete(url, headers=headers, timeout=10)
+            res = _HTTP_SESSION.delete(url, headers=headers, timeout=5)
         else:
             return None, 400, f"不支持的 HTTP 方法: {method}"
             
@@ -863,13 +853,13 @@ def call_keycloak_api(endpoint, method="GET", json_data=None, params=None):
                 url = f"{base}/admin/realms/master/{endpoint.lstrip('/')}"
                 headers["Authorization"] = f"Bearer {token}"
                 if method == "GET":
-                    res = requests.get(url, headers=headers, params=params, timeout=10)
+                    res = _HTTP_SESSION.get(url, headers=headers, params=params, timeout=5)
                 elif method == "POST":
-                    res = requests.post(url, headers=headers, json=json_data, timeout=10)
+                    res = _HTTP_SESSION.post(url, headers=headers, json=json_data, timeout=5)
                 elif method == "PUT":
-                    res = requests.put(url, headers=headers, json=json_data, timeout=10)
+                    res = _HTTP_SESSION.put(url, headers=headers, json=json_data, timeout=5)
                 elif method == "DELETE":
-                    res = requests.delete(url, headers=headers, timeout=10)
+                    res = _HTTP_SESSION.delete(url, headers=headers, timeout=5)
 
         data = None
         if res.text:
@@ -880,6 +870,7 @@ def call_keycloak_api(endpoint, method="GET", json_data=None, params=None):
         return data, res.status_code, ""
     except Exception as e:
         return None, 500, str(e)
+
 
 def setup_keycloak_passkey_flow():
     token, active_base = get_keycloak_admin_token()
@@ -1321,7 +1312,7 @@ def reload_openresty():
         log(f"重载 OpenResty 异常: {e}")
     return False
 
-def get_allowed_users_for_domain(domain):
+def get_allowed_users_for_domain(domain, users_data=None):
     """
     计算特定域名允许访问的用户列表。
     返回: (is_all_allowed: bool, allowed_usernames: list)
@@ -1330,9 +1321,10 @@ def get_allowed_users_for_domain(domain):
     """
     try:
         admin_user, _, _ = get_keycloak_admin_credentials()
-        users_data, code, _ = call_keycloak_api("users", "GET", params={"briefRepresentation": "false"})
-        if code != 200 or not isinstance(users_data, list):
-            return True, ["*"]
+        if users_data is None:
+            users_data, code, _ = call_keycloak_api("users", "GET", params={"briefRepresentation": "false"})
+            if code != 200 or not isinstance(users_data, list):
+                return True, ["*"]
 
         has_restricted_user = False
         allowed_users = set()
@@ -1379,10 +1371,15 @@ def get_allowed_users_for_domain(domain):
         log(f"计算域名 {domain} 授权用户异常: {e}")
         return True, ["*"]
 
-def sync_all_sites_permissions():
+def sync_all_sites_permissions(users_data=None):
     """当用户站点权限变动时，平滑更新所有受保护站点的 OpenResty 反代配置并重载"""
     try:
         data = load_data()
+        if users_data is None:
+            users_data, code, _ = call_keycloak_api("users", "GET", params={"briefRepresentation": "false"})
+            if code != 200 or not isinstance(users_data, list):
+                users_data = None
+
         for domain, auth in data.items():
             if isinstance(auth, dict) and auth.get('proxy_enabled', True):
                 oauth_port = auth.get('oauth_port', GLOBAL_SSO_PORT)
@@ -1390,7 +1387,7 @@ def sync_all_sites_permissions():
                 target_port = auth.get('target_port', 80)
                 auth_enabled = auth.get('auth_enabled', True)
                 proxy_enabled = auth.get('proxy_enabled', True)
-                update_nginx_config(domain, oauth_port, target_host, target_port, auth_enabled, proxy_enabled, reload_nginx=False)
+                update_nginx_config(domain, oauth_port, target_host, target_port, auth_enabled, proxy_enabled, reload_nginx=False, users_data=users_data)
         reload_openresty()
         log("所有站点的用户站点访问权限已同步并重载 OpenResty！")
         return True
@@ -1398,7 +1395,7 @@ def sync_all_sites_permissions():
         log(f"同步所有站点权限异常: {e}")
         return False
 
-def update_nginx_config(domain, oauth_port, target_host, target_port, auth_enabled, proxy_enabled, reload_nginx=True):
+def update_nginx_config(domain, oauth_port, target_host, target_port, auth_enabled, proxy_enabled, reload_nginx=True, users_data=None):
     proxy_conf = get_proxy_conf_path(domain)
     if not proxy_conf:
         log("未找到 OpenResty 站点目录，无法生成反代配置文件")
@@ -1430,7 +1427,8 @@ location ^~ / {
 }
 """
     else:
-        is_all_allowed, allowed_users = get_allowed_users_for_domain(domain)
+        is_all_allowed, allowed_users = get_allowed_users_for_domain(domain, users_data=users_data)
+
         access_check_lua = ""
         if not is_all_allowed and allowed_users:
             lua_entries = ", ".join([f'["{u}"] = true' for u in allowed_users])
@@ -2462,8 +2460,7 @@ def api_users():
         
     admin_user, _, _ = get_keycloak_admin_credentials()
     
-    enriched_users = []
-    for u in data:
+    def enrich_single_user(u):
         uid = u.get("id")
         username = u.get("username", "")
         email = u.get("email", "")
@@ -2475,7 +2472,7 @@ def api_users():
         passkey_count = 0
         has_password = False
         
-        # 查询用户绑定的凭据
+        # 并发查询用户绑定的凭据
         creds_data, creds_code, _ = call_keycloak_api(f"users/{uid}/credentials", "GET")
         if creds_code == 200 and isinstance(creds_data, list):
             for c in creds_data:
@@ -2486,7 +2483,7 @@ def api_users():
                 elif ctype == "password":
                     has_password = True
                     
-        # 查询用户的 Realm 角色
+        # 并发查询用户的 Realm 角色
         roles_list = []
         is_admin = (username == admin_user)
         roles_data, roles_code, _ = call_keycloak_api(f"users/{uid}/role-mappings/realm", "GET")
@@ -2495,6 +2492,9 @@ def api_users():
                 rname = r.get("name", "")
                 if rname:
                     roles_list.append(rname)
+                    if rname == "admin":
+                        is_admin = True
+                        
         # 解析用户站点访问权限
         attrs = u.get("attributes", {})
         allowed_sites_attr = attrs.get("allowed_sites", ["*"])
@@ -2515,7 +2515,7 @@ def api_users():
             
         all_sites_access = ("*" in user_sites) or is_admin
                         
-        enriched_users.append({
+        return {
             "id": uid,
             "username": username,
             "email": email,
@@ -2529,7 +2529,12 @@ def api_users():
             "is_admin": is_admin,
             "allowed_sites": user_sites,
             "all_sites_access": all_sites_access
-        })
+        }
+
+    # 使用高性能线程池并发处理所有用户的凭据与权限详情
+    max_workers = min(10, max(2, len(data)))
+    with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as executor:
+        enriched_users = list(executor.map(enrich_single_user, data))
         
     res_obj = {"success": True, "users": enriched_users, "total": len(enriched_users)}
     if not search and first == 0:
@@ -2675,8 +2680,17 @@ def api_users_reset_password(user_id):
     log(f"用户凭据与密码重置成功: {user_id}")
     return json.dumps({"success": True, "msg": "密码与凭据设置已成功生效"})
 
+# ─── 角色列表内存缓存 ───
+_ROLES_CACHE = {"data": None, "expires_at": 0}
+_ROLES_CACHE_LOCK = threading.Lock()
+
 @app.route('/api/roles')
 def api_roles():
+    now = time.time()
+    with _ROLES_CACHE_LOCK:
+        if _ROLES_CACHE["data"] and now < _ROLES_CACHE["expires_at"]:
+            return json.dumps(_ROLES_CACHE["data"])
+
     data, code, err = call_keycloak_api("roles", "GET")
     if code != 200 or not isinstance(data, list):
         return json.dumps({"success": False, "error": err or "获取角色列表失败", "roles": []})
@@ -2689,7 +2703,12 @@ def api_roles():
                 "name": rname,
                 "description": r.get("description", "")
             })
-    return json.dumps({"success": True, "roles": roles})
+    res_obj = {"success": True, "roles": roles}
+    with _ROLES_CACHE_LOCK:
+        _ROLES_CACHE["data"] = res_obj
+        _ROLES_CACHE["expires_at"] = now + 60 # 缓存 60 秒
+    return json.dumps(res_obj)
+
 
 @app.route('/api/users/<user_id>/roles', methods=['POST'])
 def api_users_update_roles(user_id):
