@@ -40,7 +40,9 @@
     {% endwith %}
 
     <form action="/settings" method="post">
+        <input type="hidden" name="_csrf_token" value="{{ session.get('csrf_token', '') }}">
         <!-- 1. Web Console Setting -->
+
         <div class="card">
             <div class="card-header">
                 <span class="card-title">🖥️ Web 控制台与登录安全</span>

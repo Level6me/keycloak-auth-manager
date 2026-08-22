@@ -363,6 +363,7 @@ async function handleModalToggle(feature, enabled, checkboxEl) {
     try {
         const formData = new FormData();
         formData.append('enabled', enabled ? 'true' : 'false');
+        formData.append('_csrf_token', (document.cookie.match(/(?:^|;\s*)csrf_token=([^;]+)/) || [])[1] || '');
         const res = await fetch(`/api/toggle/${domain}/${feature}`, {
             method: 'POST',
             body: formData
@@ -415,7 +416,8 @@ async function deleteDomainAjax(domain) {
             method: 'POST',
             headers: {
                 'Accept': 'application/json',
-                'X-Requested-With': 'XMLHttpRequest'
+                'X-Requested-With': 'XMLHttpRequest',
+                'X-CSRF-Token': (document.cookie.match(/(?:^|;\s*)csrf_token=([^;]+)/) || [])[1] || ''
             }
         });
         
