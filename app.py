@@ -1273,9 +1273,14 @@ def ensure_global_sso_container(extra_domain=None):
         "-e", f"OAUTH2_PROXY_OIDC_ISSUER_URL={kc_issuer_base}/realms/master",
         "-e", f"OAUTH2_PROXY_CLIENT_ID={GLOBAL_SSO_CLIENT_ID}",
         "-e", f"OAUTH2_PROXY_CLIENT_SECRET={client_secret}",
+        "-e", "OAUTH2_PROXY_COOKIE_NAME=_auth_sso",
         "-e", f"OAUTH2_PROXY_COOKIE_SECRET={cookie_secret}",
         "-e", "OAUTH2_PROXY_COOKIE_SECURE=true",
+
         "-e", f"OAUTH2_PROXY_COOKIE_DOMAINS={cookie_domains_str}",
+        "-e", "OAUTH2_PROXY_COOKIE_SAMESITE=lax",
+        "-e", "OAUTH2_PROXY_COOKIE_CSRF_PER_REQUEST=true",
+        "-e", "OAUTH2_PROXY_APPROVAL_PROMPT=",
         "-e", f"OAUTH2_PROXY_WHITELIST_DOMAINS={safe_whitelist}",
         "-e", "OAUTH2_PROXY_SKIP_PROVIDER_BUTTON=true",
         "-e", "OAUTH2_PROXY_CODE_CHALLENGE_METHOD=S256",
@@ -1289,6 +1294,7 @@ def ensure_global_sso_container(extra_domain=None):
         "-e", f"OAUTH2_PROXY_HTTP_ADDRESS=127.0.0.1:{GLOBAL_SSO_PORT}",
         "quay.io/oauth2-proxy/oauth2-proxy:v7.6.0"
     ]
+
     
     rc, out, err_out = run_cmd_args(run_args)
     if rc != 0:
