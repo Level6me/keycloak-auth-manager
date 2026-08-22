@@ -992,7 +992,7 @@ def get_all_cookie_and_whitelist_domains(data=None, extra_domain=None):
         
     return ",".join(sorted(list(cookie_domains))), ",".join(sorted(list(whitelist_domains)))
 
-def ensure_global_sso_client(client_secret=None):
+def ensure_global_sso_client(client_secret=None, extra_domain=None):
     """确保 Keycloak 中存在通配且绑定 Passkey 认证流的全局 global-sso 客户端"""
     admin_user, admin_pass, kc_issuer_base = get_keycloak_admin_credentials()
     if not admin_pass:
@@ -1023,7 +1023,66 @@ def ensure_global_sso_client(client_secret=None):
     # 确保 Passkey 自定义认证流就绪
     passkey_flow_id = setup_keycloak_passkey_flow()
     
-    # 登录 Keycloak kcadm.sh
+    # 构建所有站点的 Redirect URIs 列表（必须包含 * 通配与具体站点 callback 路径，保证 Keycloak 严格匹配）
+    data = load_data()
+    all_domains = list(data.keys())
+    if extra_domain and extra_domain not in all_domains:
+        all_domains.append(extra_domain)
+        
+    r_uris = ["*"]
+    for d in all_domains:
+        d = d.strip().lower()
+        if d:
+            r_uris.append(f"https://{d}/oauth2/callback")
+            r_uris.append(f"http://{d}/oauth2/callback")
+            r_uris.append(f"https://{d}/*")
+            r_uris.append(f"http://{d}/*")
+            
+    cookie_domains_str, _ = get_all_cookie_and_whitelist_domains(data, extra_domain=extra_domain)
+    for rd in cookie_domains_str.split(','):
+        rd = rd.strip().lstrip('.')
+        if rd:
+            r_uris.append(f"https://{rd}/oauth2/callback")
+            r_uris.append(f"http://{rd}/oauth2/callback")
+            r_uris.append(f"https://{rd}/*")
+            r_uris.append(f"http://{rd}/*")
+            
+    unique_r_uris = list(set(r_uris))
+    redirect_uris_json = json.dumps(unique_r_uris)
+
+    # 优先通过 Keycloak Admin REST API 查找并更新/创建客户端
+    try:
+        clients_res, code, _ = call_keycloak_api("clients", "GET", params={"clientId": GLOBAL_SSO_CLIENT_ID})
+        client_payload = {
+            "clientId": GLOBAL_SSO_CLIENT_ID,
+            "secret": client_secret,
+            "enabled": True,
+            "publicClient": False,
+            "protocol": "openid-connect",
+            "standardFlowEnabled": True,
+            "directAccessGrantsEnabled": False,
+            "redirectUris": unique_r_uris,
+            "webOrigins": ["+", "*"]
+        }
+        if passkey_flow_id:
+            client_payload["authenticationFlowBindingOverrides"] = {"browser": passkey_flow_id}
+
+        if code == 200 and isinstance(clients_res, list) and clients_res:
+            cid = clients_res[0].get("id")
+            if cid:
+                u_data, u_code, u_err = call_keycloak_api(f"clients/{cid}", "PUT", json_data=client_payload)
+                if u_code in (200, 204):
+                    log("Keycloak 全局 SSO Passkey 客户端已通过 REST API 成功同步更新")
+                    return True, "", client_secret
+        elif code == 200 and isinstance(clients_res, list) and not clients_res:
+            c_data, c_code, c_err = call_keycloak_api("clients", "POST", json_data=client_payload)
+            if c_code in (200, 201, 204):
+                log("Keycloak 全局 SSO Passkey 客户端已通过 REST API 成功创建")
+                return True, "", client_secret
+    except Exception as e:
+        log(f"通过 REST API 同步 Keycloak 客户端异常: {e}")
+
+    # Fallback: 使用 docker exec kcadm.sh 登录并配置
     run_cmd_args([
         "docker", "exec", KEYCLOAK_CONTAINER,
         "/opt/keycloak/bin/kcadm.sh", "config", "credentials",
@@ -1044,37 +1103,8 @@ def ensure_global_sso_client(client_secret=None):
         "--noquotes"
     ])
     uuid = uuid_out.strip().splitlines()[0].strip() if uuid_out.strip() else ""
-    
-    # 构建所有站点的 Redirect URIs 列表（包含具体子域名与通配符，满足 Keycloak OIDC 严格匹配要求）
-    data = load_data()
-    all_domains = list(data.keys())
-    if extra_domain and extra_domain not in all_domains:
-        all_domains.append(extra_domain)
-        
-    # 漏洞#5 修复：r_uris 不再包含裸通配符 "*"，仅精确列举各站点的 oauth2/callback 路径
-    r_uris = []
-    for d in all_domains:
-        d = d.strip().lower()
-        if d:
-            r_uris.append(f"https://{d}/oauth2/callback")
-            r_uris.append(f"http://{d}/oauth2/callback")
 
-            
-    cookie_domains_str, _ = get_all_cookie_and_whitelist_domains(data, extra_domain=extra_domain)
-    for rd in cookie_domains_str.split(','):
-        rd = rd.strip().lstrip('.')
-        if rd:
-            # 漏洞#5 修复：移除宽泛通配，仅保留 /oauth2/callback 精确路径
-            r_uris.append(f"https://*.{rd}/oauth2/callback")
-            r_uris.append(f"http://*.{rd}/oauth2/callback")
-            r_uris.append(f"https://{rd}/oauth2/callback")
-            r_uris.append(f"http://{rd}/oauth2/callback")
-            
-    redirect_uris_json = json.dumps(list(set(r_uris)))
-
-    
     if uuid:
-        # 更新已有的 global-sso client
         up_args = [
             "docker", "exec", KEYCLOAK_CONTAINER,
             "/opt/keycloak/bin/kcadm.sh", "update", f"clients/{uuid}",
@@ -1093,7 +1123,6 @@ def ensure_global_sso_client(client_secret=None):
         run_cmd_args(up_args)
         log("Keycloak 全局 SSO Passkey 客户端已同步更新")
     else:
-        # 创建新的 global-sso client
         create_args = [
             "docker", "exec", KEYCLOAK_CONTAINER,
             "/opt/keycloak/bin/kcadm.sh", "create", "clients",
@@ -1117,6 +1146,7 @@ def ensure_global_sso_client(client_secret=None):
         log("Keycloak 全局 SSO Passkey 客户端创建成功")
         
     return True, "", client_secret
+
 
 def ensure_global_sso_container(extra_domain=None):
     """启动或更新全局单一 oauth2-proxy 容器服务 (监听 127.0.0.1:4180)"""
