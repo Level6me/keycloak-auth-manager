@@ -127,38 +127,37 @@ echo "    ✓ 所有历史配置与站点数据校验完毕，完整无损"
 
 # 6. 检查并增量更新 Python 依赖
 echo "[5/6] 检查 Python 运行依赖库..."
-# 优先尝试系统包管理器安装系统级已编译依赖（免 Rust 编译）
-if command -v yum >/dev/null 2>&1; then
-    yum install -y -q epel-release >/dev/null 2>&1 || true
-    yum install -y -q python3-pip python3-flask python3-cryptography python3-requests >/dev/null 2>&1 || true
-elif command -v apt-get >/dev/null 2>&1; then
-    export DEBIAN_FRONTEND=noninteractive
-    apt-get install -y -q python3-pip python3-flask python3-cryptography python3-requests >/dev/null 2>&1 || true
-fi
-
-PIP_CMD=""
-if command -v pip3 >/dev/null 2>&1; then
-    PIP_CMD="pip3"
-elif command -v pip >/dev/null 2>&1; then
-    PIP_CMD="pip"
-fi
-
-if [ -n "$PIP_CMD" ]; then
-    # 尝试升级 pip 以支持现代 manylinux wheel
-    $PIP_CMD install --upgrade pip -q >/dev/null 2>&1 || true
-    
-    # 安装核心 Web 与网络依赖
-    $PIP_CMD install --upgrade --break-system-packages flask requests -q >/dev/null 2>&1 || \
-    $PIP_CMD install --upgrade flask requests -q >/dev/null 2>&1 || \
-    $PIP_CMD install flask requests -q >/dev/null 2>&1 || true
-
-    # 安全安装 cryptography：优先尝试免 Rust 编译版本 <=3.3.2 避免旧系统缺少 Rust 报错
-    if ! python3 -c "import cryptography" >/dev/null 2>&1; then
-        $PIP_CMD install "cryptography<=3.3.2" -q >/dev/null 2>&1 || \
-        $PIP_CMD install cryptography -q >/dev/null 2>&1 || true
+if ! python3 -c "import flask, requests" >/dev/null 2>&1; then
+    # 优先尝试系统包管理器安装系统级已编译依赖（免 Rust 编译）
+    if command -v yum >/dev/null 2>&1; then
+        yum install -y -q epel-release >/dev/null 2>&1 || true
+        yum install -y -q python3-pip python3-flask python3-cryptography python3-requests >/dev/null 2>&1 || true
+    elif command -v apt-get >/dev/null 2>&1; then
+        export DEBIAN_FRONTEND=noninteractive
+        apt-get install -y -q python3-pip python3-flask python3-cryptography python3-requests >/dev/null 2>&1 || true
     fi
-    echo "    ✓ Python 依赖库检查完成"
+
+    PIP_CMD=""
+    if command -v pip3 >/dev/null 2>&1; then
+        PIP_CMD="pip3"
+    elif command -v pip >/dev/null 2>&1; then
+        PIP_CMD="pip"
+    fi
+
+    if [ -n "$PIP_CMD" ]; then
+        # 安装核心 Web 与网络依赖
+        $PIP_CMD install --upgrade --break-system-packages flask requests -q >/dev/null 2>&1 || \
+        $PIP_CMD install --upgrade flask requests -q >/dev/null 2>&1 || \
+        $PIP_CMD install flask requests -q >/dev/null 2>&1 || true
+
+        # 安全安装 cryptography：优先尝试免 Rust 编译版本 <=3.3.2 避免旧系统缺少 Rust 报错
+        if ! python3 -c "import cryptography" >/dev/null 2>&1; then
+            $PIP_CMD install "cryptography<=3.3.2" -q >/dev/null 2>&1 || \
+            $PIP_CMD install cryptography -q >/dev/null 2>&1 || true
+        fi
+    fi
 fi
+echo "    ✓ Python 依赖库检查完成"
 
 # 7. 重启 systemd 服务并验证
 echo "[6/6] 正在平滑重启服务..."
