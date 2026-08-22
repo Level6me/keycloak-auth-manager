@@ -597,24 +597,57 @@ def get_keycloak_admin_credentials():
     admin_pass = KEYCLOAK_PASSWORD
     kc_url = KEYCLOAK_URL
 
-    # 若未在配置中指定账号密码，自动从 Keycloak 容器环境变量中嗅探
-    if not admin_user or not admin_pass:
-        try:
-            rc, out, _ = run_cmd_args(["docker", "inspect", KEYCLOAK_CONTAINER, "--format", "{{range .Config.Env}}{{println .}}{{end}}"])
-            if rc == 0 and out:
-                env_map = {}
-                for line in out.strip().splitlines():
-                    if "=" in line:
-                        k, v = line.split("=", 1)
-                        env_map[k.strip()] = v.strip()
-                if not admin_user:
-                    admin_user = env_map.get("KC_BOOTSTRAP_ADMIN_USERNAME") or env_map.get("KEYCLOAK_ADMIN") or "admin"
-                if not admin_pass:
-                    admin_pass = env_map.get("KC_BOOTSTRAP_ADMIN_PASSWORD") or env_map.get("KEYCLOAK_ADMIN_PASSWORD") or ""
-        except Exception:
-            pass
+    container_user = ""
+    container_pass = ""
+    container_host = ""
+    try:
+        rc, out, _ = run_cmd_args(["docker", "inspect", KEYCLOAK_CONTAINER, "--format", "{{range .Config.Env}}{{println .}}{{end}}"])
+        if rc == 0 and out:
+            env_map = {}
+            for line in out.strip().splitlines():
+                if "=" in line:
+                    k, v = line.split("=", 1)
+                    env_map[k.strip()] = v.strip()
+            container_user = env_map.get("KC_BOOTSTRAP_ADMIN_USERNAME") or env_map.get("KEYCLOAK_ADMIN") or "admin"
+            container_pass = env_map.get("KC_BOOTSTRAP_ADMIN_PASSWORD") or env_map.get("KEYCLOAK_ADMIN_PASSWORD") or ""
+            container_host = env_map.get("KC_HOSTNAME", "")
+    except Exception:
+        pass
 
-    # 若 Keycloak 公共 URL 未指定，尝试从已运行的 oauth2 容器中嗅探 Issuer URL
+    # 优先使用配置中的密码，若未配置则使用容器密码
+    if not admin_pass:
+        admin_pass = container_pass
+        admin_user = container_user or "admin"
+    elif not admin_user:
+        admin_user = container_user or "admin"
+
+    # 若配置的账号密码无法登录 kcadm，自动尝试容器环境变量中的账号密码
+    if admin_user and admin_pass:
+        chk_rc, _, _ = run_cmd_args([
+            "docker", "exec", KEYCLOAK_CONTAINER,
+            "/opt/keycloak/bin/kcadm.sh", "config", "credentials",
+            "--server", "http://localhost:8080",
+            "--realm", "master",
+            "--user", admin_user,
+            "--password", admin_pass
+        ])
+        if chk_rc != 0 and container_pass:
+            chk2_rc, _, _ = run_cmd_args([
+                "docker", "exec", KEYCLOAK_CONTAINER,
+                "/opt/keycloak/bin/kcadm.sh", "config", "credentials",
+                "--server", "http://localhost:8080",
+                "--realm", "master",
+                "--user", container_user or "admin",
+                "--password", container_pass
+            ])
+            if chk2_rc == 0:
+                admin_user = container_user or "admin"
+                admin_pass = container_pass
+
+    # 若 Keycloak 公共 URL 未指定，尝试从 KC_HOSTNAME 或已运行的 oauth2 容器中嗅探 Issuer URL
+    if not kc_url and container_host:
+        kc_url = container_host
+
     if not kc_url:
         try:
             rc, out, _ = run_cmd_args(["docker", "ps", "-a", "--filter", "name=oauth2-", "--format", "{{.Names}}"])
