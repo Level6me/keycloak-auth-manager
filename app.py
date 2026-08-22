@@ -1042,6 +1042,20 @@ def get_all_cookie_and_whitelist_domains(data=None, extra_domain=None):
             whitelist_domains.add(f"*{rd}")
             whitelist_domains.add(rd.lstrip('.'))
             
+    # 自动将 Keycloak 域名加入白名单，确保注销与切换账号跳转允许跨域重定向
+    try:
+        _, _, kc_url = get_keycloak_admin_credentials()
+        if kc_url and "://" in kc_url:
+            kc_host = kc_url.split("://", 1)[1].split("/")[0].split(":")[0].strip().lower()
+            if kc_host:
+                whitelist_domains.add(kc_host)
+                kc_rd = get_root_domain(kc_host)
+                if kc_rd:
+                    whitelist_domains.add(f"*{kc_rd}")
+                    whitelist_domains.add(kc_rd.lstrip('.'))
+    except Exception:
+        pass
+
     # 默认兜底
     if not cookie_domains:
         cookie_domains.add(".abab.pw")
@@ -1049,6 +1063,7 @@ def get_all_cookie_and_whitelist_domains(data=None, extra_domain=None):
         whitelist_domains.add("abab.pw")
         
     return ",".join(sorted(list(cookie_domains))), ",".join(sorted(list(whitelist_domains)))
+
 
 def ensure_global_sso_client(client_secret=None, extra_domain=None):
     """确保 Keycloak 中存在通配且绑定 Passkey 认证流的全局 global-sso 客户端"""
@@ -1495,6 +1510,7 @@ location ^~ / {
 """
     else:
         is_all_allowed, allowed_users = get_allowed_users_for_domain(domain, users_data=users_data)
+        admin_user, admin_pass, kc_public_url = get_keycloak_admin_credentials()
 
         access_check_lua = ""
         if not is_all_allowed and allowed_users:
@@ -1513,14 +1529,19 @@ location ^~ / {
         if not allowed["*"] and not allowed[u] then
             ngx.status = 403
             ngx.header.content_type = "text/html; charset=utf-8"
+            local host = ngx.var.host or ""
+            local post_redir = "https://" .. host .. "/"
+            local kc_logout_target = "{kc_public_url}/realms/master/protocol/openid-connect/logout?client_id=global-sso&post_logout_redirect_uri=" .. ngx.escape_uri(post_redir)
+            local sign_out_url = "/oauth2/sign_out?rd=" .. ngx.escape_uri(kc_logout_target)
             ngx.say([[<!DOCTYPE html>
 <html><head><meta charset="utf-8"><title>403 访问受限</title><meta name="viewport" content="width=device-width,initial-scale=1">
-<style>body{{margin:0;min-height:100vh;display:flex;align-items:center;justify-content:center;background:#0f172a;color:#f8fafc;font-family:system-ui,-apple-system,sans-serif}}.card{{background:#1e293b;padding:36px 32px;border-radius:20px;box-shadow:0 20px 40px rgba(0,0,0,0.5);text-align:center;max-width:440px;border:1px solid rgba(255,255,255,0.08)}}.icon{{font-size:48px;margin-bottom:16px}}h1{{font-size:22px;margin:0 0 10px;font-weight:700;color:#f43f5e}}p{{color:#94a3b8;font-size:14px;line-height:1.6;margin:0 0 24px}}.badge{{display:inline-block;padding:4px 10px;background:rgba(244,63,94,0.15);color:#fb7185;border-radius:6px;font-family:monospace;font-size:13px;margin-bottom:16px}}.btn{{display:inline-block;padding:10px 22px;background:#3b82f6;color:#fff;text-decoration:none;border-radius:10px;font-size:14px;font-weight:600;transition:all .2s}}.btn:hover{{background:#2563eb;transform:translateY(-1px)}}</style></head>
-<body><div class="card"><div class="icon">🚫</div><div class="badge">账号: ]] .. (u ~= "" and u or "未识别") .. [[</div><h1>403 访问受限</h1><p>您已通过身份认证，但未获得访问当前站点 <strong>]] .. (ngx.var.host or "") .. [[</strong> 的权限。<br>如需开通，请联系管理员分配站点访问权限。</p><a href="/oauth2/sign_out" class="btn">🔄 切换账号登录</a></div></body></html>]])
+<style>body{{margin:0;min-height:100vh;display:flex;align-items:center;justify-content:center;background:#0f172a;color:#f8fafc;font-family:system-ui,-apple-system,sans-serif}}.card{{background:#1e293b;padding:36px 32px;border-radius:20px;box-shadow:0 20px 40px rgba(0,0,0,0.5);text-align:center;max-width:440px;border:1px solid rgba(255,255,255,0.08)}}.icon{{font-size:48px;margin-bottom:16px}}h1{{font-size:22px;margin:0 0 10px;font-weight:700;color:#f43f5e}}p{{color:#94a3b8;font-size:14px;line-height:1.6;margin:0 0 24px}}.badge{{display:inline-block;padding:4px 10px;background:rgba(244,63,94,0.15);color:#fb7185;border-radius:6px;font-family:monospace;font-size:13px;margin-bottom:16px}}.btn{{display:inline-block;padding:10px 22px;background:#3b82f6;color:#fff;text-decoration:none;border-radius:10px;font-size:14px;font-weight:600;transition:all .2s;cursor:pointer}}.btn:hover{{background:#2563eb;transform:translateY(-1px)}}</style></head>
+<body><div class="card"><div class="icon">🚫</div><div class="badge">账号: ]] .. (u ~= "" and u or "未识别") .. [[</div><h1>403 访问受限</h1><p>您已通过身份认证，但未获得访问当前站点 <strong>]] .. (ngx.var.host or "") .. [[</strong> 的权限。<br>如需开通，请联系管理员分配站点访问权限。</p><a href="]] .. sign_out_url .. [[" class="btn" onclick="this.innerHTML='⏳ 正在注销并跳转登录...'; this.style.pointerEvents='none';">🔄 切换账号登录</a></div></body></html>]])
             ngx.exit(403)
         end
     }}
 """
+
         # 完整全局 SSO 认证反代（漏洞#3/#7/#8 全部修复 + 用户站点访问权限校验）
         new_content = """# OAuth2 全局 SSO 认证路径 - 需要大缓冲区处理 cookie
 location ^~ /oauth2/ {
