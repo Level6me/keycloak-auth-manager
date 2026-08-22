@@ -218,10 +218,10 @@ else
     exit 1
 fi
 
-# 6. 自动执行存量站点容器与防护规则安全收敛
-echo "[6/6] 正在对现有站点进行安全加固与配置重载..."
-PYTHONPATH="$INSTALL_DIR" python3 -c "import sys; sys.path.insert(0, '$INSTALL_DIR'); import app; app.redeploy_all_security()" 2>/dev/null || true
-echo "    ✓ 所有 oauth2-proxy 容器已收敛为本地监听 (127.0.0.1)，Nginx 防护规则已更新重载"
+# 6. 自动执行存量站点多容器平滑收敛为全局单一 SSO 代理服务
+echo "[6/6] 正在执行全局单一 SSO 架构迁移与存量容器平滑收敛..."
+PYTHONPATH="$INSTALL_DIR" python3 -c "import sys; sys.path.insert(0, '$INSTALL_DIR'); import app; app.migrate_to_single_sso()" 2>/dev/null || true
+echo "    ✓ 所有站点已收敛至全局单一 SSO 代理 (oauth2-proxy-sso 127.0.0.1:4180)，旧独立容器已彻底清理"
 
 PUBLIC_IP=$(curl -s --connect-timeout 3 ifconfig.me || curl -s --connect-timeout 3 icanhazip.com || echo "127.0.0.1")
 

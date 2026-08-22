@@ -100,8 +100,8 @@
     <!-- 2. Configuration Details Card -->
     <div class="card">
         <div class="card-header">
-            <span class="card-title">📋 认证与容器配置</span>
-            <span class="badge secondary" style="font-family: monospace;">{{ auth.container_name }}</span>
+            <span class="card-title">📋 认证与代理配置</span>
+            <span class="badge accent">🚀 全局 SSO 单容器共享</span>
         </div>
 
         <div class="setting-row">
@@ -115,7 +115,7 @@
         <div class="setting-row">
             <div class="setting-info">
                 <span class="setting-label">OAuth2 Client ID</span>
-                <span class="setting-desc">Auth 客户端标识</span>
+                <span class="setting-desc">Keycloak 全局 SSO 客户端标识 (支持全站 Passkey 免密)</span>
             </div>
             <div style="display: flex; align-items: center; gap: 6px;">
                 <code>{{ auth.client_id }}</code>
@@ -125,39 +125,25 @@
 
         <div class="setting-row">
             <div class="setting-info">
-                <span class="setting-label">Client Secret</span>
-                <span class="setting-desc">Auth 客户端通讯密钥</span>
+                <span class="setting-label">全局 SSO 代理服务</span>
+                <span class="setting-desc">全站共享的单一守护容器 (监听 127.0.0.1:4180)</span>
             </div>
-            <div style="display: flex; align-items: center; gap: 6px;">
-                <code style="max-width: 180px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">{{ auth.client_secret }}</code>
-                <button class="pill-btn" onclick="copyToClipboard('{{ auth.client_secret }}', 'Client Secret')">📋</button>
-            </div>
+            <span class="badge secondary" style="font-family: monospace;">{{ auth.container_name }}</span>
         </div>
 
         <div class="setting-row">
             <div class="setting-info">
-                <span class="setting-label">Cookie Secret</span>
-                <span class="setting-desc">OAuth2 Proxy 会话加密密钥</span>
-            </div>
-            <div style="display: flex; align-items: center; gap: 6px;">
-                <code style="max-width: 180px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">{{ auth.cookie_secret }}</code>
-                <button class="pill-btn" onclick="copyToClipboard('{{ auth.cookie_secret }}', 'Cookie Secret')">📋</button>
-            </div>
-        </div>
-
-        <div class="setting-row">
-            <div class="setting-info">
-                <span class="setting-label">OAuth 本地监听端口</span>
+                <span class="setting-label">OAuth 本地统一端口</span>
             </div>
             <span class="badge secondary" style="font-family: monospace;">:{{ auth.oauth_port }}</span>
         </div>
 
         <div class="setting-row">
             <div class="setting-info">
-                <span class="setting-label">OAuth 容器运行状态</span>
+                <span class="setting-label">SSO 代理容器状态</span>
             </div>
-            <span class="badge {% if 'Up' in auth.status %}success{% else %}danger{% endif %}">
-                <span class="status-dot {% if 'Up' not in auth.status %}offline{% endif %}"></span>
+            <span class="badge {% if 'Up' in auth.status or '运行' in auth.status %}success{% else %}danger{% endif %}">
+                <span class="status-dot {% if 'Up' not in auth.status and '运行' not in auth.status %}offline{% endif %}"></span>
                 {{ auth.status }}
             </span>
         </div>
