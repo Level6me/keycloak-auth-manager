@@ -153,9 +153,11 @@ function switchTab(pageId, title, btnEl) {
     } else if (pageId === 'p-ssl') {
         loadSSLAccounts();
     } else if (pageId === 'p-users') {
-        loadUsersAjax();
+        const hasLoaded = usersInitialLoaded || (cachedUsersData && cachedUsersData.length > 0);
+        loadUsersAjax(hasLoaded);
     }
 }
+
 
 
 // --- 5. AJAX Domains Data Loading & Rendering ---
@@ -507,6 +509,11 @@ document.addEventListener('DOMContentLoaded', () => {
     initTheme();
     updateHeaderDate();
 
+    // 页面加载完成后在后台静默预热 Keycloak 用户数据，确保点击「用户」选项卡时即时秒开
+    setTimeout(() => {
+        loadUsersAjax(true);
+    }, 300);
+
     // 根据 URL Hash 激活对应 Tab
     const hash = (window.location.hash || '').replace('#', '');
     if (hash && ['domains', 'add', 'ssl', 'users', 'settings'].includes(hash)) {
@@ -519,6 +526,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
 // --- 9. Keycloak User Management Interactive Engine ---
 let cachedUsersData = [];
+let usersInitialLoaded = false;
 let userViewMode = localStorage.getItem('abit_user_view_mode') || 'card';
 
 function switchUserView(mode) {
@@ -548,7 +556,13 @@ async function loadUsersAjax(silent = false) {
     const cardContainer = document.getElementById('userCardViewContainer');
     const tableContainer = document.getElementById('userTableViewContainer');
 
-    if (!silent && loadingTip) loadingTip.style.display = 'block';
+    // 只有在首次完全没有加载过数据且非静默模式时才显示加载中占位提示；一旦有了缓存数据或已加载过，始终在后台静默执行
+    const shouldShowLoading = !silent && !usersInitialLoaded && (!cachedUsersData || cachedUsersData.length === 0);
+    if (shouldShowLoading && loadingTip) {
+        loadingTip.style.display = 'block';
+    } else if (loadingTip) {
+        loadingTip.style.display = 'none';
+    }
 
     try {
         const res = await fetch('/api/users');
@@ -557,16 +571,22 @@ async function loadUsersAjax(silent = false) {
         if (loadingTip) loadingTip.style.display = 'none';
 
         if (data.success) {
+            usersInitialLoaded = true;
             cachedUsersData = data.users || [];
             renderUsersUI(cachedUsersData);
         } else {
-            showToast('加载用户失败: ' + (data.error || '未知错误'), 'error');
+            if (!silent) {
+                showToast('加载用户失败: ' + (data.error || '未知错误'), 'error');
+            }
         }
     } catch (e) {
         if (loadingTip) loadingTip.style.display = 'none';
-        showToast('加载 Keycloak 用户列表异常', 'error');
+        if (!silent) {
+            showToast('加载 Keycloak 用户列表异常', 'error');
+        }
     }
 }
+
 
 function formatTimestamp(ts) {
     if (!ts) return '-';
