@@ -1263,7 +1263,7 @@ async function submitUserSites(e) {
     }
 
     // 乐观即时更新本地缓存与 UI
-    const targetUser = cachedUsersData.find(u => u.id === userId);
+    const targetUser = (cachedUsersData || []).find(u => u.id === userId);
     if (targetUser) {
         targetUser.all_sites_access = allowAll;
         targetUser.allowed_sites = newAllowedSites;
@@ -1271,18 +1271,23 @@ async function submitUserSites(e) {
         renderUsersUI(cachedUsersData);
     }
 
-    btn.disabled = true;
-    btn.textContent = '正在保存权限...';
+    if (btn) {
+        btn.disabled = true;
+        btn.textContent = '正在保存权限...';
+    }
 
+    const csrfToken = (typeof getCsrfToken === 'function') ? getCsrfToken() : ((document.cookie.match(/(?:^|;\s*)csrf_token=([^;]+)/) || [])[1] || '');
     const formData = new FormData();
     formData.append('sites', sitesParam);
-    formData.append('_csrf_token', (document.cookie.match(/(?:^|;\s*)csrf_token=([^;]+)/) || [])[1] || '');
+    formData.append('_csrf_token', csrfToken);
 
     try {
         const res = await fetch(`/api/users/${userId}/sites`, { method: 'POST', body: formData });
         const data = await res.json();
-        btn.disabled = false;
-        btn.textContent = '💾 保存并应用权限';
+        if (btn) {
+            btn.disabled = false;
+            btn.textContent = '💾 保存并应用权限';
+        }
 
         if (data.success) {
             showToast('用户站点访问权限已成功应用！', 'success');
@@ -1292,10 +1297,30 @@ async function submitUserSites(e) {
             showToast('设置失败: ' + (data.error || '未知错误'), 'error');
         }
     } catch (err) {
-        btn.disabled = false;
-        btn.textContent = '💾 保存并应用权限';
-        showToast('网络请求发生异常', 'error');
+        if (btn) {
+            btn.disabled = false;
+            btn.textContent = '💾 保存并应用权限';
+        }
+        showToast('网络请求发生异常: ' + err.message, 'error');
     }
 }
+
+// ─── 全局模态框遮罩点击关闭与 ESC 快捷关闭 ───
+document.addEventListener('DOMContentLoaded', () => {
+    document.querySelectorAll('.modal-overlay').forEach(overlay => {
+        overlay.addEventListener('click', (e) => {
+            if (e.target === overlay) {
+                overlay.classList.remove('active');
+            }
+        });
+    });
+    
+    document.addEventListener('keydown', (e) => {
+        if (e.key === 'Escape') {
+            document.querySelectorAll('.modal-overlay.active').forEach(m => m.classList.remove('active'));
+        }
+    });
+});
+
 
 

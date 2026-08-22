@@ -910,6 +910,31 @@ def call_keycloak_api(endpoint, method="GET", json_data=None, params=None):
         return None, 500, str(e)
 
 
+def ensure_keycloak_user_profile_allowed_sites():
+    """确保 Keycloak 启用了非托管自定义属性 (unmanagedAttributePolicy) 并注册 allowed_sites 属性支持"""
+    try:
+        up, code, _ = call_keycloak_api("users/profile", "GET")
+        if code == 200 and isinstance(up, dict):
+            modified = False
+            if up.get("unmanagedAttributePolicy") != "ENABLED":
+                up["unmanagedAttributePolicy"] = "ENABLED"
+                modified = True
+            attrs_list = up.get("attributes", [])
+            if not any(a.get("name") == "allowed_sites" for a in attrs_list):
+                attrs_list.append({
+                    "name": "allowed_sites",
+                    "displayName": "Allowed Sites",
+                    "permissions": {"view": ["admin", "user"], "edit": ["admin"]},
+                    "multivalued": True
+                })
+                up["attributes"] = attrs_list
+                modified = True
+            if modified:
+                call_keycloak_api("users/profile", "PUT", json_data=up)
+                log("Keycloak 用户属性规范已成功注册 allowed_sites 存储支持！")
+    except Exception as e:
+        log(f"配置 Keycloak 用户属性规范异常: {e}")
+
 def setup_keycloak_passkey_flow():
     token, active_base = get_keycloak_admin_token()
     if not token or not active_base:
@@ -917,6 +942,9 @@ def setup_keycloak_passkey_flow():
         return None
 
     try:
+        # 确保 Keycloak User Profile 允许保存 allowed_sites
+        ensure_keycloak_user_profile_allowed_sites()
+
         headers = {"Authorization": f"Bearer {token}", "Content-Type": "application/json"}
         api_base = f"{active_base}/admin/realms/master/authentication"
         
@@ -931,6 +959,7 @@ def setup_keycloak_passkey_flow():
                     requests.put(f"{req_actions_url}/{action['alias']}", headers=headers, json=action, timeout=6)
                     log("成功将 WebAuthn Passwordless 设为注册时的默认必填项")
                     break
+
 
 
         # 2. 检查或创建专属的 passkey-only-browser 流
@@ -2788,6 +2817,9 @@ def api_users_update_sites(user_id):
         if not sites_list:
             sites_list = ['*']
 
+    # 确保 Keycloak 声明式用户属性已注册 allowed_sites
+    ensure_keycloak_user_profile_allowed_sites()
+
     u_data, u_code, u_err = call_keycloak_api(f"users/{user_id}", "GET")
     if u_code != 200 or not isinstance(u_data, dict):
         return json.dumps({"success": False, "error": u_err or "获取用户信息失败"})
@@ -2797,10 +2829,12 @@ def api_users_update_sites(user_id):
 
     # 获取现有 attributes 并更新 allowed_sites
     attrs = u_data.get("attributes", {})
+    if not isinstance(attrs, dict):
+        attrs = {}
     attrs["allowed_sites"] = sites_list
     u_data["attributes"] = attrs
 
-    p_data, p_code, p_err = call_keycloak_api(f"users/{user_id}", "PUT", json_data={"attributes": attrs})
+    p_data, p_code, p_err = call_keycloak_api(f"users/{user_id}", "PUT", json_data=u_data)
     if p_code not in (200, 204):
         return json.dumps({"success": False, "error": p_err or "更新用户站点权限失败"})
 
@@ -2808,6 +2842,7 @@ def api_users_update_sites(user_id):
     sync_all_sites_permissions()
     log(f"用户站点访问权限已更新: {username} -> {sites_list}")
     return json.dumps({"success": True, "msg": f"用户 {username} 站点权限已成功更新", "allowed_sites": sites_list})
+
 
 
 
