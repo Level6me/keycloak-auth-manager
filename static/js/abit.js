@@ -509,10 +509,15 @@ document.addEventListener('DOMContentLoaded', () => {
     initTheme();
     updateHeaderDate();
 
-    // 页面加载完成后在后台静默预热 Keycloak 用户数据，确保点击「用户」选项卡时即时秒开
+    // 1. 若本地已有持久化缓存，立刻就地秒速渲染出用户界面，达到 0ms 秒开无白屏
+    if (cachedUsersData && cachedUsersData.length > 0) {
+        renderUsersUI(cachedUsersData);
+    }
+
+    // 2. 页面就绪后在后台静默发起增量同步
     setTimeout(() => {
         loadUsersAjax(true);
-    }, 300);
+    }, 200);
 
     // 根据 URL Hash 激活对应 Tab
     const hash = (window.location.hash || '').replace('#', '');
@@ -524,10 +529,26 @@ document.addEventListener('DOMContentLoaded', () => {
     }
 });
 
-// --- 9. Keycloak User Management Interactive Engine ---
+// --- 9. Keycloak User Management Interactive Engine (with Local Persistence & Incremental Sync) ---
 let cachedUsersData = [];
-let usersInitialLoaded = false;
+try {
+    const stored = localStorage.getItem('abit_cached_users');
+    if (stored) {
+        cachedUsersData = JSON.parse(stored) || [];
+    }
+} catch (e) {
+    cachedUsersData = [];
+}
+let usersInitialLoaded = (cachedUsersData && cachedUsersData.length > 0);
 let userViewMode = localStorage.getItem('abit_user_view_mode') || 'card';
+
+function saveUsersToLocalStorage(users) {
+    cachedUsersData = users || [];
+    try {
+        localStorage.setItem('abit_cached_users', JSON.stringify(cachedUsersData));
+        localStorage.setItem('abit_users_last_synced', Date.now().toString());
+    } catch (e) {}
+}
 
 function switchUserView(mode) {
     userViewMode = mode;
@@ -550,13 +571,13 @@ function switchUserView(mode) {
     }
 }
 
-async function loadUsersAjax(silent = false) {
+async function loadUsersAjax(silent = false, force = false) {
     const loadingTip = document.getElementById('usersLoadingTip');
     const emptyTip = document.getElementById('usersEmptyTip');
     const cardContainer = document.getElementById('userCardViewContainer');
     const tableContainer = document.getElementById('userTableViewContainer');
 
-    // 只有在首次完全没有加载过数据且非静默模式时才显示加载中占位提示；一旦有了缓存数据或已加载过，始终在后台静默执行
+    // 只有在从未获取过数据且本地没有任何持久化缓存时才展示占位提示
     const shouldShowLoading = !silent && !usersInitialLoaded && (!cachedUsersData || cachedUsersData.length === 0);
     if (shouldShowLoading && loadingTip) {
         loadingTip.style.display = 'block';
@@ -565,15 +586,22 @@ async function loadUsersAjax(silent = false) {
     }
 
     try {
-        const res = await fetch('/api/users');
+        const res = await fetch(`/api/users${force ? '?force=true' : ''}`);
         if (!res.ok) throw new Error('网络请求失败');
         const data = await res.json();
         if (loadingTip) loadingTip.style.display = 'none';
 
         if (data.success) {
             usersInitialLoaded = true;
-            cachedUsersData = data.users || [];
-            renderUsersUI(cachedUsersData);
+            const newUsers = data.users || [];
+            const oldStr = JSON.stringify(cachedUsersData);
+            const newStr = JSON.stringify(newUsers);
+
+            // 增量比较：仅当数据发生变更时才写回持久化存储并重绘 DOM
+            if (oldStr !== newStr || cachedUsersData.length === 0) {
+                saveUsersToLocalStorage(newUsers);
+                renderUsersUI(cachedUsersData);
+            }
         } else {
             if (!silent) {
                 showToast('加载用户失败: ' + (data.error || '未知错误'), 'error');
@@ -587,7 +615,6 @@ async function loadUsersAjax(silent = false) {
     }
 }
 
-
 function formatTimestamp(ts) {
     if (!ts) return '-';
     const d = new Date(ts);
@@ -600,10 +627,10 @@ function formatTimestamp(ts) {
 }
 
 function renderUsersUI(users) {
-    const totalCount = users.length;
-    const passkeyCount = users.filter(u => u.has_passkey).length;
-    const activeCount = users.filter(u => u.enabled).length;
-    const adminCount = users.filter(u => u.is_admin).length;
+    const totalCount = (users || []).length;
+    const passkeyCount = (users || []).filter(u => u.has_passkey).length;
+    const activeCount = (users || []).filter(u => u.enabled).length;
+    const adminCount = (users || []).filter(u => u.is_admin).length;
 
     // 更新统计卡片
     const statTotal = document.getElementById('stat-total-users');
@@ -851,7 +878,7 @@ async function submitAddUser(e) {
         if (data.success) {
             showToast(`用户 ${username} 创建成功！`, 'success');
             closeAddUserModal();
-            loadUsersAjax(true);
+            loadUsersAjax(true, true);
         } else {
             showToast('创建失败: ' + (data.error || '未知错误'), 'error');
         }
@@ -862,9 +889,17 @@ async function submitAddUser(e) {
     }
 }
 
-// --- Toggle User Status Logic ---
+// --- Toggle User Status Logic (with Optimistic UI & Local Persistence) ---
 async function toggleUserStatus(userId, enabled, switchEl) {
     if (switchEl) switchEl.disabled = true;
+
+    // 1. 乐观即时更新本地缓存与 UI
+    const targetUser = cachedUsersData.find(u => u.id === userId);
+    if (targetUser) {
+        targetUser.enabled = enabled;
+        saveUsersToLocalStorage(cachedUsersData);
+        renderUsersUI(cachedUsersData);
+    }
 
     const formData = new FormData();
     formData.append('enabled', enabled ? 'true' : 'false');
@@ -877,14 +912,23 @@ async function toggleUserStatus(userId, enabled, switchEl) {
 
         if (data.success) {
             showToast(`用户状态已切换为: ${enabled ? '正常激活' : '已停用'}`, 'success');
-            const targetUser = cachedUsersData.find(u => u.id === userId);
-            if (targetUser) targetUser.enabled = enabled;
-            renderUsersUI(cachedUsersData);
+            loadUsersAjax(true, true);
         } else {
+            // 回滚乐观更新
+            if (targetUser) {
+                targetUser.enabled = !enabled;
+                saveUsersToLocalStorage(cachedUsersData);
+                renderUsersUI(cachedUsersData);
+            }
             if (switchEl) switchEl.checked = !enabled;
             showToast('操作失败: ' + (data.error || '未知错误'), 'error');
         }
     } catch (err) {
+        if (targetUser) {
+            targetUser.enabled = !enabled;
+            saveUsersToLocalStorage(cachedUsersData);
+            renderUsersUI(cachedUsersData);
+        }
         if (switchEl) {
             switchEl.disabled = false;
             switchEl.checked = !enabled;
@@ -893,11 +937,17 @@ async function toggleUserStatus(userId, enabled, switchEl) {
     }
 }
 
-// --- Delete User Logic ---
+// --- Delete User Logic (with Optimistic UI & Local Persistence) ---
 async function deleteUserAjax(userId, username) {
     if (!confirm(`确定要彻底删除用户【${username}】吗？\n删除后该用户绑定的所有 Passkey 凭据与权限将被永久清除，不可撤销！`)) {
         return;
     }
+
+    // 1. 乐观即时移除本地缓存并重绘
+    const backupUsers = [...cachedUsersData];
+    cachedUsersData = cachedUsersData.filter(u => u.id !== userId);
+    saveUsersToLocalStorage(cachedUsersData);
+    renderUsersUI(cachedUsersData);
 
     showToast(`正在删除用户 ${username}...`, 'info');
 
@@ -909,12 +959,18 @@ async function deleteUserAjax(userId, username) {
         const data = await res.json();
         if (data.success) {
             showToast(`用户 ${username} 已成功删除`, 'success');
-            cachedUsersData = cachedUsersData.filter(u => u.id !== userId);
-            renderUsersUI(cachedUsersData);
+            loadUsersAjax(true, true);
         } else {
+            // 回滚
+            cachedUsersData = backupUsers;
+            saveUsersToLocalStorage(cachedUsersData);
+            renderUsersUI(cachedUsersData);
             showToast('删除失败: ' + (data.error || '未知错误'), 'error');
         }
     } catch (err) {
+        cachedUsersData = backupUsers;
+        saveUsersToLocalStorage(cachedUsersData);
+        renderUsersUI(cachedUsersData);
         showToast('网络通信异常', 'error');
     }
 }
@@ -981,7 +1037,7 @@ async function submitResetUser(e) {
         if (data.success) {
             showToast('用户凭据设置已成功应用！', 'success');
             closeResetUserModal();
-            loadUsersAjax(true);
+            loadUsersAjax(true, true);
         } else {
             showToast('重置失败: ' + (data.error || '未知错误'), 'error');
         }
@@ -1068,7 +1124,7 @@ async function submitUserRoles(e) {
         if (data.success) {
             showToast('用户角色权限已成功更新！', 'success');
             closeUserRolesModal();
-            loadUsersAjax(true);
+            loadUsersAjax(true, true);
         } else {
             showToast('更新失败: ' + (data.error || '未知错误'), 'error');
         }
