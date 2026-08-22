@@ -94,6 +94,11 @@ def get_server_public_ip():
             continue
     return ""
 
+def run_cmd_args(args):
+    # 安全地以列表形式调用命令，不经过 Shell
+    r = subprocess.run(args, stdout=subprocess.PIPE, stderr=subprocess.PIPE, universal_newlines=True)
+    return r.returncode, r.stdout, r.stderr
+
 def load_config():
     global KEYCLOAK_URL, KEYCLOAK_ADMIN, KEYCLOAK_PASSWORD, KEYCLOAK_CONTAINER
     global ADMIN_USERNAME, ADMIN_PASSWORD
@@ -114,8 +119,19 @@ def load_config():
             ADMIN_USERNAME = raw_console_user or "admin"
             if raw_console_pwd:
                 ADMIN_PASSWORD = decrypt_val(raw_console_pwd)
+            elif KEYCLOAK_PASSWORD:
+                ADMIN_PASSWORD = KEYCLOAK_PASSWORD
             else:
-                ADMIN_PASSWORD = KEYCLOAK_PASSWORD if KEYCLOAK_PASSWORD else ""
+                # 若未单独配置密码，尝试从运行中的 Keycloak 容器环境变量嗅探初始管理员密码
+                try:
+                    rc_env, out_env, _ = run_cmd_args(["docker", "inspect", cfg.get("keycloak_container", "keycloak"), "--format", "{{range .Config.Env}}{{println .}}{{end}}"])
+                    if rc_env == 0 and out_env:
+                        for line in out_env.splitlines():
+                            if line.startswith("KC_BOOTSTRAP_ADMIN_PASSWORD=") or line.startswith("KEYCLOAK_ADMIN_PASSWORD="):
+                                ADMIN_PASSWORD = line.split("=", 1)[1].strip()
+                                break
+                except Exception:
+                    ADMIN_PASSWORD = ""
 
             ONEPANEL_API_KEY = decrypt_val(raw_api_key)
             CLOUDFLARE_API_TOKEN = decrypt_val(raw_cf_token)
@@ -371,11 +387,6 @@ def clear_logs():
     global log_history
     with logs_lock:
         log_history.clear()
-
-def run_cmd_args(args):
-    # 安全地以列表形式调用命令，不经过 Shell
-    r = subprocess.run(args, stdout=subprocess.PIPE, stderr=subprocess.PIPE, universal_newlines=True)
-    return r.returncode, r.stdout, r.stderr
 
 def get_used_ports():
     ports = set()
