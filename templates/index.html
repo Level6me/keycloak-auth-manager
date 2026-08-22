@@ -504,6 +504,109 @@
         </div>
     </div>
 
+    <!-- ==================== PAGE 5: USER MANAGEMENT ==================== -->
+    <div id="p-users" class="page">
+        <!-- User Stat Grid -->
+        <div class="stat-grid">
+            <div class="stat-card">
+                <div class="stat-icon blue">👥</div>
+                <div class="stat-content">
+                    <span class="stat-value" id="stat-total-users">-</span>
+                    <span class="stat-label">总用户数</span>
+                </div>
+            </div>
+            <div class="stat-card">
+                <div class="stat-icon green">🔑</div>
+                <div class="stat-content">
+                    <span class="stat-value" id="stat-passkey-users">-</span>
+                    <span class="stat-label">已绑定 Passkey</span>
+                </div>
+            </div>
+            <div class="stat-card">
+                <div class="stat-icon purple">🟢</div>
+                <div class="stat-content">
+                    <span class="stat-value" id="stat-active-users">-</span>
+                    <span class="stat-label">正常激活</span>
+                </div>
+            </div>
+            <div class="stat-card">
+                <div class="stat-icon orange">🛡️</div>
+                <div class="stat-content">
+                    <span class="stat-value" id="stat-admin-users">-</span>
+                    <span class="stat-label">管理员账号</span>
+                </div>
+            </div>
+        </div>
+
+        <!-- User Toolbar -->
+        <div style="display: flex; justify-content: space-between; align-items: center; gap: 10px; margin-bottom: 16px; flex-wrap: wrap;">
+            <div style="flex: 1; min-width: 220px; max-width: 420px; position: relative;">
+                <input type="text" id="userSearchInput" class="input-box" placeholder="🔍 快速搜索用户名或邮箱..." oninput="filterUsers(this.value)">
+            </div>
+            <div style="display: flex; align-items: center; gap: 8px;">
+                <button class="pill-btn" onclick="loadUsersAjax(false); showToast('正在刷新用户列表...', 'info');" title="刷新用户列表">
+                    <span>🔄</span>
+                    <span class="pill-text">刷新</span>
+                </button>
+                <button class="btn accent" onclick="openAddUserModal()" style="padding: 7px 14px; font-size: 13px; border-radius: 12px; display: inline-flex; align-items: center; gap: 6px;">
+                    <span>➕</span>
+                    <span>添加用户</span>
+                </button>
+                <div class="segmented-control" style="width: auto; height: 38px; align-items: center;">
+                    <button class="segment-btn active" id="btnUserCardView" onclick="switchUserView('card')" title="卡片视图" style="display: flex; align-items: center; justify-content: center; width: 36px; height: 30px; padding: 0;">
+                        <svg viewBox="0 0 24 24" width="16" height="16" fill="currentColor">
+                            <rect x="3" y="3" width="7.5" height="7.5" rx="2" />
+                            <rect x="13.5" y="3" width="7.5" height="7.5" rx="2" />
+                            <rect x="3" y="13.5" width="7.5" height="7.5" rx="2" />
+                            <rect x="13.5" y="13.5" width="7.5" height="7.5" rx="2" />
+                        </svg>
+                    </button>
+                    <button class="segment-btn" id="btnUserTableView" onclick="switchUserView('table')" title="表格视图" style="display: flex; align-items: center; justify-content: center; width: 36px; height: 30px; padding: 0;">
+                        <svg viewBox="0 0 24 24" width="16" height="16" fill="currentColor">
+                            <rect x="3" y="4.5" width="18" height="2.8" rx="1.4" />
+                            <rect x="3" y="10.6" width="18" height="2.8" rx="1.4" />
+                            <rect x="3" y="16.7" width="18" height="2.8" rx="1.4" />
+                        </svg>
+                    </button>
+                </div>
+            </div>
+        </div>
+
+        <!-- User Loading & Empty State -->
+        <div id="usersLoadingTip" style="text-align: center; padding: 40px 20px; color: var(--text-sec);">
+            <div style="font-size: 28px; margin-bottom: 8px;">⏳</div>
+            <div>正在从 Keycloak 加载用户数据...</div>
+        </div>
+
+        <div id="usersEmptyTip" style="display: none; text-align: center; padding: 60px 20px;">
+            <div style="font-size: 48px; margin-bottom: 12px;">👤</div>
+            <div style="font-size: 16px; font-weight: 700; color: var(--text); margin-bottom: 6px;">暂无用户数据</div>
+            <div style="font-size: 13px; color: var(--text-sec); margin-bottom: 20px;">点击下方按钮可快速创建新用户并预设 Passkey 认证</div>
+            <button class="btn accent" onclick="openAddUserModal()" style="padding: 10px 20px; font-size: 14px;">➕ 添加第一个用户</button>
+        </div>
+
+        <!-- User Card View Container -->
+        <div id="userCardViewContainer" class="domain-grid" style="display: none;"></div>
+
+        <!-- User Table View Container -->
+        <div id="userTableViewContainer" class="table-container" style="display: none;">
+            <table class="table-modern">
+                <thead>
+                    <tr>
+                        <th>用户账号</th>
+                        <th>邮箱地址</th>
+                        <th>认证凭据</th>
+                        <th>角色权限</th>
+                        <th>创建时间</th>
+                        <th>账号状态</th>
+                        <th style="text-align: right;">操作管理</th>
+                    </tr>
+                </thead>
+                <tbody id="userTableBodyContainer"></tbody>
+            </table>
+        </div>
+    </div>
+
 </div>
 
 <!-- ==================== MODAL: DOMAIN DETAIL PANEL ==================== -->
@@ -619,6 +722,154 @@
     </div>
 </div>
 
+<!-- ==================== MODAL: ADD USER MODAL ==================== -->
+<div id="userAddModal" class="modal-overlay">
+    <div class="modal-dialog" style="max-width: 480px;">
+        <div class="modal-header">
+            <div style="display: flex; align-items: center; gap: 8px;">
+                <span style="font-size: 20px;">➕</span>
+                <span class="modal-title">添加 Keycloak 用户</span>
+            </div>
+            <button class="icon-btn" onclick="closeAddUserModal()" style="width: 32px; height: 32px; font-size: 14px; cursor: pointer;">✕</button>
+        </div>
+        <form id="formAddUser" onsubmit="submitAddUser(event)">
+            <div class="form-group" style="margin-bottom: 14px;">
+                <label class="form-label">用户名 (Username) <span style="color: var(--danger);">*</span></label>
+                <input type="text" id="add_user_name" class="input-box" placeholder="例如: alice 或 user01" required autocomplete="off">
+                <div class="form-hint">支持字母、数字、点与下划线，支持无邮箱独立账号</div>
+            </div>
+            <div class="form-group" style="margin-bottom: 14px;">
+                <label class="form-label">电子邮箱 (Email) <span style="color: var(--text-sec); font-weight: normal;">(选填)</span></label>
+                <input type="email" id="add_user_email" class="input-box" placeholder="例如: user@example.com" autocomplete="off">
+            </div>
+            <div class="form-group" style="margin-bottom: 14px;">
+                <div style="display: flex; justify-content: space-between; align-items: center;">
+                    <label class="form-label" style="margin-bottom: 0;">初始登录密码 <span style="color: var(--text-sec); font-weight: normal;">(选填)</span></label>
+                    <button type="button" class="pill-btn" onclick="generateRandomUserPwd()" style="padding: 2px 8px; font-size: 11px;">🎲 随机生成</button>
+                </div>
+                <input type="text" id="add_user_pwd" class="input-box" placeholder="留空则不设置密码" autocomplete="off" style="margin-top: 6px;">
+            </div>
+            <div class="card" style="padding: 10px 14px; margin-bottom: 16px; background: var(--card-sec);">
+                <div class="setting-row" style="padding: 4px 0;">
+                    <div class="setting-info">
+                        <span class="setting-label" style="font-size: 13px;">🔑 首次登录强制绑定 Passkey</span>
+                        <span class="setting-desc" style="font-size: 11px;">用户首次访问时引导注册指纹/面容/硬件安全密钥</span>
+                    </div>
+                    <label class="switch">
+                        <input type="checkbox" id="add_user_require_passkey" checked>
+                        <span class="slider"></span>
+                    </label>
+                </div>
+                <div class="setting-row" style="padding: 4px 0; margin-top: 6px;">
+                    <div class="setting-info">
+                        <span class="setting-label" style="font-size: 13px;">🛡️ 授予管理员权限 (admin)</span>
+                        <span class="setting-desc" style="font-size: 11px;">赋予 Keycloak Realm 管理员角色</span>
+                    </div>
+                    <label class="switch">
+                        <input type="checkbox" id="add_user_is_admin">
+                        <span class="slider"></span>
+                    </label>
+                </div>
+                <div class="setting-row" style="padding: 4px 0; margin-top: 6px;">
+                    <div class="setting-info">
+                        <span class="setting-label" style="font-size: 13px;">⏳ 设为临时密码</span>
+                        <span class="setting-desc" style="font-size: 11px;">首次登录必须强制修改初始密码</span>
+                    </div>
+                    <label class="switch">
+                        <input type="checkbox" id="add_user_temporary">
+                        <span class="slider"></span>
+                    </label>
+                </div>
+            </div>
+            <div style="display: flex; gap: 10px;">
+                <button type="button" class="btn secondary w-full" onclick="closeAddUserModal()" style="padding: 11px;">取消</button>
+                <button type="submit" id="btnSubmitAddUser" class="btn accent w-full" style="padding: 11px;">🚀 确认创建用户</button>
+            </div>
+        </form>
+    </div>
+</div>
+
+<!-- ==================== MODAL: RESET USER CREDENTIALS ==================== -->
+<div id="userResetModal" class="modal-overlay">
+    <div class="modal-dialog" style="max-width: 460px;">
+        <div class="modal-header">
+            <div style="display: flex; align-items: center; gap: 8px;">
+                <span style="font-size: 20px;">🔐</span>
+                <span class="modal-title">重置密码与凭据</span>
+            </div>
+            <button class="icon-btn" onclick="closeResetUserModal()" style="width: 32px; height: 32px; font-size: 14px; cursor: pointer;">✕</button>
+        </div>
+        <form id="formResetUser" onsubmit="submitResetUser(event)">
+            <input type="hidden" id="reset_user_id">
+            <div style="margin-bottom: 14px; font-size: 13px; color: var(--text);">
+                <span>目标账号: </span>
+                <code id="reset_user_name_display" style="font-weight: 700; color: var(--accent); background: var(--card-sec); padding: 2px 6px; border-radius: 4px;"></code>
+            </div>
+            <div class="form-group" style="margin-bottom: 14px;">
+                <div style="display: flex; justify-content: space-between; align-items: center;">
+                    <label class="form-label" style="margin-bottom: 0;">设置新密码 <span style="color: var(--text-sec); font-weight: normal;">(留空则不修改密码)</span></label>
+                    <button type="button" class="pill-btn" onclick="generateRandomResetPwd()" style="padding: 2px 8px; font-size: 11px;">🎲 随机密码</button>
+                </div>
+                <input type="text" id="reset_new_pwd" class="input-box" placeholder="请输入新密码或留空" autocomplete="off" style="margin-top: 6px;">
+            </div>
+            <div class="card" style="padding: 10px 14px; margin-bottom: 16px; background: var(--card-sec);">
+                <div class="setting-row" style="padding: 4px 0;">
+                    <div class="setting-info">
+                        <span class="setting-label" style="font-size: 13px;">🔑 下次登录强制重新绑定 Passkey</span>
+                        <span class="setting-desc" style="font-size: 11px;">触发 WebAuthn 注册流程</span>
+                    </div>
+                    <label class="switch">
+                        <input type="checkbox" id="reset_require_passkey">
+                        <span class="slider"></span>
+                    </label>
+                </div>
+                <div class="setting-row" style="padding: 4px 0; margin-top: 6px;">
+                    <div class="setting-info">
+                        <span class="setting-label" style="font-size: 13px; color: var(--danger);">🗑️ 注销/清空用户旧 Passkey 凭据</span>
+                        <span class="setting-desc" style="font-size: 11px;">用户丢失旧设备时清除旧公钥</span>
+                    </div>
+                    <label class="switch">
+                        <input type="checkbox" id="reset_clear_passkey">
+                        <span class="slider"></span>
+                    </label>
+                </div>
+            </div>
+            <div style="display: flex; gap: 10px;">
+                <button type="button" class="btn secondary w-full" onclick="closeResetUserModal()" style="padding: 11px;">取消</button>
+                <button type="submit" id="btnSubmitResetUser" class="btn accent w-full" style="padding: 11px;">💾 保存并应用</button>
+            </div>
+        </form>
+    </div>
+</div>
+
+<!-- ==================== MODAL: USER ROLES ==================== -->
+<div id="userRolesModal" class="modal-overlay">
+    <div class="modal-dialog" style="max-width: 480px;">
+        <div class="modal-header">
+            <div style="display: flex; align-items: center; gap: 8px;">
+                <span style="font-size: 20px;">🛡️</span>
+                <span class="modal-title">角色权限管理</span>
+            </div>
+            <button class="icon-btn" onclick="closeUserRolesModal()" style="width: 32px; height: 32px; font-size: 14px; cursor: pointer;">✕</button>
+        </div>
+        <form id="formUserRoles" onsubmit="submitUserRoles(event)">
+            <input type="hidden" id="roles_user_id">
+            <div style="margin-bottom: 14px; font-size: 13px; color: var(--text);">
+                <span>目标账号: </span>
+                <code id="roles_user_name_display" style="font-weight: 700; color: var(--accent); background: var(--card-sec); padding: 2px 6px; border-radius: 4px;"></code>
+            </div>
+            <div class="form-label" style="margin-bottom: 8px;">可分配的 Realm 角色</div>
+            <div id="rolesCheckboxContainer" class="card" style="padding: 12px; margin-bottom: 16px; max-height: 220px; overflow-y: auto;">
+                <div style="text-align: center; color: var(--text-sec); font-size: 12px;">正在加载角色列表...</div>
+            </div>
+            <div style="display: flex; gap: 10px;">
+                <button type="button" class="btn secondary w-full" onclick="closeUserRolesModal()" style="padding: 11px;">取消</button>
+                <button type="submit" id="btnSubmitUserRoles" class="btn accent w-full" style="padding: 11px;">💾 更新角色权限</button>
+            </div>
+        </form>
+    </div>
+</div>
+
 <!-- ==================== FLOATING GLASS DOCK ==================== -->
 <div class="dock">
     <button class="dock-btn active" id="dock-btn-domains" onclick="switchTab('p-domains', '域名管理', this)">
@@ -633,11 +884,16 @@
         <svg viewBox="0 0 24 24"><path d="M18 8h-1V6c0-2.76-2.24-5-5-5S7 3.24 7 6v2H6c-1.1 0-2 .9-2 2v10c0 1.1.9 2 2 2h12c1.1 0 2-.9 2-2V10c0-1.1-.9-2-2-2zm-6 9c-1.1 0-2-.9-2-2s.9-2 2-2 2 .9 2 2-.9 2-2 2zm3.1-9H8.9V6c0-1.71 1.39-3.1 3.1-3.1 1.71 0 3.1 1.39 3.1 3.1v2z"/></svg>
         <span>证书</span>
     </button>
+    <button class="dock-btn" id="dock-btn-users" onclick="switchTab('p-users', '用户管理', this)">
+        <svg viewBox="0 0 24 24"><path d="M12 12c2.21 0 4-1.79 4-4s-1.79-4-4-4-4 1.79-4 4 1.79 4 4 4zm0 2c-2.67 0-8 1.34-8 4v2h16v-2c0-2.66-5.33-4-8-4z"/></svg>
+        <span>用户</span>
+    </button>
     <button class="dock-btn" id="dock-btn-settings" onclick="switchTab('p-settings', '系统配置', this)">
         <svg viewBox="0 0 24 24"><path d="M19.14 12.94c.04-.3.06-.61.06-.94 0-.32-.02-.64-.07-.94l2.03-1.58c.18-.14.23-.41.12-.61l-1.92-3.32c-.12-.22-.37-.29-.59-.22l-2.39.96c-.5-.38-1.03-.7-1.62-.94l-.36-2.54c-.04-.24-.24-.41-.48-.41h-3.84c-.24 0-.43.17-.47.41l-.36 2.54c-.59.24-1.13.57-1.62.94l-2.39-.96c-.22-.08-.47 0-.59.22L2.74 8.87c-.12.21-.08.47.12.61l2.03 1.58c-.05.3-.09.63-.09.94s.02.64.07.94l-2.03 1.58c-.18.14-.23.41-.12.61l1.92 3.32c.12.22.37.29.59.22l2.39-.96c.5.38 1.03.7 1.62.94l.36 2.54c.05.24.24.41.48.41h3.84c.24 0 .44-.17.47-.41l.36-2.54c.59-.24 1.13-.56 1.62-.94l2.39.96c.22.08.47 0 .59-.22l1.92-3.32c.12-.22.07-.47-.12-.61l-2.01-1.58zM12 15.6c-1.98 0-3.6-1.62-3.6-3.6s1.62-3.6 3.6-3.6 3.6 1.62 3.6 3.6-1.62 3.6-3.6 3.6z"/></svg>
         <span>设置</span>
     </button>
 </div>
+
 
 <script src="/static/js/abit.js"></script>
 <script>

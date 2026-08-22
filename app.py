@@ -788,35 +788,101 @@ def get_keycloak_admin_credentials():
 
     return admin_user or "admin", admin_pass or "", kc_url
 
+# ─── Keycloak Admin REST API 统一封装与 Token 缓存 ───
+_KC_TOKEN_CACHE = {"token": None, "expires_at": 0, "base": None}
+_KC_TOKEN_LOCK = threading.Lock()
+
+def get_keycloak_admin_token(force_refresh=False):
+    global _KC_TOKEN_CACHE
+    now = time.time()
+    with _KC_TOKEN_LOCK:
+        if not force_refresh and _KC_TOKEN_CACHE["token"] and (now < _KC_TOKEN_CACHE["expires_at"]):
+            return _KC_TOKEN_CACHE["token"], _KC_TOKEN_CACHE["base"]
+            
+        admin_user, admin_pass, kc_base = get_keycloak_admin_credentials()
+        if not admin_pass:
+            return None, None
+            
+        endpoints = ["http://127.0.0.1:8080"]
+        if kc_base not in endpoints:
+            endpoints.append(kc_base)
+            
+        token = None
+        active_base = None
+        for base in endpoints:
+            token_url = f"{base}/realms/master/protocol/openid-connect/token"
+            try:
+                res = requests.post(token_url, data={
+                    "client_id": "admin-cli",
+                    "username": admin_user,
+                    "password": admin_pass,
+                    "grant_type": "password"
+                }, timeout=5)
+                if res.status_code == 200:
+                    data = res.json()
+                    token = data.get("access_token")
+                    expires_in = data.get("expires_in", 60)
+                    if token:
+                        active_base = base
+                        _KC_TOKEN_CACHE["token"] = token
+                        _KC_TOKEN_CACHE["expires_at"] = now + max(10, expires_in - 10)
+                        _KC_TOKEN_CACHE["base"] = active_base
+                        break
+            except Exception:
+                continue
+                
+        return token, active_base
+
+def call_keycloak_api(endpoint, method="GET", json_data=None, params=None):
+    token, base = get_keycloak_admin_token()
+    if not token or not base:
+        token, base = get_keycloak_admin_token(force_refresh=True)
+        if not token or not base:
+            return None, 500, "无法连接 Keycloak Admin API，请检查管理员密码与容器运行状态"
+            
+    url = f"{base}/admin/realms/master/{endpoint.lstrip('/')}"
+    headers = {
+        "Authorization": f"Bearer {token}",
+        "Content-Type": "application/json"
+    }
+    try:
+        if method == "GET":
+            res = requests.get(url, headers=headers, params=params, timeout=10)
+        elif method == "POST":
+            res = requests.post(url, headers=headers, json=json_data, timeout=10)
+        elif method == "PUT":
+            res = requests.put(url, headers=headers, json=json_data, timeout=10)
+        elif method == "DELETE":
+            res = requests.delete(url, headers=headers, timeout=10)
+        else:
+            return None, 400, f"不支持的 HTTP 方法: {method}"
+            
+        if res.status_code == 401:
+            token, base = get_keycloak_admin_token(force_refresh=True)
+            if token and base:
+                url = f"{base}/admin/realms/master/{endpoint.lstrip('/')}"
+                headers["Authorization"] = f"Bearer {token}"
+                if method == "GET":
+                    res = requests.get(url, headers=headers, params=params, timeout=10)
+                elif method == "POST":
+                    res = requests.post(url, headers=headers, json=json_data, timeout=10)
+                elif method == "PUT":
+                    res = requests.put(url, headers=headers, json=json_data, timeout=10)
+                elif method == "DELETE":
+                    res = requests.delete(url, headers=headers, timeout=10)
+
+        data = None
+        if res.text:
+            try:
+                data = res.json()
+            except Exception:
+                data = res.text
+        return data, res.status_code, ""
+    except Exception as e:
+        return None, 500, str(e)
+
 def setup_keycloak_passkey_flow():
-    admin_user, admin_pass, kc_base = get_keycloak_admin_credentials()
-    if not admin_pass:
-        return None
-
-    # 获取 Token (优先使用内部直连地址 http://127.0.0.1:8080，如失败再尝试公共 URL)
-    endpoints = ["http://127.0.0.1:8080"]
-    if kc_base not in endpoints:
-        endpoints.append(kc_base)
-
-    token = None
-    active_base = None
-    for base in endpoints:
-        token_url = f"{base}/realms/master/protocol/openid-connect/token"
-        try:
-            res = requests.post(token_url, data={
-                "client_id": "admin-cli",
-                "username": admin_user,
-                "password": admin_pass,
-                "grant_type": "password"
-            }, timeout=6)
-            if res.status_code == 200:
-                token = res.json().get("access_token")
-                if token:
-                    active_base = base
-                    break
-        except Exception:
-            continue
-
+    token, active_base = get_keycloak_admin_token()
     if not token or not active_base:
         log("提示: 暂未连接到 Keycloak API (可忽略)，跳过 Passkey 自定义认证流配置")
         return None
@@ -836,6 +902,7 @@ def setup_keycloak_passkey_flow():
                     requests.put(f"{req_actions_url}/{action['alias']}", headers=headers, json=action, timeout=6)
                     log("成功将 WebAuthn Passwordless 设为注册时的默认必填项")
                     break
+
 
         # 2. 检查或创建专属的 passkey-only-browser 流
         flows_res = requests.get(f"{api_base}/flows", headers=headers, timeout=6)
@@ -2222,6 +2289,256 @@ def api_list():
 def ssl_page():
     return render_template('ssl.html')
 
+@app.route('/users')
+def users_page():
+    return redirect('/#users')
+
+# ─── Keycloak 用户与角色权限管理 API ───
+
+@app.route('/api/users')
+def api_users():
+    search = request.args.get('search', '').strip()
+    first = int(request.args.get('first', 0))
+    max_count = int(request.args.get('max', 100))
+    
+    params = {"first": first, "max": max_count, "briefRepresentation": "false"}
+    if search:
+        params["search"] = search
+        
+    data, code, err = call_keycloak_api("users", "GET", params=params)
+    if code != 200 or not isinstance(data, list):
+        return json.dumps({"success": False, "error": err or "获取用户列表失败", "users": []})
+        
+    admin_user, _, _ = get_keycloak_admin_credentials()
+    
+    enriched_users = []
+    for u in data:
+        uid = u.get("id")
+        username = u.get("username", "")
+        email = u.get("email", "")
+        enabled = bool(u.get("enabled", True))
+        created_ts = u.get("createdTimestamp", 0)
+        req_actions = u.get("requiredActions", [])
+        
+        has_passkey = False
+        passkey_count = 0
+        has_password = False
+        
+        # 查询用户绑定的凭据
+        creds_data, creds_code, _ = call_keycloak_api(f"users/{uid}/credentials", "GET")
+        if creds_code == 200 and isinstance(creds_data, list):
+            for c in creds_data:
+                ctype = c.get("type", "").lower()
+                if "webauthn" in ctype:
+                    has_passkey = True
+                    passkey_count += 1
+                elif ctype == "password":
+                    has_password = True
+                    
+        # 查询用户的 Realm 角色
+        roles_list = []
+        is_admin = (username == admin_user)
+        roles_data, roles_code, _ = call_keycloak_api(f"users/{uid}/role-mappings/realm", "GET")
+        if roles_code == 200 and isinstance(roles_data, list):
+            for r in roles_data:
+                rname = r.get("name", "")
+                if rname:
+                    roles_list.append(rname)
+                    if rname == "admin":
+                        is_admin = True
+                        
+        enriched_users.append({
+            "id": uid,
+            "username": username,
+            "email": email,
+            "enabled": enabled,
+            "created_timestamp": created_ts,
+            "has_passkey": has_passkey,
+            "passkey_count": passkey_count,
+            "has_password": has_password,
+            "required_actions": req_actions,
+            "roles": roles_list,
+            "is_admin": is_admin
+        })
+        
+    return json.dumps({"success": True, "users": enriched_users, "total": len(enriched_users)})
+
+@app.route('/api/users/create', methods=['POST'])
+def api_users_create():
+    username = request.form.get('username', '').strip()
+    email = request.form.get('email', '').strip()
+    password = request.form.get('password', '').strip()
+    temporary = request.form.get('temporary', 'false').lower() in ['true', '1', 'on']
+    require_passkey = request.form.get('require_passkey', 'true').lower() in ['true', '1', 'on']
+    is_admin = request.form.get('is_admin', 'false').lower() in ['true', '1', 'on']
+    
+    if not username:
+        return json.dumps({"success": False, "error": "用户名不能为空"})
+        
+    if not re.match(r'^[a-zA-Z0-9_\.\@\-]+$', username):
+        return json.dumps({"success": False, "error": "用户名仅支持字母、数字、点、下划线和连字符"})
+        
+    req_actions = []
+    if require_passkey:
+        req_actions.append("webauthn-register-passwordless")
+        
+    user_payload = {
+        "username": username,
+        "enabled": True,
+        "emailVerified": bool(email),
+        "requiredActions": req_actions
+    }
+    if email:
+        user_payload["email"] = email
+        
+    if password:
+        user_payload["credentials"] = [{
+            "type": "password",
+            "value": password,
+            "temporary": temporary
+        }]
+        
+    data, code, err = call_keycloak_api("users", "POST", json_data=user_payload)
+    if code not in (200, 201, 204):
+        err_msg = err or "创建用户失败"
+        if isinstance(data, dict) and data.get("errorMessage"):
+            err_msg = data["errorMessage"]
+        return json.dumps({"success": False, "error": err_msg})
+        
+    # 查询刚创建的用户获取其 ID
+    created_id = None
+    u_list, u_code, _ = call_keycloak_api("users", "GET", params={"username": username, "exact": "true"})
+    if u_code == 200 and isinstance(u_list, list) and u_list:
+        created_id = u_list[0].get("id")
+        
+    # 若勾选管理员角色，赋予 admin Realm 角色
+    if created_id and is_admin:
+        r_data, r_code, _ = call_keycloak_api("roles/admin", "GET")
+        if r_code == 200 and isinstance(r_data, dict):
+            call_keycloak_api(f"users/{created_id}/role-mappings/realm", "POST", json_data=[r_data])
+            
+    log(f"成功创建 Keycloak 用户: {username} (Passkey绑定预置: {require_passkey}, 管理员: {is_admin})")
+    return json.dumps({"success": True, "msg": f"用户 {username} 创建成功", "user_id": created_id})
+
+@app.route('/api/users/<user_id>/toggle', methods=['POST'])
+def api_users_toggle(user_id):
+    enabled_str = request.form.get('enabled', 'false')
+    enabled = enabled_str.lower() in ['true', '1', 'on']
+    
+    admin_user, _, _ = get_keycloak_admin_credentials()
+    u_data, u_code, _ = call_keycloak_api(f"users/{user_id}", "GET")
+    if u_code == 200 and isinstance(u_data, dict):
+        if not enabled and u_data.get("username") == admin_user:
+            return json.dumps({"success": False, "error": "禁止停用系统超级管理员账号"})
+            
+    data, code, err = call_keycloak_api(f"users/{user_id}", "PUT", json_data={"enabled": enabled})
+    if code not in (200, 204):
+        return json.dumps({"success": False, "error": err or "更新用户状态失败"})
+        
+    log(f"用户状态已更新: {user_id} -> {'启用' if enabled else '停用'}")
+    return json.dumps({"success": True, "enabled": enabled})
+
+@app.route('/api/users/<user_id>/delete', methods=['POST'])
+def api_users_delete(user_id):
+    admin_user, _, _ = get_keycloak_admin_credentials()
+    u_data, u_code, _ = call_keycloak_api(f"users/{user_id}", "GET")
+    if u_code == 200 and isinstance(u_data, dict):
+        if u_data.get("username") == admin_user:
+            return json.dumps({"success": False, "error": "禁止删除系统超级管理员账号"})
+            
+    data, code, err = call_keycloak_api(f"users/{user_id}", "DELETE")
+    if code not in (200, 204):
+        return json.dumps({"success": False, "error": err or "删除用户失败"})
+        
+    log(f"用户已成功删除: {user_id}")
+    return json.dumps({"success": True, "msg": "用户已彻底删除"})
+
+@app.route('/api/users/<user_id>/reset_password', methods=['POST'])
+def api_users_reset_password(user_id):
+    new_password = request.form.get('new_password', '').strip()
+    temporary = request.form.get('temporary', 'false').lower() in ['true', '1', 'on']
+    require_passkey = request.form.get('require_passkey', 'false').lower() in ['true', '1', 'on']
+    clear_passkey = request.form.get('clear_passkey', 'false').lower() in ['true', '1', 'on']
+    
+    # 1. 重置密码
+    if new_password:
+        pwd_payload = {
+            "type": "password",
+            "value": new_password,
+            "temporary": temporary
+        }
+        _, p_code, p_err = call_keycloak_api(f"users/{user_id}/reset-password", "PUT", json_data=pwd_payload)
+        if p_code not in (200, 204):
+            return json.dumps({"success": False, "error": p_err or "重置密码失败"})
+            
+    # 2. 清除旧 Passkey 凭据（若勾选）
+    if clear_passkey:
+        creds_data, c_code, _ = call_keycloak_api(f"users/{user_id}/credentials", "GET")
+        if c_code == 200 and isinstance(creds_data, list):
+            for c in creds_data:
+                if "webauthn" in c.get("type", "").lower():
+                    cid = c.get("id")
+                    if cid:
+                        call_keycloak_api(f"users/{user_id}/credentials/{cid}", "DELETE")
+                        
+    # 3. 设置必填操作：要求下次登录绑定 Passkey
+    if require_passkey:
+        u_data, u_code, _ = call_keycloak_api(f"users/{user_id}", "GET")
+        if u_code == 200 and isinstance(u_data, dict):
+            actions = u_data.get("requiredActions", [])
+            if "webauthn-register-passwordless" not in actions:
+                actions.append("webauthn-register-passwordless")
+            call_keycloak_api(f"users/{user_id}", "PUT", json_data={"requiredActions": actions})
+            
+    log(f"用户凭据与密码重置成功: {user_id}")
+    return json.dumps({"success": True, "msg": "密码与凭据设置已成功生效"})
+
+@app.route('/api/roles')
+def api_roles():
+    data, code, err = call_keycloak_api("roles", "GET")
+    if code != 200 or not isinstance(data, list):
+        return json.dumps({"success": False, "error": err or "获取角色列表失败", "roles": []})
+    roles = []
+    for r in data:
+        rname = r.get("name", "")
+        if rname:
+            roles.append({
+                "id": r.get("id"),
+                "name": rname,
+                "description": r.get("description", "")
+            })
+    return json.dumps({"success": True, "roles": roles})
+
+@app.route('/api/users/<user_id>/roles', methods=['POST'])
+def api_users_update_roles(user_id):
+    role_names_raw = request.form.get('roles', '').strip()
+    target_roles = [r.strip() for r in role_names_raw.split(',') if r.strip()]
+    
+    # 1. 获取所有可用的 Realm 角色
+    all_roles, r_code, _ = call_keycloak_api("roles", "GET")
+    if r_code != 200 or not isinstance(all_roles, list):
+        return json.dumps({"success": False, "error": "获取角色元数据失败"})
+    role_map = {r["name"]: r for r in all_roles if "name" in r}
+    
+    # 2. 获取用户当前已有的 Realm 角色
+    curr_roles, c_code, _ = call_keycloak_api(f"users/{user_id}/role-mappings/realm", "GET")
+    if c_code != 200 or not isinstance(curr_roles, list):
+        curr_roles = []
+    curr_role_names = set(r["name"] for r in curr_roles if "name" in r)
+    
+    # 3. 计算需要新增和删除的角色
+    to_add = [role_map[name] for name in target_roles if name in role_map and name not in curr_role_names]
+    to_remove = [r for r in curr_roles if r.get("name") not in target_roles and r.get("name") != "default-roles-master"]
+    
+    if to_add:
+        call_keycloak_api(f"users/{user_id}/role-mappings/realm", "POST", json_data=to_add)
+    if to_remove:
+        call_keycloak_api(f"users/{user_id}/role-mappings/realm", "DELETE", json_data=to_remove)
+        
+    log(f"用户角色权限已更新: {user_id} -> {target_roles}")
+    return json.dumps({"success": True, "msg": "用户角色权限更新成功"})
+
 if __name__ == '__main__':
     debug_mode = os.environ.get('FLASK_DEBUG', '0') == '1'
     app.run(host='0.0.0.0', port=WEB_PORT, debug=debug_mode, threaded=True)
+

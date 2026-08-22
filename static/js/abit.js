@@ -152,8 +152,11 @@ function switchTab(pageId, title, btnEl) {
         load1PanelAccounts();
     } else if (pageId === 'p-ssl') {
         loadSSLAccounts();
+    } else if (pageId === 'p-users') {
+        loadUsersAjax();
     }
 }
+
 
 // --- 5. AJAX Domains Data Loading & Rendering ---
 let cachedDomainsData = {};
@@ -506,10 +509,553 @@ document.addEventListener('DOMContentLoaded', () => {
 
     // 根据 URL Hash 激活对应 Tab
     const hash = (window.location.hash || '').replace('#', '');
-    if (hash && ['domains', 'add', 'ssl', 'settings'].includes(hash)) {
-        const titleMap = { 'domains': '总览', 'add': '添加认证', 'ssl': '证书申请', 'settings': '系统配置' };
+    if (hash && ['domains', 'add', 'ssl', 'users', 'settings'].includes(hash)) {
+        const titleMap = { 'domains': '总览', 'add': '添加认证', 'ssl': '证书申请', 'users': '用户管理', 'settings': '系统配置' };
         switchTab(`p-${hash}`, titleMap[hash] || hash, document.getElementById(`dock-btn-${hash}`));
     } else {
         switchTab('p-domains', '总览', document.getElementById('dock-btn-domains'));
     }
 });
+
+// --- 9. Keycloak User Management Interactive Engine ---
+let cachedUsersData = [];
+let userViewMode = localStorage.getItem('abit_user_view_mode') || 'card';
+
+function switchUserView(mode) {
+    userViewMode = mode;
+    localStorage.setItem('abit_user_view_mode', mode);
+    const cardContainer = document.getElementById('userCardViewContainer');
+    const tableContainer = document.getElementById('userTableViewContainer');
+    const btnCard = document.getElementById('btnUserCardView');
+    const btnTable = document.getElementById('btnUserTableView');
+
+    if (mode === 'table') {
+        if (cardContainer) cardContainer.style.display = 'none';
+        if (tableContainer) tableContainer.style.display = 'block';
+        if (btnTable) btnTable.classList.add('active');
+        if (btnCard) btnCard.classList.remove('active');
+    } else {
+        if (cardContainer) cardContainer.style.display = 'grid';
+        if (tableContainer) tableContainer.style.display = 'none';
+        if (btnCard) btnCard.classList.add('active');
+        if (btnTable) btnTable.classList.remove('active');
+    }
+}
+
+async function loadUsersAjax(silent = false) {
+    const loadingTip = document.getElementById('usersLoadingTip');
+    const emptyTip = document.getElementById('usersEmptyTip');
+    const cardContainer = document.getElementById('userCardViewContainer');
+    const tableContainer = document.getElementById('userTableViewContainer');
+
+    if (!silent && loadingTip) loadingTip.style.display = 'block';
+
+    try {
+        const res = await fetch('/api/users');
+        if (!res.ok) throw new Error('网络请求失败');
+        const data = await res.json();
+        if (loadingTip) loadingTip.style.display = 'none';
+
+        if (data.success) {
+            cachedUsersData = data.users || [];
+            renderUsersUI(cachedUsersData);
+        } else {
+            showToast('加载用户失败: ' + (data.error || '未知错误'), 'error');
+        }
+    } catch (e) {
+        if (loadingTip) loadingTip.style.display = 'none';
+        showToast('加载 Keycloak 用户列表异常', 'error');
+    }
+}
+
+function formatTimestamp(ts) {
+    if (!ts) return '-';
+    const d = new Date(ts);
+    const y = d.getFullYear();
+    const m = String(d.getMonth() + 1).padStart(2, '0');
+    const date = String(d.getDate()).padStart(2, '0');
+    const h = String(d.getHours()).padStart(2, '0');
+    const min = String(d.getMinutes()).padStart(2, '0');
+    return `${y}-${m}-${date} ${h}:${min}`;
+}
+
+function renderUsersUI(users) {
+    const totalCount = users.length;
+    const passkeyCount = users.filter(u => u.has_passkey).length;
+    const activeCount = users.filter(u => u.enabled).length;
+    const adminCount = users.filter(u => u.is_admin).length;
+
+    // 更新统计卡片
+    const statTotal = document.getElementById('stat-total-users');
+    const statPasskey = document.getElementById('stat-passkey-users');
+    const statActive = document.getElementById('stat-active-users');
+    const statAdmin = document.getElementById('stat-admin-users');
+
+    if (statTotal) statTotal.textContent = totalCount;
+    if (statPasskey) statPasskey.textContent = passkeyCount;
+    if (statActive) statActive.textContent = activeCount;
+    if (statAdmin) statAdmin.textContent = adminCount;
+
+    const cardGrid = document.getElementById('userCardViewContainer');
+    const tableBody = document.getElementById('userTableBodyContainer');
+    const emptyView = document.getElementById('usersEmptyTip');
+
+    if (totalCount === 0) {
+        if (cardGrid) cardGrid.style.display = 'none';
+        const tableContainer = document.getElementById('userTableViewContainer');
+        if (tableContainer) tableContainer.style.display = 'none';
+        if (emptyView) emptyView.style.display = 'block';
+        return;
+    }
+
+    if (emptyView) emptyView.style.display = 'none';
+    switchUserView(userViewMode);
+
+    // 渲染卡片视图
+    if (cardGrid) {
+        cardGrid.innerHTML = '';
+        users.forEach(u => {
+            const card = document.createElement('div');
+            card.className = 'domain-card';
+            card.setAttribute('data-username', u.username || '');
+            card.setAttribute('data-email', u.email || '');
+
+            let passkeyBadge = '';
+            if (u.has_passkey) {
+                passkeyBadge = `<span class="badge success" title="已注册 ${u.passkey_count} 个 Passkey 硬件/生物凭据">🔑 Passkey (${u.passkey_count})</span>`;
+            } else if (u.required_actions && u.required_actions.includes('webauthn-register-passwordless')) {
+                passkeyBadge = `<span class="badge warning" title="下次登录将引导绑定 Passkey">⏳ 待绑定 Passkey</span>`;
+            } else if (u.has_password) {
+                passkeyBadge = `<span class="badge secondary" title="仅配置密码登录">🔒 密码登录</span>`;
+            } else {
+                passkeyBadge = `<span class="badge secondary">未设凭据</span>`;
+            }
+
+            const adminBadge = u.is_admin ? `<span class="badge accent">👑 管理员</span>` : `<span class="badge secondary">👤 普通用户</span>`;
+            const statusDot = u.enabled ? `<span class="status-dot"></span>` : `<span class="status-dot offline"></span>`;
+
+            card.innerHTML = `
+                <div>
+                    <div class="domain-card-header">
+                        <div>
+                            <span class="domain-name">
+                                ${statusDot}
+                                ${u.username}
+                            </span>
+                            <div class="domain-target">
+                                <span>📧 邮箱:</span>
+                                <span style="color: var(--text); font-weight: 500;">${u.email || '<span style="color:var(--text-sec); font-style:italic;">未绑定邮箱</span>'}</span>
+                            </div>
+                        </div>
+                        <label class="switch" title="一键切换启用/停用">
+                            <input type="checkbox" ${u.enabled ? 'checked' : ''} onchange="toggleUserStatus('${u.id}', this.checked, this)">
+                            <span class="slider"></span>
+                        </label>
+                    </div>
+
+                    <div style="display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 8px; margin-top: 10px;">
+                        <div class="badges-wrap" style="margin: 0;">
+                            ${adminBadge}
+                            ${passkeyBadge}
+                        </div>
+
+                        <div style="display: inline-flex; align-items: center; gap: 6px; margin-left: auto;">
+                            <button class="btn secondary sm" onclick="openResetUserModal('${u.id}', '${u.username}', ${u.has_passkey})" style="padding: 4px 8px; font-size: 11px;" title="重置密码或重新绑定 Passkey">🔐 凭据</button>
+                            <button class="btn secondary sm" onclick="openUserRolesModal('${u.id}', '${u.username}')" style="padding: 4px 8px; font-size: 11px;" title="分配角色权限">🛡️ 角色</button>
+                            <button class="btn danger sm" onclick="deleteUserAjax('${u.id}', '${u.username}')" style="padding: 4px 8px; font-size: 11px;" title="删除用户">🗑️</button>
+                        </div>
+                    </div>
+
+                    <div style="margin-top: 8px; font-size: 11px; color: var(--text-sec); display: flex; justify-content: space-between;">
+                        <span>创建时间:</span>
+                        <span>${formatTimestamp(u.created_timestamp)}</span>
+                    </div>
+                </div>
+            `;
+            cardGrid.appendChild(card);
+        });
+    }
+
+    // 渲染表格视图
+    if (tableBody) {
+        tableBody.innerHTML = '';
+        users.forEach(u => {
+            const tr = document.createElement('tr');
+            tr.setAttribute('data-username', u.username || '');
+            tr.setAttribute('data-email', u.email || '');
+
+            let passkeyBadge = '';
+            if (u.has_passkey) {
+                passkeyBadge = `<span class="badge success">🔑 Passkey (${u.passkey_count})</span>`;
+            } else if (u.required_actions && u.required_actions.includes('webauthn-register-passwordless')) {
+                passkeyBadge = `<span class="badge warning">⏳ 待绑定 Passkey</span>`;
+            } else if (u.has_password) {
+                passkeyBadge = `<span class="badge secondary">🔒 密码登录</span>`;
+            } else {
+                passkeyBadge = `<span class="badge secondary">未设凭据</span>`;
+            }
+
+            const adminBadge = u.is_admin ? `<span class="badge accent">👑 管理员</span>` : `<span class="badge secondary">👤 普通用户</span>`;
+            const statusDot = u.enabled ? `<span class="status-dot"></span>` : `<span class="status-dot offline"></span>`;
+
+            tr.innerHTML = `
+                <td>
+                    <div style="display: flex; align-items: center; gap: 8px; font-weight: 700;">
+                        ${statusDot}
+                        <span>${u.username}</span>
+                    </div>
+                </td>
+                <td>
+                    <span style="font-size: 13px; color: ${u.email ? 'var(--text)' : 'var(--text-sec)'};">${u.email || '-'}</span>
+                </td>
+                <td>
+                    <div class="badges-wrap" style="margin: 0;">
+                        ${passkeyBadge}
+                    </div>
+                </td>
+                <td>
+                    <div class="badges-wrap" style="margin: 0;">
+                        ${adminBadge}
+                    </div>
+                </td>
+                <td style="font-size: 12px; color: var(--text-sec); font-family: monospace;">
+                    ${formatTimestamp(u.created_timestamp)}
+                </td>
+                <td>
+                    <label class="switch" style="transform: scale(0.85); transform-origin: left center;">
+                        <input type="checkbox" ${u.enabled ? 'checked' : ''} onchange="toggleUserStatus('${u.id}', this.checked, this)">
+                        <span class="slider"></span>
+                    </label>
+                </td>
+                <td style="text-align: right;">
+                    <div style="display: inline-flex; align-items: center; gap: 4px;">
+                        <button class="btn secondary sm" onclick="openResetUserModal('${u.id}', '${u.username}', ${u.has_passkey})" style="padding: 4px 8px; font-size: 11px;">🔐 凭据</button>
+                        <button class="btn secondary sm" onclick="openUserRolesModal('${u.id}', '${u.username}')" style="padding: 4px 8px; font-size: 11px;">🛡️ 角色</button>
+                        <button class="btn danger sm" onclick="deleteUserAjax('${u.id}', '${u.username}')" style="padding: 4px 8px; font-size: 11px;">🗑️</button>
+                    </div>
+                </td>
+            `;
+            tableBody.appendChild(tr);
+        });
+    }
+}
+
+function filterUsers(query) {
+    const q = (query || '').toLowerCase().trim();
+    const cards = document.querySelectorAll('#userCardViewContainer .domain-card');
+    const rows = document.querySelectorAll('#userTableBodyContainer tr');
+
+    cards.forEach(card => {
+        const u = (card.getAttribute('data-username') || '').toLowerCase();
+        const e = (card.getAttribute('data-email') || '').toLowerCase();
+        if (!q || u.includes(q) || e.includes(q)) {
+            card.style.display = 'flex';
+        } else {
+            card.style.display = 'none';
+        }
+    });
+
+    rows.forEach(row => {
+        const u = (row.getAttribute('data-username') || '').toLowerCase();
+        const e = (row.getAttribute('data-email') || '').toLowerCase();
+        if (!q || u.includes(q) || e.includes(q)) {
+            row.style.display = '';
+        } else {
+            row.style.display = 'none';
+        }
+    });
+}
+
+// --- Add User Modal Logic ---
+function openAddUserModal() {
+    const modal = document.getElementById('userAddModal');
+    if (modal) {
+        document.getElementById('formAddUser').reset();
+        document.getElementById('add_user_require_passkey').checked = true;
+        modal.classList.add('active');
+        setTimeout(() => document.getElementById('add_user_name').focus(), 100);
+    }
+}
+
+function closeAddUserModal() {
+    const modal = document.getElementById('userAddModal');
+    if (modal) modal.classList.remove('active');
+}
+
+function generateRandomUserPwd() {
+    const chars = 'abcdefghjkmnpqrstuvwxyzABCDEFGHJKLMNPQRSTUVWXYZ23456789!@#$%';
+    let pwd = '';
+    for (let i = 0; i < 14; i++) {
+        pwd += chars.charAt(Math.floor(Math.random() * chars.length));
+    }
+    const input = document.getElementById('add_user_pwd');
+    if (input) {
+        input.value = pwd;
+        copyToClipboard(pwd, '随机初始密码');
+    }
+}
+
+async function submitAddUser(e) {
+    if (e) e.preventDefault();
+    const btn = document.getElementById('btnSubmitAddUser');
+    const username = (document.getElementById('add_user_name').value || '').trim();
+    const email = (document.getElementById('add_user_email').value || '').trim();
+    const pwd = document.getElementById('add_user_pwd').value;
+    const reqPasskey = document.getElementById('add_user_require_passkey').checked;
+    const isAdmin = document.getElementById('add_user_is_admin').checked;
+    const temporary = document.getElementById('add_user_temporary').checked;
+
+    if (!username) {
+        showToast('请输入用户名', 'warning');
+        return;
+    }
+
+    btn.disabled = true;
+    btn.textContent = '正在创建中...';
+
+    const formData = new FormData();
+    formData.append('username', username);
+    formData.append('email', email);
+    formData.append('password', pwd);
+    formData.append('require_passkey', reqPasskey ? 'true' : 'false');
+    formData.append('is_admin', isAdmin ? 'true' : 'false');
+    formData.append('temporary', temporary ? 'true' : 'false');
+    formData.append('_csrf_token', (document.cookie.match(/(?:^|;\s*)csrf_token=([^;]+)/) || [])[1] || '');
+
+    try {
+        const res = await fetch('/api/users/create', { method: 'POST', body: formData });
+        const data = await res.json();
+        btn.disabled = false;
+        btn.textContent = '🚀 确认创建用户';
+
+        if (data.success) {
+            showToast(`用户 ${username} 创建成功！`, 'success');
+            closeAddUserModal();
+            loadUsersAjax(true);
+        } else {
+            showToast('创建失败: ' + (data.error || '未知错误'), 'error');
+        }
+    } catch (err) {
+        btn.disabled = false;
+        btn.textContent = '🚀 确认创建用户';
+        showToast('网络请求发生异常', 'error');
+    }
+}
+
+// --- Toggle User Status Logic ---
+async function toggleUserStatus(userId, enabled, switchEl) {
+    if (switchEl) switchEl.disabled = true;
+
+    const formData = new FormData();
+    formData.append('enabled', enabled ? 'true' : 'false');
+    formData.append('_csrf_token', (document.cookie.match(/(?:^|;\s*)csrf_token=([^;]+)/) || [])[1] || '');
+
+    try {
+        const res = await fetch(`/api/users/${userId}/toggle`, { method: 'POST', body: formData });
+        const data = await res.json();
+        if (switchEl) switchEl.disabled = false;
+
+        if (data.success) {
+            showToast(`用户状态已切换为: ${enabled ? '正常激活' : '已停用'}`, 'success');
+            const targetUser = cachedUsersData.find(u => u.id === userId);
+            if (targetUser) targetUser.enabled = enabled;
+            renderUsersUI(cachedUsersData);
+        } else {
+            if (switchEl) switchEl.checked = !enabled;
+            showToast('操作失败: ' + (data.error || '未知错误'), 'error');
+        }
+    } catch (err) {
+        if (switchEl) {
+            switchEl.disabled = false;
+            switchEl.checked = !enabled;
+        }
+        showToast('网络请求异常', 'error');
+    }
+}
+
+// --- Delete User Logic ---
+async function deleteUserAjax(userId, username) {
+    if (!confirm(`确定要彻底删除用户【${username}】吗？\n删除后该用户绑定的所有 Passkey 凭据与权限将被永久清除，不可撤销！`)) {
+        return;
+    }
+
+    showToast(`正在删除用户 ${username}...`, 'info');
+
+    const formData = new FormData();
+    formData.append('_csrf_token', (document.cookie.match(/(?:^|;\s*)csrf_token=([^;]+)/) || [])[1] || '');
+
+    try {
+        const res = await fetch(`/api/users/${userId}/delete`, { method: 'POST', body: formData });
+        const data = await res.json();
+        if (data.success) {
+            showToast(`用户 ${username} 已成功删除`, 'success');
+            cachedUsersData = cachedUsersData.filter(u => u.id !== userId);
+            renderUsersUI(cachedUsersData);
+        } else {
+            showToast('删除失败: ' + (data.error || '未知错误'), 'error');
+        }
+    } catch (err) {
+        showToast('网络通信异常', 'error');
+    }
+}
+
+// --- Reset User Credentials Modal Logic ---
+function openResetUserModal(userId, username, hasPasskey) {
+    const modal = document.getElementById('userResetModal');
+    if (!modal) return;
+    document.getElementById('formResetUser').reset();
+    document.getElementById('reset_user_id').value = userId;
+    document.getElementById('reset_user_name_display').textContent = username;
+    document.getElementById('reset_require_passkey').checked = false;
+    document.getElementById('reset_clear_passkey').checked = false;
+    modal.classList.add('active');
+}
+
+function closeResetUserModal() {
+    const modal = document.getElementById('userResetModal');
+    if (modal) modal.classList.remove('active');
+}
+
+function generateRandomResetPwd() {
+    const chars = 'abcdefghjkmnpqrstuvwxyzABCDEFGHJKLMNPQRSTUVWXYZ23456789!@#$%';
+    let pwd = '';
+    for (let i = 0; i < 14; i++) {
+        pwd += chars.charAt(Math.floor(Math.random() * chars.length));
+    }
+    const input = document.getElementById('reset_new_pwd');
+    if (input) {
+        input.value = pwd;
+        copyToClipboard(pwd, '随机重置密码');
+    }
+}
+
+async function submitResetUser(e) {
+    if (e) e.preventDefault();
+    const btn = document.getElementById('btnSubmitResetUser');
+    const userId = document.getElementById('reset_user_id').value;
+    const newPwd = document.getElementById('reset_new_pwd').value;
+    const reqPasskey = document.getElementById('reset_require_passkey').checked;
+    const clearPasskey = document.getElementById('reset_clear_passkey').checked;
+
+    if (!newPwd && !reqPasskey && !clearPasskey) {
+        showToast('未选择任何修改操作', 'info');
+        closeResetUserModal();
+        return;
+    }
+
+    btn.disabled = true;
+    btn.textContent = '正在保存中...';
+
+    const formData = new FormData();
+    formData.append('new_password', newPwd);
+    formData.append('require_passkey', reqPasskey ? 'true' : 'false');
+    formData.append('clear_passkey', clearPasskey ? 'true' : 'false');
+    formData.append('_csrf_token', (document.cookie.match(/(?:^|;\s*)csrf_token=([^;]+)/) || [])[1] || '');
+
+    try {
+        const res = await fetch(`/api/users/${userId}/reset_password`, { method: 'POST', body: formData });
+        const data = await res.json();
+        btn.disabled = false;
+        btn.textContent = '💾 保存并应用';
+
+        if (data.success) {
+            showToast('用户凭据设置已成功应用！', 'success');
+            closeResetUserModal();
+            loadUsersAjax(true);
+        } else {
+            showToast('重置失败: ' + (data.error || '未知错误'), 'error');
+        }
+    } catch (err) {
+        btn.disabled = false;
+        btn.textContent = '💾 保存并应用';
+        showToast('网络请求异常', 'error');
+    }
+}
+
+// --- User Roles Modal Logic ---
+async function openUserRolesModal(userId, username) {
+    const modal = document.getElementById('userRolesModal');
+    if (!modal) return;
+    document.getElementById('roles_user_id').value = userId;
+    document.getElementById('roles_user_name_display').textContent = username;
+    const container = document.getElementById('rolesCheckboxContainer');
+    container.innerHTML = '<div style="text-align: center; color: var(--text-sec); font-size: 12px; padding: 10px;">正在加载角色列表...</div>';
+    modal.classList.add('active');
+
+    try {
+        const [rolesRes, usersRes] = await Promise.all([
+            fetch('/api/roles').then(r => r.json()),
+            fetch('/api/users').then(r => r.json())
+        ]);
+
+        if (rolesRes.success) {
+            const userObj = (usersRes.users || []).find(u => u.id === userId);
+            const userRoles = userObj ? (userObj.roles || []) : [];
+
+            container.innerHTML = '';
+            rolesRes.roles.forEach(r => {
+                const isChecked = userRoles.includes(r.name);
+                const isDefault = (r.name === 'default-roles-master');
+                const row = document.createElement('div');
+                row.className = 'setting-row';
+                row.style.padding = '6px 0';
+                row.innerHTML = `
+                    <div class="setting-info">
+                        <span class="setting-label" style="font-size: 13px;">${r.name === 'admin' ? '👑' : '🏷️'} ${r.name}</span>
+                        <span class="setting-desc" style="font-size: 11px;">${r.description || (isDefault ? '系统默认基础角色' : 'Realm 角色')}</span>
+                    </div>
+                    <label class="switch">
+                        <input type="checkbox" value="${r.name}" ${isChecked ? 'checked' : ''} ${isDefault ? 'disabled' : ''}>
+                        <span class="slider"></span>
+                    </label>
+                `;
+                container.appendChild(row);
+            });
+        } else {
+            container.innerHTML = `<div style="color: var(--danger); font-size: 12px;">加载失败: ${rolesRes.error}</div>`;
+        }
+    } catch (e) {
+        container.innerHTML = '<div style="color: var(--danger); font-size: 12px;">加载角色列表发生异常</div>';
+    }
+}
+
+function closeUserRolesModal() {
+    const modal = document.getElementById('userRolesModal');
+    if (modal) modal.classList.remove('active');
+}
+
+async function submitUserRoles(e) {
+    if (e) e.preventDefault();
+    const btn = document.getElementById('btnSubmitUserRoles');
+    const userId = document.getElementById('roles_user_id').value;
+    const container = document.getElementById('rolesCheckboxContainer');
+    const checkboxes = container.querySelectorAll('input[type="checkbox"]:checked');
+    const selectedRoles = Array.from(checkboxes).map(cb => cb.value);
+
+    btn.disabled = true;
+    btn.textContent = '正在更新权限...';
+
+    const formData = new FormData();
+    formData.append('roles', selectedRoles.join(','));
+    formData.append('_csrf_token', (document.cookie.match(/(?:^|;\s*)csrf_token=([^;]+)/) || [])[1] || '');
+
+    try {
+        const res = await fetch(`/api/users/${userId}/roles`, { method: 'POST', body: formData });
+        const data = await res.json();
+        btn.disabled = false;
+        btn.textContent = '💾 更新角色权限';
+
+        if (data.success) {
+            showToast('用户角色权限已成功更新！', 'success');
+            closeUserRolesModal();
+            loadUsersAjax(true);
+        } else {
+            showToast('更新失败: ' + (data.error || '未知错误'), 'error');
+        }
+    } catch (err) {
+        btn.disabled = false;
+        btn.textContent = '💾 更新角色权限';
+        showToast('网络请求发生异常', 'error');
+    }
+}
+
