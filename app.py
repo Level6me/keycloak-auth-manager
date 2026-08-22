@@ -1291,6 +1291,83 @@ def reload_openresty():
         log(f"重载 OpenResty 异常: {e}")
     return False
 
+def get_allowed_users_for_domain(domain):
+    """
+    计算特定域名允许访问的用户列表。
+    返回: (is_all_allowed: bool, allowed_usernames: list)
+    - 若没有任何用户受到站点限制（所有用户均为 *），返回 (True, ["*"])
+    - 若有用户被配置为仅允许访问某些特定站点，则返回 (False, [该站点允许的用户名列表...])
+    """
+    try:
+        admin_user, _, _ = get_keycloak_admin_credentials()
+        users_data, code, _ = call_keycloak_api("users", "GET", params={"briefRepresentation": "false"})
+        if code != 200 or not isinstance(users_data, list):
+            return True, ["*"]
+
+        has_restricted_user = False
+        allowed_users = set()
+        if admin_user:
+            allowed_users.add(admin_user)
+
+        for u in users_data:
+            if not u.get("enabled", True):
+                continue
+            username = u.get("username", "")
+            if not username:
+                continue
+
+            if username == admin_user:
+                allowed_users.add(username)
+                continue
+
+            attrs = u.get("attributes", {})
+            raw_sites = attrs.get("allowed_sites", ["*"])
+            user_sites = []
+            if isinstance(raw_sites, str):
+                user_sites = [s.strip() for s in raw_sites.split(",") if s.strip()]
+            elif isinstance(raw_sites, list):
+                for item in raw_sites:
+                    if isinstance(item, str):
+                        for s in item.split(","):
+                            if s.strip():
+                                user_sites.append(s.strip())
+            else:
+                user_sites = ["*"]
+
+            if not user_sites or "*" in user_sites:
+                allowed_users.add(username)
+            else:
+                has_restricted_user = True
+                if domain in user_sites:
+                    allowed_users.add(username)
+
+        if not has_restricted_user:
+            return True, ["*"]
+
+        return False, list(allowed_users)
+    except Exception as e:
+        log(f"计算域名 {domain} 授权用户异常: {e}")
+        return True, ["*"]
+
+def sync_all_sites_permissions():
+    """当用户站点权限变动时，平滑更新所有受保护站点的 OpenResty 反代配置并重载"""
+    try:
+        data = load_data()
+        for domain, auth in data.items():
+            if isinstance(auth, dict) and auth.get('proxy_enabled', True):
+                oauth_port = auth.get('oauth_port', GLOBAL_SSO_PORT)
+                target_host = auth.get('target_host', '127.0.0.1')
+                target_port = auth.get('target_port', 80)
+                auth_enabled = auth.get('auth_enabled', True)
+                proxy_enabled = auth.get('proxy_enabled', True)
+                update_nginx_config(domain, oauth_port, target_host, target_port, auth_enabled, proxy_enabled, reload_nginx=False)
+        reload_openresty()
+        log("所有站点的用户站点访问权限已同步并重载 OpenResty！")
+        return True
+    except Exception as e:
+        log(f"同步所有站点权限异常: {e}")
+        return False
+
 def update_nginx_config(domain, oauth_port, target_host, target_port, auth_enabled, proxy_enabled, reload_nginx=True):
     proxy_conf = get_proxy_conf_path(domain)
     if not proxy_conf:
@@ -1323,7 +1400,33 @@ location ^~ / {
 }
 """
     else:
-        # 完整全局 SSO 认证反代（漏洞#3/#7/#8 全部修复）
+        is_all_allowed, allowed_users = get_allowed_users_for_domain(domain)
+        access_check_lua = ""
+        if not is_all_allowed and allowed_users:
+            lua_entries = ", ".join([f'["{u}"] = true' for u in allowed_users])
+            access_check_lua = f"""
+    # 细粒度用户站点访问权限校验 (Access Control)
+    access_by_lua_block {{
+        local u = ngx.var.preferred_username or ""
+        if u == "" then
+            u = ngx.var.upstream_http_x_auth_request_preferred_username or ""
+        end
+        if u == "" then
+            u = ngx.var.user or ""
+        end
+        local allowed = {{ {lua_entries} }}
+        if not allowed["*"] and not allowed[u] then
+            ngx.status = 403
+            ngx.header.content_type = "text/html; charset=utf-8"
+            ngx.say([[<!DOCTYPE html>
+<html><head><meta charset="utf-8"><title>403 访问受限</title><meta name="viewport" content="width=device-width,initial-scale=1">
+<style>body{{margin:0;min-height:100vh;display:flex;align-items:center;justify-content:center;background:#0f172a;color:#f8fafc;font-family:system-ui,-apple-system,sans-serif}}.card{{background:#1e293b;padding:36px 32px;border-radius:20px;box-shadow:0 20px 40px rgba(0,0,0,0.5);text-align:center;max-width:440px;border:1px solid rgba(255,255,255,0.08)}}.icon{{font-size:48px;margin-bottom:16px}}h1{{font-size:22px;margin:0 0 10px;font-weight:700;color:#f43f5e}}p{{color:#94a3b8;font-size:14px;line-height:1.6;margin:0 0 24px}}.badge{{display:inline-block;padding:4px 10px;background:rgba(244,63,94,0.15);color:#fb7185;border-radius:6px;font-family:monospace;font-size:13px;margin-bottom:16px}}.btn{{display:inline-block;padding:10px 22px;background:#3b82f6;color:#fff;text-decoration:none;border-radius:10px;font-size:14px;font-weight:600;transition:all .2s}}.btn:hover{{background:#2563eb;transform:translateY(-1px)}}</style></head>
+<body><div class="card"><div class="icon">🚫</div><div class="badge">账号: ]] .. (u ~= "" and u or "未识别") .. [[</div><h1>403 访问受限</h1><p>您已通过身份认证，但未获得访问当前站点 <strong>]] .. (ngx.var.host or "") .. [[</strong> 的权限。<br>如需开通，请联系管理员分配站点访问权限。</p><a href="/oauth2/sign_out" class="btn">🔄 切换账号登录</a></div></body></html>]])
+            ngx.exit(403)
+        end
+    }}
+"""
+        # 完整全局 SSO 认证反代（漏洞#3/#7/#8 全部修复 + 用户站点访问权限校验）
         new_content = """# OAuth2 全局 SSO 认证路径 - 需要大缓冲区处理 cookie
 location ^~ /oauth2/ {
     proxy_pass http://127.0.0.1:""" + str(sso_port) + """;
@@ -1380,7 +1483,7 @@ location ^~ / {
     auth_request_set $user $upstream_http_x_auth_request_user;
     auth_request_set $email $upstream_http_x_auth_request_email;
     auth_request_set $preferred_username $upstream_http_x_auth_request_preferred_username;
-
+""" + access_check_lua + """
     proxy_pass http://""" + target_upstream + """;
     proxy_set_header Host $host;
     proxy_set_header X-Real-IP $remote_addr;
@@ -1399,7 +1502,6 @@ location ^~ / {
 }
 """
 
-
     try:
         with open(proxy_conf, 'w') as f:
             f.write(new_content)
@@ -1408,6 +1510,9 @@ location ^~ / {
             reload_openresty()
         return new_content
     except Exception as e:
+        log(f"写入 OpenResty 反代配置失败: {e}")
+        return None
+
         log(f"更新 Nginx 配置文件失败: {str(e)}")
         return None
 
@@ -2360,8 +2465,25 @@ def api_users():
                 rname = r.get("name", "")
                 if rname:
                     roles_list.append(rname)
-                    if rname == "admin":
-                        is_admin = True
+        # 解析用户站点访问权限
+        attrs = u.get("attributes", {})
+        allowed_sites_attr = attrs.get("allowed_sites", ["*"])
+        user_sites = []
+        if isinstance(allowed_sites_attr, str):
+            user_sites = [s.strip() for s in allowed_sites_attr.split(",") if s.strip()]
+        elif isinstance(allowed_sites_attr, list):
+            for item in allowed_sites_attr:
+                if isinstance(item, str):
+                    for sub in item.split(","):
+                        if sub.strip():
+                            user_sites.append(sub.strip())
+        else:
+            user_sites = ["*"]
+            
+        if not user_sites:
+            user_sites = ["*"]
+            
+        all_sites_access = ("*" in user_sites) or is_admin
                         
         enriched_users.append({
             "id": uid,
@@ -2374,7 +2496,9 @@ def api_users():
             "has_password": has_password,
             "required_actions": req_actions,
             "roles": roles_list,
-            "is_admin": is_admin
+            "is_admin": is_admin,
+            "allowed_sites": user_sites,
+            "all_sites_access": all_sites_access
         })
         
     res_obj = {"success": True, "users": enriched_users, "total": len(enriched_users)}
@@ -2459,6 +2583,7 @@ def api_users_toggle(user_id):
         return json.dumps({"success": False, "error": err or "更新用户状态失败"})
         
     invalidate_users_cache()
+    sync_all_sites_permissions()
     log(f"用户状态已更新: {user_id} -> {'启用' if enabled else '停用'}")
     return json.dumps({"success": True, "enabled": enabled})
 
@@ -2475,6 +2600,7 @@ def api_users_delete(user_id):
         return json.dumps({"success": False, "error": err or "删除用户失败"})
         
     invalidate_users_cache()
+    sync_all_sites_permissions()
     log(f"用户已成功删除: {user_id}")
     return json.dumps({"success": True, "msg": "用户已彻底删除"})
 
@@ -2564,6 +2690,38 @@ def api_users_update_roles(user_id):
     invalidate_users_cache()
     log(f"用户角色权限已更新: {user_id} -> {target_roles}")
     return json.dumps({"success": True, "msg": "用户角色权限更新成功"})
+
+@app.route('/api/users/<user_id>/sites', methods=['POST'])
+def api_users_update_sites(user_id):
+    sites_raw = request.form.get('sites', '*').strip()
+    if sites_raw == '*' or not sites_raw:
+        sites_list = ['*']
+    else:
+        sites_list = [s.strip() for s in sites_raw.split(',') if s.strip()]
+        if not sites_list:
+            sites_list = ['*']
+
+    u_data, u_code, u_err = call_keycloak_api(f"users/{user_id}", "GET")
+    if u_code != 200 or not isinstance(u_data, dict):
+        return json.dumps({"success": False, "error": u_err or "获取用户信息失败"})
+
+    admin_user, _, _ = get_keycloak_admin_credentials()
+    username = u_data.get("username", "")
+
+    # 获取现有 attributes 并更新 allowed_sites
+    attrs = u_data.get("attributes", {})
+    attrs["allowed_sites"] = sites_list
+    u_data["attributes"] = attrs
+
+    p_data, p_code, p_err = call_keycloak_api(f"users/{user_id}", "PUT", json_data={"attributes": attrs})
+    if p_code not in (200, 204):
+        return json.dumps({"success": False, "error": p_err or "更新用户站点权限失败"})
+
+    invalidate_users_cache()
+    sync_all_sites_permissions()
+    log(f"用户站点访问权限已更新: {username} -> {sites_list}")
+    return json.dumps({"success": True, "msg": f"用户 {username} 站点权限已成功更新", "allowed_sites": sites_list})
+
 
 
 if __name__ == '__main__':

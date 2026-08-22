@@ -514,10 +514,11 @@ document.addEventListener('DOMContentLoaded', () => {
         renderUsersUI(cachedUsersData);
     }
 
-    // 2. 页面就绪后在后台静默发起增量同步
+    // 2. 页面就绪后在后台发起同步
+    const isColdStartWithoutCache = (!cachedUsersData || cachedUsersData.length === 0);
     setTimeout(() => {
-        loadUsersAjax(true);
-    }, 200);
+        loadUsersAjax(!isColdStartWithoutCache);
+    }, 150);
 
     // 根据 URL Hash 激活对应 Tab
     const hash = (window.location.hash || '').replace('#', '');
@@ -577,12 +578,10 @@ async function loadUsersAjax(silent = false, force = false) {
     const cardContainer = document.getElementById('userCardViewContainer');
     const tableContainer = document.getElementById('userTableViewContainer');
 
-    // 只有在从未获取过数据且本地没有任何持久化缓存时才展示占位提示
-    const shouldShowLoading = !silent && !usersInitialLoaded && (!cachedUsersData || cachedUsersData.length === 0);
-    if (shouldShowLoading && loadingTip) {
+    // 只有在本地从未获取过任何缓存数据且当前非静默时展示加载中占位提示
+    const hasCache = (cachedUsersData && cachedUsersData.length > 0);
+    if (!hasCache && !silent && loadingTip) {
         loadingTip.style.display = 'block';
-    } else if (loadingTip) {
-        loadingTip.style.display = 'none';
     }
 
     try {
@@ -678,6 +677,14 @@ function renderUsersUI(users) {
                 passkeyBadge = `<span class="badge secondary">未设凭据</span>`;
             }
 
+            let siteBadge = '';
+            if (u.all_sites_access) {
+                siteBadge = `<span class="badge success" title="可访问系统全部受保护站点">🌐 全部站点</span>`;
+            } else {
+                const sCount = (u.allowed_sites || []).length;
+                siteBadge = `<span class="badge warning" title="仅允许访问指定的 ${sCount} 个站点">🔒 授权站点 (${sCount})</span>`;
+            }
+
             const adminBadge = u.is_admin ? `<span class="badge accent">👑 管理员</span>` : `<span class="badge secondary">👤 普通用户</span>`;
             const statusDot = u.enabled ? `<span class="status-dot"></span>` : `<span class="status-dot offline"></span>`;
 
@@ -704,12 +711,14 @@ function renderUsersUI(users) {
                         <div class="badges-wrap" style="margin: 0;">
                             ${adminBadge}
                             ${passkeyBadge}
+                            ${siteBadge}
                         </div>
 
-                        <div style="display: inline-flex; align-items: center; gap: 6px; margin-left: auto;">
-                            <button class="btn secondary sm" onclick="openResetUserModal('${u.id}', '${u.username}', ${u.has_passkey})" style="padding: 4px 8px; font-size: 11px;" title="重置密码或重新绑定 Passkey">🔐 凭据</button>
-                            <button class="btn secondary sm" onclick="openUserRolesModal('${u.id}', '${u.username}')" style="padding: 4px 8px; font-size: 11px;" title="分配角色权限">🛡️ 角色</button>
-                            <button class="btn danger sm" onclick="deleteUserAjax('${u.id}', '${u.username}')" style="padding: 4px 8px; font-size: 11px;" title="删除用户">🗑️</button>
+                        <div style="display: inline-flex; align-items: center; gap: 5px; margin-left: auto;">
+                            <button class="btn secondary sm" onclick="openResetUserModal('${u.id}', '${u.username}', ${u.has_passkey})" style="padding: 4px 7px; font-size: 11px;" title="重置密码或重新绑定 Passkey">🔐 凭据</button>
+                            <button class="btn secondary sm" onclick="openUserSitesModal('${u.id}', '${u.username}')" style="padding: 4px 7px; font-size: 11px;" title="配置可访问站点权限">🌐 站点</button>
+                            <button class="btn secondary sm" onclick="openUserRolesModal('${u.id}', '${u.username}')" style="padding: 4px 7px; font-size: 11px;" title="分配角色权限">🛡️ 角色</button>
+                            <button class="btn danger sm" onclick="deleteUserAjax('${u.id}', '${u.username}')" style="padding: 4px 7px; font-size: 11px;" title="删除用户">🗑️</button>
                         </div>
                     </div>
 
@@ -742,6 +751,14 @@ function renderUsersUI(users) {
                 passkeyBadge = `<span class="badge secondary">未设凭据</span>`;
             }
 
+            let siteBadge = '';
+            if (u.all_sites_access) {
+                siteBadge = `<span class="badge success">🌐 全部站点</span>`;
+            } else {
+                const sCount = (u.allowed_sites || []).length;
+                siteBadge = `<span class="badge warning">🔒 授权站点 (${sCount})</span>`;
+            }
+
             const adminBadge = u.is_admin ? `<span class="badge accent">👑 管理员</span>` : `<span class="badge secondary">👤 普通用户</span>`;
             const statusDot = u.enabled ? `<span class="status-dot"></span>` : `<span class="status-dot offline"></span>`;
 
@@ -762,6 +779,11 @@ function renderUsersUI(users) {
                 </td>
                 <td>
                     <div class="badges-wrap" style="margin: 0;">
+                        ${siteBadge}
+                    </div>
+                </td>
+                <td>
+                    <div class="badges-wrap" style="margin: 0;">
                         ${adminBadge}
                     </div>
                 </td>
@@ -776,9 +798,10 @@ function renderUsersUI(users) {
                 </td>
                 <td style="text-align: right;">
                     <div style="display: inline-flex; align-items: center; gap: 4px;">
-                        <button class="btn secondary sm" onclick="openResetUserModal('${u.id}', '${u.username}', ${u.has_passkey})" style="padding: 4px 8px; font-size: 11px;">🔐 凭据</button>
-                        <button class="btn secondary sm" onclick="openUserRolesModal('${u.id}', '${u.username}')" style="padding: 4px 8px; font-size: 11px;">🛡️ 角色</button>
-                        <button class="btn danger sm" onclick="deleteUserAjax('${u.id}', '${u.username}')" style="padding: 4px 8px; font-size: 11px;">🗑️</button>
+                        <button class="btn secondary sm" onclick="openResetUserModal('${u.id}', '${u.username}', ${u.has_passkey})" style="padding: 4px 7px; font-size: 11px;">🔐 凭据</button>
+                        <button class="btn secondary sm" onclick="openUserSitesModal('${u.id}', '${u.username}')" style="padding: 4px 7px; font-size: 11px;">🌐 站点</button>
+                        <button class="btn secondary sm" onclick="openUserRolesModal('${u.id}', '${u.username}')" style="padding: 4px 7px; font-size: 11px;">🛡️ 角色</button>
+                        <button class="btn danger sm" onclick="deleteUserAjax('${u.id}', '${u.username}')" style="padding: 4px 7px; font-size: 11px;">🗑️</button>
                     </div>
                 </td>
             `;
@@ -1134,4 +1157,145 @@ async function submitUserRoles(e) {
         showToast('网络请求发生异常', 'error');
     }
 }
+
+// --- User Sites Permissions Modal Logic ---
+let cachedDomainsForSitesModal = [];
+
+async function openUserSitesModal(userId, username) {
+    const modal = document.getElementById('userSitesModal');
+    if (!modal) return;
+    document.getElementById('sites_user_id').value = userId;
+    document.getElementById('sites_user_name_display').textContent = username;
+
+    const container = document.getElementById('sitesCheckboxContainer');
+    container.innerHTML = '<div style="text-align: center; color: var(--text-sec); font-size: 12px; padding: 12px;">正在加载受保护站点列表...</div>';
+    modal.classList.add('active');
+
+    // 查找当前用户的站点权限配置
+    const userObj = (cachedUsersData || []).find(u => u.id === userId);
+    const allSites = userObj ? Boolean(userObj.all_sites_access) : true;
+    const allowedSites = userObj ? (userObj.allowed_sites || ['*']) : ['*'];
+
+    const allowAllCheckbox = document.getElementById('sites_allow_all');
+    if (allowAllCheckbox) {
+        allowAllCheckbox.checked = allSites;
+    }
+    toggleSitesAllowAll(allSites);
+
+    try {
+        const res = await fetch('/api/list');
+        if (!res.ok) throw new Error('获取站点列表失败');
+        const domainsData = await res.json();
+        cachedDomainsForSitesModal = Object.keys(domainsData || {});
+
+        container.innerHTML = '';
+        if (cachedDomainsForSitesModal.length === 0) {
+            container.innerHTML = '<div style="text-align: center; color: var(--text-sec); font-size: 12px; padding: 12px;">系统内暂无配置受保护的域名</div>';
+            return;
+        }
+
+        cachedDomainsForSitesModal.forEach(domain => {
+            const isChecked = allSites || allowedSites.includes(domain);
+            const row = document.createElement('div');
+            row.className = 'setting-row';
+            row.style.padding = '6px 8px';
+            row.style.background = 'var(--card)';
+            row.style.borderRadius = '8px';
+            row.innerHTML = `
+                <div class="setting-info" style="display: flex; align-items: center; gap: 8px;">
+                    <span style="font-size: 14px;">🌐</span>
+                    <span class="setting-label" style="font-size: 13px; font-family: monospace;">${domain}</span>
+                </div>
+                <label class="switch" style="transform: scale(0.85); transform-origin: right center;">
+                    <input type="checkbox" class="site-domain-checkbox" value="${domain}" ${isChecked ? 'checked' : ''} ${allSites ? 'disabled' : ''}>
+                    <span class="slider"></span>
+                </label>
+            `;
+            container.appendChild(row);
+        });
+    } catch (err) {
+        container.innerHTML = `<div style="color: var(--danger); font-size: 12px; padding: 12px; text-align: center;">加载站点列表异常: ${err.message}</div>`;
+    }
+}
+
+function closeUserSitesModal() {
+    const modal = document.getElementById('userSitesModal');
+    if (modal) modal.classList.remove('active');
+}
+
+function toggleSitesAllowAll(allowAll) {
+    const customArea = document.getElementById('sitesCustomSelectionArea');
+    const checkboxes = document.querySelectorAll('.site-domain-checkbox');
+    if (customArea) {
+        customArea.style.opacity = allowAll ? '0.45' : '1';
+        customArea.style.pointerEvents = allowAll ? 'none' : 'auto';
+    }
+    checkboxes.forEach(cb => {
+        cb.disabled = allowAll;
+        if (allowAll) cb.checked = true;
+    });
+}
+
+function toggleAllSitesCheckboxes(checked) {
+    const checkboxes = document.querySelectorAll('.site-domain-checkbox');
+    checkboxes.forEach(cb => {
+        if (!cb.disabled) cb.checked = checked;
+    });
+}
+
+async function submitUserSites(e) {
+    if (e) e.preventDefault();
+    const btn = document.getElementById('btnSubmitUserSites');
+    const userId = document.getElementById('sites_user_id').value;
+    const allowAll = document.getElementById('sites_allow_all').checked;
+
+    let sitesParam = '*';
+    let newAllowedSites = ['*'];
+    if (!allowAll) {
+        const checkboxes = document.querySelectorAll('.site-domain-checkbox:checked');
+        const selectedDomains = Array.from(checkboxes).map(cb => cb.value);
+        if (selectedDomains.length === 0) {
+            showToast('未选择任何站点，请至少勾选一个站点或开启全站授权', 'warning');
+            return;
+        }
+        sitesParam = selectedDomains.join(',');
+        newAllowedSites = selectedDomains;
+    }
+
+    // 乐观即时更新本地缓存与 UI
+    const targetUser = cachedUsersData.find(u => u.id === userId);
+    if (targetUser) {
+        targetUser.all_sites_access = allowAll;
+        targetUser.allowed_sites = newAllowedSites;
+        saveUsersToLocalStorage(cachedUsersData);
+        renderUsersUI(cachedUsersData);
+    }
+
+    btn.disabled = true;
+    btn.textContent = '正在保存权限...';
+
+    const formData = new FormData();
+    formData.append('sites', sitesParam);
+    formData.append('_csrf_token', (document.cookie.match(/(?:^|;\s*)csrf_token=([^;]+)/) || [])[1] || '');
+
+    try {
+        const res = await fetch(`/api/users/${userId}/sites`, { method: 'POST', body: formData });
+        const data = await res.json();
+        btn.disabled = false;
+        btn.textContent = '💾 保存并应用权限';
+
+        if (data.success) {
+            showToast('用户站点访问权限已成功应用！', 'success');
+            closeUserSitesModal();
+            loadUsersAjax(true, true);
+        } else {
+            showToast('设置失败: ' + (data.error || '未知错误'), 'error');
+        }
+    } catch (err) {
+        btn.disabled = false;
+        btn.textContent = '💾 保存并应用权限';
+        showToast('网络请求发生异常', 'error');
+    }
+}
+
 
