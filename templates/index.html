@@ -597,10 +597,12 @@
                         <th>用户账号</th>
                         <th>邮箱地址</th>
                         <th>认证凭据</th>
+                        <th>站点权限</th>
                         <th>角色权限</th>
                         <th>创建时间</th>
                         <th>账号状态</th>
                         <th style="text-align: right;">操作管理</th>
+
                     </tr>
                 </thead>
                 <tbody id="userTableBodyContainer"></tbody>
@@ -871,7 +873,60 @@
     </div>
 </div>
 
+<!-- ==================== MODAL: USER SITES PERMISSIONS ==================== -->
+
+<div id="userSitesModal" class="modal-overlay">
+    <div class="modal-dialog" style="max-width: 520px;">
+        <div class="modal-header">
+            <div style="display: flex; align-items: center; gap: 8px;">
+                <span style="font-size: 20px;">🌐</span>
+                <span class="modal-title">站点访问权限配置</span>
+            </div>
+            <button class="icon-btn" onclick="closeUserSitesModal()" style="width: 32px; height: 32px; font-size: 14px; cursor: pointer;">✕</button>
+        </div>
+        <form id="formUserSites" onsubmit="submitUserSites(event)">
+            <input type="hidden" id="sites_user_id">
+            <div style="margin-bottom: 14px; font-size: 13px; color: var(--text);">
+                <span>目标账号: </span>
+                <code id="sites_user_name_display" style="font-weight: 700; color: var(--accent); background: var(--card-sec); padding: 2px 6px; border-radius: 4px;"></code>
+            </div>
+
+            <div class="card" style="padding: 12px 14px; margin-bottom: 14px; background: var(--card-sec);">
+                <div class="setting-row" style="padding: 4px 0;">
+                    <div class="setting-info">
+                        <span class="setting-label" style="font-size: 13px;">🌐 允许访问全部站点</span>
+                        <span class="setting-desc" style="font-size: 11px;">授予该用户访问所有当前及未来新建的认证站点</span>
+                    </div>
+                    <label class="switch">
+                        <input type="checkbox" id="sites_allow_all" onchange="toggleSitesAllowAll(this.checked)">
+                        <span class="slider"></span>
+                    </label>
+                </div>
+            </div>
+
+            <div id="sitesCustomSelectionArea">
+                <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px;">
+                    <div class="form-label" style="margin-bottom: 0;">指定可访问的站点列表</div>
+                    <div style="display: flex; gap: 6px;">
+                        <button type="button" class="pill-btn" onclick="toggleAllSitesCheckboxes(true)" style="padding: 2px 8px; font-size: 11px;">全选</button>
+                        <button type="button" class="pill-btn" onclick="toggleAllSitesCheckboxes(false)" style="padding: 2px 8px; font-size: 11px;">全不选</button>
+                    </div>
+                </div>
+                <div id="sitesCheckboxContainer" class="card" style="padding: 10px; margin-bottom: 16px; max-height: 240px; overflow-y: auto; display: flex; flex-direction: column; gap: 6px;">
+                    <div style="text-align: center; color: var(--text-sec); font-size: 12px; padding: 12px;">正在加载站点列表...</div>
+                </div>
+            </div>
+
+            <div style="display: flex; gap: 10px;">
+                <button type="button" class="btn secondary w-full" onclick="closeUserSitesModal()" style="padding: 11px;">取消</button>
+                <button type="submit" id="btnSubmitUserSites" class="btn accent w-full" style="padding: 11px;">💾 保存并应用权限</button>
+            </div>
+        </form>
+    </div>
+</div>
+
 <!-- ==================== FLOATING GLASS DOCK ==================== -->
+
 <div class="dock">
     <button class="dock-btn active" id="dock-btn-domains" onclick="switchTab('p-domains', '域名管理', this)">
         <svg viewBox="0 0 24 24"><path d="M10 20v-6h4v6h5v-8h3L12 3 2 12h3v8z"/></svg>
