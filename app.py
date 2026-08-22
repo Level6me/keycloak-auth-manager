@@ -2864,10 +2864,30 @@ def api_users_update_sites(user_id):
     log(f"用户站点访问权限已更新: {username} -> {sites_list}")
     return json.dumps({"success": True, "msg": f"用户 {username} 站点权限已成功更新", "allowed_sites": sites_list})
 
+def init_background_startup_checks():
+    """在后台异步执行开机自检与环境就绪任务（全新部署或重启时全自动初始化）"""
+    def _run():
+        time.sleep(2)
+        try:
+            # 1. 确保 Keycloak Passkey 认证流与 User Profile allowed_sites 属性支持
+            setup_keycloak_passkey_flow()
+            ensure_keycloak_user_profile_allowed_sites()
+            
+            # 2. 如果存在已配置的站点，确保全局 SSO 代理服务与 OpenResty 站点配置保持最新
+            data = load_data()
+            if data:
+                ensure_global_sso_container()
+                sync_all_sites_permissions()
+        except Exception as e:
+            log(f"开机自检与初始化异常 (可忽略): {e}")
 
+    t = threading.Thread(target=_run, daemon=True)
+    t.start()
 
 
 if __name__ == '__main__':
     debug_mode = os.environ.get('FLASK_DEBUG', '0') == '1'
+    init_background_startup_checks()
     app.run(host='0.0.0.0', port=WEB_PORT, debug=debug_mode, threaded=True)
+
 
