@@ -724,7 +724,7 @@ def get_keycloak_admin_credentials(force_refresh=False):
         admin_pass = KEYCLOAK_PASSWORD
         kc_url = KEYCLOAK_URL
 
-        # 优先从本地已保存的 config.json 中快速读取
+        # 优先从本地已保存的 config.json 中读取
         if not admin_pass or not kc_url:
             cfg = {}
             if os.path.exists(CONFIG_FILE):
@@ -740,30 +740,29 @@ def get_keycloak_admin_credentials(force_refresh=False):
             if not kc_url:
                 kc_url = cfg.get("keycloak_url", "")
 
-        # 若仍未获取到，则仅在首次从容器环境变量中提取（不启动耗时的 kcadm JVM）
-        if not admin_pass or not kc_url:
-            container_user = ""
-            container_pass = ""
-            container_host = ""
-            try:
-                rc, out, _ = run_cmd_args(["docker", "inspect", KEYCLOAK_CONTAINER, "--format", "{{range .Config.Env}}{{println .}}{{end}}"])
-                if rc == 0 and out:
-                    env_map = {}
-                    for line in out.strip().splitlines():
-                        if "=" in line:
-                            k, v = line.split("=", 1)
-                            env_map[k.strip()] = v.strip()
-                    container_user = env_map.get("KC_BOOTSTRAP_ADMIN_USERNAME") or env_map.get("KEYCLOAK_ADMIN") or "admin"
-                    container_pass = env_map.get("KC_BOOTSTRAP_ADMIN_PASSWORD") or env_map.get("KEYCLOAK_ADMIN_PASSWORD") or ""
-                    container_host = env_map.get("KC_HOSTNAME", "")
-            except Exception:
-                pass
-            if not admin_pass:
-                admin_pass = container_pass
-            if not admin_user:
-                admin_user = container_user or "admin"
-            if not kc_url and container_host:
-                kc_url = container_host
+        container_user = ""
+        container_pass = ""
+        container_host = ""
+        try:
+            rc, out, _ = run_cmd_args(["docker", "inspect", KEYCLOAK_CONTAINER, "--format", "{{range .Config.Env}}{{println .}}{{end}}"])
+            if rc == 0 and out:
+                env_map = {}
+                for line in out.strip().splitlines():
+                    if "=" in line:
+                        k, v = line.split("=", 1)
+                        env_map[k.strip()] = v.strip()
+                container_user = env_map.get("KC_BOOTSTRAP_ADMIN_USERNAME") or env_map.get("KEYCLOAK_ADMIN") or "admin"
+                container_pass = env_map.get("KC_BOOTSTRAP_ADMIN_PASSWORD") or env_map.get("KEYCLOAK_ADMIN_PASSWORD") or ""
+                container_host = env_map.get("KC_HOSTNAME", "")
+        except Exception:
+            pass
+
+        if not admin_pass:
+            admin_pass = container_pass
+        if not admin_user:
+            admin_user = container_user or "admin"
+        if not kc_url and container_host:
+            kc_url = container_host
 
         if not kc_url:
             kc_url = "http://127.0.0.1:8080"
@@ -782,14 +781,41 @@ _KC_TOKEN_CACHE = {"token": None, "expires_at": 0, "base": None}
 _KC_TOKEN_LOCK = threading.Lock()
 
 def get_keycloak_admin_token(force_refresh=False):
-    global _KC_TOKEN_CACHE
+    global _KC_TOKEN_CACHE, _KC_CREDS_CACHE, KEYCLOAK_ADMIN, KEYCLOAK_PASSWORD
     now = time.time()
     with _KC_TOKEN_LOCK:
         if not force_refresh and _KC_TOKEN_CACHE["token"] and (now < _KC_TOKEN_CACHE["expires_at"]):
             return _KC_TOKEN_CACHE["token"], _KC_TOKEN_CACHE["base"]
             
         admin_user, admin_pass, kc_base = get_keycloak_admin_credentials()
-        if not admin_pass:
+        
+        # 收集所有可能的管理员账号密码组合（按优先级排列）
+        cred_candidates = []
+        if admin_user and admin_pass:
+            cred_candidates.append((admin_user, admin_pass))
+            
+        # 提取容器内的 Bootstrap 环境变量作为保底候选
+        try:
+            rc, out, _ = run_cmd_args(["docker", "inspect", KEYCLOAK_CONTAINER, "--format", "{{range .Config.Env}}{{println .}}{{end}}"])
+            if rc == 0 and out:
+                env_map = {}
+                for line in out.strip().splitlines():
+                    if "=" in line:
+                        k, v = line.split("=", 1)
+                        env_map[k.strip()] = v.strip()
+                c_user = env_map.get("KC_BOOTSTRAP_ADMIN_USERNAME") or env_map.get("KEYCLOAK_ADMIN") or "admin"
+                c_pass = env_map.get("KC_BOOTSTRAP_ADMIN_PASSWORD") or env_map.get("KEYCLOAK_ADMIN_PASSWORD") or ""
+                if c_user and c_pass and (c_user, c_pass) not in cred_candidates:
+                    cred_candidates.append((c_user, c_pass))
+                if c_pass and ("admin", c_pass) not in cred_candidates:
+                    cred_candidates.append(("admin", c_pass))
+        except Exception:
+            pass
+
+        if admin_pass and ("admin", admin_pass) not in cred_candidates:
+            cred_candidates.append(("admin", admin_pass))
+
+        if not cred_candidates:
             return None, None
             
         # 优先使用本地极速回路 127.0.0.1:8080，避免公网回路和 DNS 解析延迟
@@ -799,29 +825,41 @@ def get_keycloak_admin_token(force_refresh=False):
             
         token = None
         active_base = None
+        working_user = None
+        working_pass = None
+        
         for base in endpoints:
-            token_url = f"{base}/realms/master/protocol/openid-connect/token"
-            try:
-                res = _HTTP_SESSION.post(token_url, data={
-                    "client_id": "admin-cli",
-                    "username": admin_user,
-                    "password": admin_pass,
-                    "grant_type": "password"
-                }, timeout=3)
-                if res.status_code == 200:
-                    data = res.json()
-                    token = data.get("access_token")
-                    expires_in = data.get("expires_in", 60)
-                    if token:
-                        active_base = base
-                        _KC_TOKEN_CACHE["token"] = token
-                        _KC_TOKEN_CACHE["expires_at"] = now + max(10, expires_in - 10)
-                        _KC_TOKEN_CACHE["base"] = active_base
-                        break
-            except Exception:
-                continue
+            if token:
+                break
+            for u, p in cred_candidates:
+                token_url = f"{base}/realms/master/protocol/openid-connect/token"
+                try:
+                    res = _HTTP_SESSION.post(token_url, data={
+                        "client_id": "admin-cli",
+                        "username": u,
+                        "password": p,
+                        "grant_type": "password"
+                    }, timeout=3)
+                    if res.status_code == 200:
+                        data = res.json()
+                        token = data.get("access_token")
+                        expires_in = data.get("expires_in", 60)
+                        if token:
+                            active_base = base
+                            working_user = u
+                            working_pass = p
+                            _KC_TOKEN_CACHE["token"] = token
+                            _KC_TOKEN_CACHE["expires_at"] = now + max(10, expires_in - 10)
+                            _KC_TOKEN_CACHE["base"] = active_base
+                            # 记录并持久化已验证通过的正确凭据
+                            _KC_CREDS_CACHE["data"] = (working_user, working_pass, kc_base)
+                            _KC_CREDS_CACHE["expires_at"] = now + 600
+                            break
+                except Exception:
+                    continue
                 
         return token, active_base
+
 
 def call_keycloak_api(endpoint, method="GET", json_data=None, params=None):
     token, base = get_keycloak_admin_token()
