@@ -903,7 +903,24 @@ def get_proxy_conf_path(domain):
         return os.path.join(proxy_dir, "root.conf")
     return None
 
-def update_nginx_config(domain, oauth_port, target_host, target_port, auth_enabled, proxy_enabled):
+def reload_openresty():
+    """统一安全重载 Nginx / OpenResty 容器"""
+    try:
+        or_rc, or_out, or_err = run_cmd_args(["docker", "ps", "-q", "-f", "name=openresty"])
+        openresty_id = or_out.strip().splitlines()[0].strip() if or_out.strip() else ""
+        if openresty_id:
+            t_rc, _, t_err = run_cmd_args(["docker", "exec", openresty_id, "nginx", "-t"])
+            if t_rc == 0:
+                run_cmd_args(["docker", "exec", openresty_id, "nginx", "-s", "reload"])
+                log("OpenResty / Nginx 站点配置已成功重载！")
+                return True
+            else:
+                log(f"OpenResty 配置测试失败: {t_err.strip()}")
+    except Exception as e:
+        log(f"重载 OpenResty 异常: {e}")
+    return False
+
+def update_nginx_config(domain, oauth_port, target_host, target_port, auth_enabled, proxy_enabled, reload_nginx=True):
     proxy_conf = get_proxy_conf_path(domain)
     if not proxy_conf:
         log("未找到 OpenResty 站点目录，无法生成反代配置文件")
@@ -995,13 +1012,8 @@ location ^~ / {
         with open(proxy_conf, 'w') as f:
             f.write(new_content)
         
-        # 重载 Nginx / OpenResty 容器
-        or_rc, or_out, or_err = run_cmd_args(["docker", "ps", "-q", "-f", "name=openresty"])
-        openresty_id = or_out.strip().splitlines()[0].strip() if or_out.strip() else ""
-        if openresty_id:
-            run_cmd_args(["docker", "exec", openresty_id, "nginx", "-t"])
-            run_cmd_args(["docker", "exec", openresty_id, "nginx", "-s", "reload"])
-            log("OpenResty / Nginx 站点配置已更新并成功重载！")
+        if reload_nginx:
+            reload_openresty()
         return new_content
     except Exception as e:
         log(f"更新 Nginx 配置文件失败: {str(e)}")
@@ -1446,7 +1458,7 @@ def redeploy_all_security():
                 ok, c_name, _, err = create_oauth2_container(domain, oauth_port, client_id, client_secret)
                 if ok:
                     auth['container_name'] = c_name
-                    new_conf = update_nginx_config(domain, oauth_port, target_host, target_port, auth_enabled, proxy_enabled)
+                    new_conf = update_nginx_config(domain, oauth_port, target_host, target_port, auth_enabled, proxy_enabled, reload_nginx=False)
                     if new_conf:
                         auth['nginx_config'] = new_conf
                     results.append({"domain": domain, "status": "success"})
@@ -1456,6 +1468,7 @@ def redeploy_all_security():
             results.append({"domain": domain, "status": "error", "error": str(e)})
             
     save_data(data)
+    reload_openresty()
     log(f"已完成所有站点的安全加固与重载: {len(results)} 个站点")
     return results
 
