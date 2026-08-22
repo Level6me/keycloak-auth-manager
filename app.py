@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
-import os, json, subprocess, secrets, string, time, re, hashlib, requests, threading
-from flask import Flask, render_template, request, redirect, url_for, flash, Response, stream_with_context, send_from_directory
+import os, json, subprocess, secrets, string, time, re, hashlib, requests, threading, base64
+from flask import Flask, render_template, request, redirect, url_for, flash, Response, stream_with_context, send_from_directory, session
 from datetime import datetime
 import shlex
 import copy
@@ -56,6 +56,8 @@ KEYCLOAK_URL = ""
 KEYCLOAK_ADMIN = ""
 KEYCLOAK_PASSWORD = ""
 KEYCLOAK_CONTAINER = "keycloak"
+ADMIN_USERNAME = "admin"
+ADMIN_PASSWORD = ""
 ONEPANEL_API_KEY = ""
 ONEPANEL_PORT = 40455
 WEB_PORT = 8088
@@ -94,6 +96,7 @@ def get_server_public_ip():
 
 def load_config():
     global KEYCLOAK_URL, KEYCLOAK_ADMIN, KEYCLOAK_PASSWORD, KEYCLOAK_CONTAINER
+    global ADMIN_USERNAME, ADMIN_PASSWORD
     global WEB_PORT, ONEPANEL_API_KEY, ONEPANEL_PORT
     global CLOUDFLARE_API_TOKEN, CLOUDFLARE_SERVER_IP, CLOUDFLARE_PROXIED
     try:
@@ -102,10 +105,18 @@ def load_config():
                 cfg = json.load(f)
             
             raw_password = cfg.get("keycloak_password", "")
+            raw_console_user = cfg.get("console_username", "admin").strip()
+            raw_console_pwd = cfg.get("console_password", "")
             raw_api_key = cfg.get("onepanel_api_key", "")
             raw_cf_token = cfg.get("cloudflare_api_token", "")
             
             KEYCLOAK_PASSWORD = decrypt_val(raw_password)
+            ADMIN_USERNAME = raw_console_user or "admin"
+            if raw_console_pwd:
+                ADMIN_PASSWORD = decrypt_val(raw_console_pwd)
+            else:
+                ADMIN_PASSWORD = KEYCLOAK_PASSWORD if KEYCLOAK_PASSWORD else ""
+
             ONEPANEL_API_KEY = decrypt_val(raw_api_key)
             CLOUDFLARE_API_TOKEN = decrypt_val(raw_cf_token)
             CLOUDFLARE_SERVER_IP = cfg.get("cloudflare_server_ip", "")
@@ -114,6 +125,9 @@ def load_config():
             need_rewrite = False
             if raw_password and not raw_password.startswith("gAAAA"):
                 cfg["keycloak_password"] = encrypt_val(raw_password)
+                need_rewrite = True
+            if raw_console_pwd and not raw_console_pwd.startswith("gAAAA"):
+                cfg["console_password"] = encrypt_val(raw_console_pwd)
                 need_rewrite = True
             if raw_api_key and not raw_api_key.startswith("gAAAA"):
                 cfg["onepanel_api_key"] = encrypt_val(raw_api_key)
@@ -157,6 +171,65 @@ try:
 except Exception as e:
     print(f"警告: 无法读取持久化 secret_key，使用随机密钥 ({e})")
     app.secret_key = secrets.token_hex(32)
+
+@app.before_request
+def check_auth():
+    # 静态资源与认证白名单
+    allowed_paths = ['/login', '/static', '/favicon.ico', '/favicon.svg']
+    if any(request.path == p or request.path.startswith(p + '/') or request.path.startswith('/static/') for p in allowed_paths):
+        return None
+        
+    # 如果未设置任何控制台密码，允许首次进入
+    if not ADMIN_PASSWORD:
+        return None
+        
+    # 检查 session 登录态
+    if session.get('logged_in') and session.get('user') == ADMIN_USERNAME:
+        return None
+        
+    # 检查 HTTP Basic Auth (支持自动化脚本与安全监控)
+    auth_header = request.headers.get("Authorization", "")
+    if auth_header.startswith("Basic "):
+        try:
+            auth_decoded = base64.b64decode(auth_header[6:]).decode("utf-8")
+            u, p = auth_decoded.split(":", 1)
+            if u == ADMIN_USERNAME and p == ADMIN_PASSWORD:
+                session['logged_in'] = True
+                session['user'] = ADMIN_USERNAME
+                return None
+        except Exception:
+            pass
+
+    if request.path.startswith('/api/'):
+        return Response(json.dumps({"success": False, "error": "未授权访问，请先登录控制台", "code": 401}),
+                        status=401, mimetype="application/json")
+                        
+    return redirect(url_for('login_page', next=request.path))
+
+@app.route('/login', methods=['GET', 'POST'])
+def login_page():
+    if request.method == 'POST':
+        user = request.form.get('username', '').strip()
+        pwd = request.form.get('password', '').strip()
+        next_url = request.args.get('next', '/')
+        if not ADMIN_PASSWORD or (user == ADMIN_USERNAME and pwd == ADMIN_PASSWORD):
+            session['logged_in'] = True
+            session['user'] = ADMIN_USERNAME
+            flash("登录成功", "success")
+            return redirect(next_url if next_url and next_url.startswith('/') else '/')
+        else:
+            flash("用户名或密码错误", "danger")
+            return render_template('login.html', username=user)
+    
+    if session.get('logged_in') and session.get('user') == ADMIN_USERNAME:
+        return redirect('/')
+    return render_template('login.html', username=ADMIN_USERNAME)
+
+@app.route('/logout')
+def logout():
+    session.clear()
+    flash("已成功退出登录", "success")
+    return redirect(url_for('login_page'))
 
 # 线程安全且支持断点重连的日志缓冲区
 MAX_LOG_HISTORY = 500
@@ -786,7 +859,7 @@ def create_oauth2_container(domain, oauth_port, client_id, client_secret):
         "-e", "OAUTH2_PROXY_EMAIL_DOMAINS=*",
         "-e", "OAUTH2_PROXY_INSECURE_OIDC_ALLOW_UNVERIFIED_EMAIL=true",
         "-e", "OAUTH2_PROXY_USER_ID_CLAIM=preferred_username",
-        "-e", f"OAUTH2_PROXY_HTTP_ADDRESS=0.0.0.0:{oauth_port}",
+        "-e", f"OAUTH2_PROXY_HTTP_ADDRESS=127.0.0.1:{oauth_port}",
         "quay.io/oauth2-proxy/oauth2-proxy:v7.6.0"
     ]
     
@@ -849,8 +922,8 @@ location / {
     elif not auth_enabled:
         # 普通反向代理（未开启 Keycloak 认证）
         new_content = """# 普通反代（未开启 Keycloak 认证）
-location ^~ / {{
-    proxy_pass http://{};
+location ^~ / {
+    proxy_pass http://""" + target_upstream + """;
     proxy_set_header Host $host;
     proxy_set_header X-Real-IP $remote_addr;
     proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
@@ -858,13 +931,13 @@ location ^~ / {{
     proxy_http_version 1.1;
     proxy_set_header Upgrade $http_upgrade;
     proxy_set_header Connection $http_connection;
-}}
-""".format(target_upstream)
+}
+"""
     else:
-        # 完整认证反代
+        # 完整认证反代（加固上游认证上下文与清理伪造请求头）
         new_content = """# OAuth2 认证路径 - 需要大缓冲区处理 cookie
-location ^~ /oauth2/ {{
-    proxy_pass http://127.0.0.1:{};
+location ^~ /oauth2/ {
+    proxy_pass http://127.0.0.1:""" + str(oauth_port) + """;
     proxy_set_header Host $host;
     proxy_set_header X-Real-IP $remote_addr;
     proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
@@ -874,38 +947,49 @@ location ^~ /oauth2/ {{
     proxy_buffer_size 128k;
     proxy_buffers 4 256k;
     proxy_busy_buffers_size 256k;
-}}
+}
 
-location = /oauth2/auth {{
+location = /oauth2/auth {
     internal;
-    proxy_pass http://127.0.0.1:{}/oauth2/auth;
+    proxy_pass http://127.0.0.1:""" + str(oauth_port) + """/oauth2/auth;
     proxy_pass_request_body off;
     proxy_set_header Content-Length "";
     proxy_set_header X-Real-IP $remote_addr;
     proxy_set_header Host $host;
     proxy_set_header X-Forwarded-Proto $scheme;
-}}
+}
 
-location @login {{
-    return 302 https://{}/oauth2/sign_in?rd=$request_uri;
-}}
+location @login {
+    return 302 https://""" + domain + """/oauth2/sign_in?rd=$request_uri;
+}
 
 # 主内容 - 需要认证
-location ^~ / {{
+location ^~ / {
     auth_request /oauth2/auth;
     error_page 401 = @login;
     add_header Cache-Control "no-cache, no-store, must-revalidate";
     
-    proxy_pass http://{};
+    auth_request_set $user $upstream_http_x_auth_request_user;
+    auth_request_set $email $upstream_http_x_auth_request_email;
+    auth_request_set $preferred_username $upstream_http_x_auth_request_preferred_username;
+
+    proxy_pass http://""" + target_upstream + """;
     proxy_set_header Host $host;
     proxy_set_header X-Real-IP $remote_addr;
     proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
     proxy_set_header X-Forwarded-Proto $scheme;
+    
+    proxy_set_header X-User $user;
+    proxy_set_header X-Email $email;
+    proxy_set_header X-Auth-Request-User $user;
+    proxy_set_header X-Auth-Request-Email $email;
+    proxy_set_header X-Auth-Request-Preferred-Username $preferred_username;
+
     proxy_http_version 1.1;
     proxy_set_header Upgrade $http_upgrade;
     proxy_set_header Connection $http_connection;
-}}
-""".format(oauth_port, oauth_port, domain, target_upstream)
+}
+"""
 
     try:
         with open(proxy_conf, 'w') as f:
@@ -1235,6 +1319,9 @@ def settings():
         cloudflare_server_ip = request.form.get('cloudflare_server_ip', '').strip()
         cloudflare_proxied = request.form.get('cloudflare_proxied', 'false').lower() in ['true', '1', 'on']
         
+        console_username = request.form.get('console_username', '').strip()
+        console_password = request.form.get('console_password', '').strip()
+        
         cfg = {}
         if os.path.exists(CONFIG_FILE):
             try:
@@ -1251,6 +1338,10 @@ def settings():
         cfg['cloudflare_server_ip'] = cloudflare_server_ip
         cfg['cloudflare_proxied'] = cloudflare_proxied
         
+        if console_username:
+            cfg['console_username'] = console_username
+        if console_password:
+            cfg['console_password'] = encrypt_val(console_password)
         if keycloak_password:
             cfg['keycloak_password'] = encrypt_val(keycloak_password)
         if onepanel_api_key:
@@ -1266,7 +1357,7 @@ def settings():
             return redirect('/settings')
             
         load_config()
-        flash('配置已成功保存！如果您修改了“面板监听端口 (web_port)”，需手动在服务器终端执行 "sudo systemctl restart auth-manager.service" 才能生效。', 'success')
+        flash('配置已成功保存！如果您修改了“面板监听端口 (web_port)”，需手动在服务器终端执行 "sudo systemctl restart keycloak-auth-manager.service" 才能生效。', 'success')
         return redirect('/settings')
         
     cfg = {}
@@ -1297,6 +1388,9 @@ def api_settings():
         cloudflare_server_ip = request.form.get('cloudflare_server_ip', '').strip()
         cloudflare_proxied = request.form.get('cloudflare_proxied', 'false').lower() in ['true', '1', 'on']
         
+        console_username = request.form.get('console_username', '').strip()
+        console_password = request.form.get('console_password', '').strip()
+
         cfg = {}
         if os.path.exists(CONFIG_FILE):
             try:
@@ -1313,6 +1407,10 @@ def api_settings():
         cfg['cloudflare_server_ip'] = cloudflare_server_ip
         cfg['cloudflare_proxied'] = cloudflare_proxied
         
+        if console_username:
+            cfg['console_username'] = console_username
+        if console_password:
+            cfg['console_password'] = encrypt_val(console_password)
         if keycloak_password:
             cfg['keycloak_password'] = encrypt_val(keycloak_password)
         if onepanel_api_key:
@@ -1325,6 +1423,43 @@ def api_settings():
             
         load_config()
         return json.dumps({"success": True})
+    except Exception as e:
+        return json.dumps({"success": False, "error": str(e)})
+
+@app.route('/api/security/redeploy_all', methods=['POST'])
+def api_security_redeploy_all():
+    """安全加固与重载接口：收敛所有容器到 127.0.0.1 并刷新加固 Nginx 配置"""
+    try:
+        data = load_data()
+        results = []
+        for domain, auth in data.items():
+            if not isinstance(auth, dict):
+                continue
+            try:
+                oauth_port = auth.get("oauth_port")
+                client_id = auth.get("client_id")
+                client_secret = auth.get("client_secret")
+                target_host = auth.get("target_host", "127.0.0.1")
+                target_port = auth.get("target_port", 80)
+                auth_enabled = auth.get("auth_enabled", True)
+                proxy_enabled = auth.get("proxy_enabled", True)
+                
+                if oauth_port and client_id and client_secret:
+                    ok, c_name, _, err = create_oauth2_container(domain, oauth_port, client_id, client_secret)
+                    if ok:
+                        auth['container_name'] = c_name
+                        new_conf = update_nginx_config(domain, oauth_port, target_host, target_port, auth_enabled, proxy_enabled)
+                        if new_conf:
+                            auth['nginx_config'] = new_conf
+                        results.append({"domain": domain, "status": "success"})
+                    else:
+                        results.append({"domain": domain, "status": "failed", "error": err})
+            except Exception as e:
+                results.append({"domain": domain, "status": "error", "error": str(e)})
+                
+        save_data(data)
+        log(f"已完成所有站点的安全加固与重载: {len(results)} 个站点")
+        return json.dumps({"success": True, "results": results})
     except Exception as e:
         return json.dumps({"success": False, "error": str(e)})
 

@@ -1,0 +1,168 @@
+<!DOCTYPE html>
+<html lang="zh-CN" data-theme="auto">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
+    <title>登录控制台 - Keycloak Auth Manager</title>
+    <link rel="icon" type="image/svg+xml" href="/static/favicon.svg">
+    <link rel="alternate icon" href="/favicon.ico">
+    <link rel="stylesheet" href="/static/css/abit.css">
+    <style>
+        body {
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            min-height: 100vh;
+            margin: 0;
+            padding: 20px;
+            box-sizing: border-box;
+            background: var(--bg);
+        }
+        .login-wrapper {
+            width: 100%;
+            max-width: 400px;
+            animation: fadeIn 0.4s ease-out;
+        }
+        @keyframes fadeIn {
+            from { opacity: 0; transform: translateY(12px) scale(0.98); }
+            to { opacity: 1; transform: translateY(0) scale(1); }
+        }
+        .login-card {
+            background: var(--card);
+            border: 1px solid var(--border);
+            border-radius: 24px;
+            padding: 32px 28px;
+            box-shadow: var(--shadow-lg);
+            backdrop-filter: blur(20px);
+            -webkit-backdrop-filter: blur(20px);
+        }
+        .login-logo {
+            width: 64px;
+            height: 64px;
+            margin: 0 auto 16px auto;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            background: var(--accent-bg);
+            border-radius: 18px;
+            font-size: 32px;
+        }
+        .login-title {
+            font-size: 22px;
+            font-weight: 800;
+            text-align: center;
+            margin: 0 0 6px 0;
+            color: var(--text);
+            letter-spacing: -0.5px;
+        }
+        .login-subtitle {
+            font-size: 13px;
+            color: var(--text-sec);
+            text-align: center;
+            margin-bottom: 24px;
+        }
+        .login-btn {
+            width: 100%;
+            padding: 13px;
+            background: var(--accent);
+            color: #ffffff;
+            border: none;
+            border-radius: 14px;
+            font-size: 15px;
+            font-weight: 700;
+            cursor: pointer;
+            transition: all 0.2s cubic-bezier(0.16, 1, 0.3, 1);
+            box-shadow: 0 4px 14px rgba(0, 122, 255, 0.35);
+            margin-top: 10px;
+        }
+        .login-btn:hover {
+            background: var(--accent-hover);
+            transform: translateY(-1px);
+            box-shadow: 0 6px 20px rgba(0, 122, 255, 0.45);
+        }
+        .login-btn:active {
+            transform: scale(0.98);
+        }
+        .theme-switch-wrap {
+            position: absolute;
+            top: 20px;
+            right: 20px;
+        }
+    </style>
+</head>
+<body>
+
+<div class="theme-switch-wrap">
+    <button class="pill-btn" onclick="cycleTheme()" title="切换明暗主题">
+        <span id="theme-icon">🌓</span>
+        <span id="theme-label" class="pill-text">自动</span>
+    </button>
+</div>
+
+<div class="login-wrapper">
+    <div class="login-card">
+        <div class="login-logo">🔐</div>
+        <h1 class="login-title">控制台安全登录</h1>
+        <p class="login-subtitle">Keycloak Auth Manager 安全防护控制台</p>
+
+        <!-- Flash Messages -->
+        {% with messages = get_flashed_messages(with_categories=true) %}
+            {% if messages %}
+                {% for category, message in messages %}
+                    <div style="margin-bottom: 18px; padding: 10px 14px; border-radius: 12px; background: var(--{% if category == 'success' %}success-bg{% else %}danger-bg{% endif %}); border: 1px solid var(--{% if category == 'success' %}success{% else %}danger{% endif %}); font-size: 13px; font-weight: 600; color: var(--text);">
+                        {% if category == 'success' %}✅{% else %}⚠️{% endif %} {{ message }}
+                    </div>
+                {% endfor %}
+            {% endif %}
+        {% endwith %}
+
+        <form action="/login{% if request.args.get('next') %}?next={{ request.args.get('next')|urlencode }}{% endif %}" method="post">
+            <div class="form-group" style="margin-bottom: 16px;">
+                <label class="form-label" style="font-size: 13px;">管理员账号</label>
+                <input type="text" class="input-box" name="username" value="{{ username or 'admin' }}" placeholder="admin" required autofocus autocomplete="username" style="font-size: 14px; padding: 11px 14px;">
+            </div>
+            
+            <div class="form-group" style="margin-bottom: 20px;">
+                <label class="form-label" style="font-size: 13px;">管理员密码</label>
+                <input type="password" class="input-box" name="password" placeholder="请输入控制台管理密码" required autocomplete="current-password" style="font-size: 14px; padding: 11px 14px;">
+            </div>
+
+            <button type="submit" class="login-btn">
+                立即验证并登入
+            </button>
+        </form>
+    </div>
+</div>
+
+<script>
+    function cycleTheme() {
+        const root = document.documentElement;
+        const cur = root.getAttribute('data-theme') || 'auto';
+        let next = 'auto';
+        if (cur === 'auto') next = 'light';
+        else if (cur === 'light') next = 'dark';
+        else if (cur === 'dark') next = 'auto';
+
+        root.setAttribute('data-theme', next);
+        localStorage.setItem('abit-theme-pref', next);
+        updateThemeUI(next);
+    }
+
+    function updateThemeUI(theme) {
+        const icon = document.getElementById('theme-icon');
+        const label = document.getElementById('theme-label');
+        if (!icon || !label) return;
+        if (theme === 'light') { icon.textContent = '☀️'; label.textContent = '浅色'; }
+        else if (theme === 'dark') { icon.textContent = '🌙'; label.textContent = '深色'; }
+        else { icon.textContent = '🌓'; label.textContent = '自动'; }
+    }
+
+    (function() {
+        const saved = localStorage.getItem('abit-theme-pref') || 'auto';
+        document.documentElement.setAttribute('data-theme', saved);
+        updateThemeUI(saved);
+    })();
+</script>
+
+</body>
+</html>
