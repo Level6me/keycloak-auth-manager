@@ -2294,13 +2294,29 @@ def users_page():
     return redirect('/#users')
 
 # ─── Keycloak 用户与角色权限管理 API ───
+_USERS_CACHE = {"data": None, "expires_at": 0}
+_USERS_CACHE_LOCK = threading.Lock()
+
+def invalidate_users_cache():
+    global _USERS_CACHE
+    with _USERS_CACHE_LOCK:
+        _USERS_CACHE["data"] = None
+        _USERS_CACHE["expires_at"] = 0
 
 @app.route('/api/users')
 def api_users():
     search = request.args.get('search', '').strip()
     first = int(request.args.get('first', 0))
     max_count = int(request.args.get('max', 100))
+    force = request.args.get('force', 'false').lower() in ['true', '1']
     
+    # 若为常规全量列表且无搜索词，且未强制刷新，优先返回服务端短期内存缓存（30 秒有效）
+    if not search and first == 0 and not force:
+        now = time.time()
+        with _USERS_CACHE_LOCK:
+            if _USERS_CACHE["data"] and now < _USERS_CACHE["expires_at"]:
+                return json.dumps(_USERS_CACHE["data"])
+                
     params = {"first": first, "max": max_count, "briefRepresentation": "false"}
     if search:
         params["search"] = search
@@ -2361,7 +2377,13 @@ def api_users():
             "is_admin": is_admin
         })
         
-    return json.dumps({"success": True, "users": enriched_users, "total": len(enriched_users)})
+    res_obj = {"success": True, "users": enriched_users, "total": len(enriched_users)}
+    if not search and first == 0:
+        with _USERS_CACHE_LOCK:
+            _USERS_CACHE["data"] = res_obj
+            _USERS_CACHE["expires_at"] = time.time() + 30
+            
+    return json.dumps(res_obj)
 
 @app.route('/api/users/create', methods=['POST'])
 def api_users_create():
@@ -2417,6 +2439,7 @@ def api_users_create():
         if r_code == 200 and isinstance(r_data, dict):
             call_keycloak_api(f"users/{created_id}/role-mappings/realm", "POST", json_data=[r_data])
             
+    invalidate_users_cache()
     log(f"成功创建 Keycloak 用户: {username} (Passkey绑定预置: {require_passkey}, 管理员: {is_admin})")
     return json.dumps({"success": True, "msg": f"用户 {username} 创建成功", "user_id": created_id})
 
@@ -2435,6 +2458,7 @@ def api_users_toggle(user_id):
     if code not in (200, 204):
         return json.dumps({"success": False, "error": err or "更新用户状态失败"})
         
+    invalidate_users_cache()
     log(f"用户状态已更新: {user_id} -> {'启用' if enabled else '停用'}")
     return json.dumps({"success": True, "enabled": enabled})
 
@@ -2450,6 +2474,7 @@ def api_users_delete(user_id):
     if code not in (200, 204):
         return json.dumps({"success": False, "error": err or "删除用户失败"})
         
+    invalidate_users_cache()
     log(f"用户已成功删除: {user_id}")
     return json.dumps({"success": True, "msg": "用户已彻底删除"})
 
@@ -2490,6 +2515,7 @@ def api_users_reset_password(user_id):
                 actions.append("webauthn-register-passwordless")
             call_keycloak_api(f"users/{user_id}", "PUT", json_data={"requiredActions": actions})
             
+    invalidate_users_cache()
     log(f"用户凭据与密码重置成功: {user_id}")
     return json.dumps({"success": True, "msg": "密码与凭据设置已成功生效"})
 
@@ -2535,8 +2561,10 @@ def api_users_update_roles(user_id):
     if to_remove:
         call_keycloak_api(f"users/{user_id}/role-mappings/realm", "DELETE", json_data=to_remove)
         
+    invalidate_users_cache()
     log(f"用户角色权限已更新: {user_id} -> {target_roles}")
     return json.dumps({"success": True, "msg": "用户角色权限更新成功"})
+
 
 if __name__ == '__main__':
     debug_mode = os.environ.get('FLASK_DEBUG', '0') == '1'
