@@ -700,8 +700,15 @@ function filterDomains(query) {
     }
 }
 
+// ─── 漏洞#9 修复：CSRF token helper（Double Submit Cookie 模式）───
+function getCsrfToken() {
+    const m = document.cookie.match(/(?:^|;\s*)csrf_token=([^;]+)/);
+    return m ? decodeURIComponent(m[1]) : '';
+}
+
 // --- Cloudflare Zones & Domain Combo Logic ---
 let cfZonesData = null;
+
 
 async function loadCloudflareZones() {
     const select = document.getElementById('add_root_domain');
@@ -919,8 +926,10 @@ document.getElementById('authAddForm').addEventListener('submit', async function
     startLogStream('addLogs');
 
     const formData = new FormData(this);
+    formData.append('_csrf_token', getCsrfToken());
     try {
         const res = await fetch('/api/create', { method: 'POST', body: formData });
+
         const result = await res.json();
         if (result.success) {
             badge.className = 'badge success';
@@ -1009,9 +1018,11 @@ document.getElementById('sslApplyForm').addEventListener('submit', async functio
     formData.append('domain', domain);
     formData.append('acme_id', acmeId);
     if (authMethod === 'dns') formData.append('dns_id', dnsId);
+    formData.append('_csrf_token', getCsrfToken());
 
     try {
         const res = await fetch('/api/apply_ssl', { method: 'POST', body: formData });
+
         const result = await res.json();
         if (result.success) {
             badge.className = 'badge success';
@@ -1059,9 +1070,11 @@ async function saveSettingsAjax() {
     formData.append('cloudflare_api_token', document.getElementById('set_cloudflare_api_token').value);
     formData.append('cloudflare_server_ip', document.getElementById('set_cloudflare_server_ip').value);
     formData.append('cloudflare_proxied', document.getElementById('set_cloudflare_proxied').checked ? 'true' : 'false');
+    formData.append('_csrf_token', getCsrfToken());
 
     try {
         const res = await fetch('/api/settings', { method: 'POST', body: formData });
+
         const result = await res.json();
         if (result.success) {
             showToast('系统全局设置已成功保存！', 'success');

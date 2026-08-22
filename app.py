@@ -1,7 +1,9 @@
 #!/usr/bin/env python3
 import os, json, subprocess, secrets, string, time, re, hashlib, requests, threading, base64
-from flask import Flask, render_template, request, redirect, url_for, flash, Response, stream_with_context, send_from_directory, session
+from flask import Flask, render_template, request, redirect, url_for, flash, Response, stream_with_context, send_from_directory, session, jsonify
 from datetime import datetime
+from urllib.parse import urlparse
+from collections import defaultdict
 import shlex
 import copy
 
@@ -67,6 +69,46 @@ CLOUDFLARE_PROXIED = False
 
 _CACHED_PUBLIC_IP = None
 _CACHED_PUBLIC_IP_TIME = 0
+
+# ─── 漏洞#10 修复：登录速率限制（防暴力破解）───
+_login_fail_lock = threading.Lock()
+_login_fail_records = defaultdict(list)   # {ip: [timestamp, ...]}
+LOGIN_RATE_WINDOW = 300   # 5 分钟滑动窗口
+LOGIN_RATE_MAX_FAIL = 10  # 窗口内最多失败 10 次
+
+def _get_client_ip():
+    """获取真实客户端 IP（兼容反代场景）"""
+    xff = request.headers.get('X-Forwarded-For', '')
+    if xff:
+        return xff.split(',')[0].strip()
+    return request.remote_addr or '0.0.0.0'
+
+def _is_rate_limited(ip):
+    now = time.time()
+    with _login_fail_lock:
+        records = _login_fail_records[ip]
+        # 清理过期记录
+        _login_fail_records[ip] = [t for t in records if now - t < LOGIN_RATE_WINDOW]
+        return len(_login_fail_records[ip]) >= LOGIN_RATE_MAX_FAIL
+
+def _record_fail(ip):
+    now = time.time()
+    with _login_fail_lock:
+        _login_fail_records[ip].append(now)
+
+def _reset_fail(ip):
+    with _login_fail_lock:
+        _login_fail_records.pop(ip, None)
+
+# ─── 漏洞#11 修复：域名格式白名单正则（防路径遍历 → 任意文件写入）───
+DOMAIN_RE = re.compile(r'^[a-z0-9]([a-z0-9\-\.]{0,253}[a-z0-9])?$')
+
+def is_valid_domain(domain):
+    """严格校验域名格式，防止路径遍历攻击"""
+    if not domain or '..' in domain or '/' in domain or '\\' in domain:
+        return False
+    return bool(DOMAIN_RE.match(domain))
+
 
 def get_server_public_ip():
     global _CACHED_PUBLIC_IP, _CACHED_PUBLIC_IP_TIME
@@ -188,64 +230,133 @@ except Exception as e:
     print(f"警告: 无法读取持久化 secret_key，使用随机密钥 ({e})")
     app.secret_key = secrets.token_hex(32)
 
+@app.after_request
+def set_csrf_cookie(response):
+    """将 CSRF token 设置为非 HttpOnly Cookie，供前端 JS 读取并在 POST 请求中附带（Double Submit Cookie 模式）"""
+    if session.get('logged_in') and session.get('csrf_token'):
+        response.set_cookie(
+            'csrf_token',
+            session['csrf_token'],
+            samesite='Strict',
+            httponly=False,   # 必须允许 JS 读取才能实现 Double Submit Cookie
+            secure=False      # 生产环境建议改为 True（需要 HTTPS）
+        )
+    return response
+
 @app.before_request
 def check_auth():
     # 静态资源与认证白名单
     allowed_paths = ['/login', '/static', '/favicon.ico', '/favicon.svg']
     if any(request.path == p or request.path.startswith(p + '/') or request.path.startswith('/static/') for p in allowed_paths):
         return None
-        
-    # 如果未设置任何控制台密码，允许首次进入
+
+    # ─── 漏洞#1 修复：无密码时禁止所有写操作（POST/PUT/DELETE），GET 只读允许 ───
     if not ADMIN_PASSWORD:
+        if request.method in ('POST', 'PUT', 'DELETE', 'PATCH'):
+            if request.path.startswith('/api/'):
+                return Response(json.dumps({"success": False, "error": "控制台尚未设置密码，写操作已禁用，请先前往 /settings 设置控制台密码", "code": 403}),
+                                status=403, mimetype="application/json")
+            flash("⚠️ 安全警告：控制台尚未设置管理密码，所有写操作已禁用。请立即前往「系统设置」页面设置密码。", "danger")
+            return redirect(url_for('settings'))
+        # 未设密码时 GET 只读请求仍然放行（便于首次配置）
         return None
-        
+
     # 检查 session 登录态
     if session.get('logged_in') and session.get('user') == ADMIN_USERNAME:
+        # ─── 漏洞#9 修复：POST 写操作强制校验 CSRF token ───
+        if request.method in ('POST', 'PUT', 'DELETE', 'PATCH'):
+            session_token = session.get('csrf_token', '')
+            form_token = (request.form.get('_csrf_token', '') or
+                          request.headers.get('X-CSRF-Token', '') or
+                          request.get_json(silent=True, force=True) and request.get_json(silent=True, force=True).get('_csrf_token', '') or '')
+            if not session_token or session_token != form_token:
+                if request.path.startswith('/api/'):
+                    return Response(json.dumps({"success": False, "error": "CSRF token 校验失败，请刷新页面后重试", "code": 403}),
+                                    status=403, mimetype="application/json")
+                flash("请求校验失败，请刷新页面后重试", "danger")
+                return redirect(url_for('index'))
         return None
-        
-    # 检查 HTTP Basic Auth (支持自动化脚本与安全监控)
+
+    # 检查 HTTP Basic Auth（支持自动化脚本，同样受速率限制保护）
     auth_header = request.headers.get("Authorization", "")
     if auth_header.startswith("Basic "):
+        client_ip = _get_client_ip()
+        if _is_rate_limited(client_ip):
+            return Response(json.dumps({"success": False, "error": "登录尝试过于频繁，请 5 分钟后再试", "code": 429}),
+                            status=429, mimetype="application/json")
         try:
             auth_decoded = base64.b64decode(auth_header[6:]).decode("utf-8")
             u, p = auth_decoded.split(":", 1)
             if u == ADMIN_USERNAME and p == ADMIN_PASSWORD:
+                _reset_fail(client_ip)
                 session['logged_in'] = True
                 session['user'] = ADMIN_USERNAME
+                if 'csrf_token' not in session:
+                    session['csrf_token'] = secrets.token_hex(32)
                 return None
+            else:
+                _record_fail(client_ip)
         except Exception:
             pass
 
     if request.path.startswith('/api/'):
         return Response(json.dumps({"success": False, "error": "未授权访问，请先登录控制台", "code": 401}),
                         status=401, mimetype="application/json")
-                        
+
     return redirect(url_for('login_page', next=request.path))
+
+def _safe_redirect_url(next_url):
+    """漏洞#2 修复：安全过滤重定向 URL，防止 Open Redirect"""
+    if not next_url:
+        return '/'
+    parsed = urlparse(next_url)
+    # 拒绝含有 scheme 或 netloc 的 URL（如 //evil.com、https://evil.com、/\evil.com）
+    if parsed.scheme or parsed.netloc:
+        return '/'
+    # 必须以 / 开头且不含换行符（防 Header Injection）
+    if not next_url.startswith('/') or '\n' in next_url or '\r' in next_url:
+        return '/'
+    return next_url
 
 @app.route('/login', methods=['GET', 'POST'])
 def login_page():
     if request.method == 'POST':
+        client_ip = _get_client_ip()
+        # ─── 漏洞#10 修复：速率限制检查 ───
+        if _is_rate_limited(client_ip):
+            flash("登录尝试过于频繁，请 5 分钟后再试", "danger")
+            return render_template('login.html', username='', csrf_token=session.get('csrf_token', ''))
+
         user = request.form.get('username', '').strip()
         pwd = request.form.get('password', '').strip()
-        next_url = request.args.get('next', '/')
+        next_url = _safe_redirect_url(request.args.get('next', '/'))
+
         if not ADMIN_PASSWORD or (user == ADMIN_USERNAME and pwd == ADMIN_PASSWORD):
+            _reset_fail(client_ip)
             session['logged_in'] = True
             session['user'] = ADMIN_USERNAME
+            # 生成会话级 CSRF token
+            session['csrf_token'] = secrets.token_hex(32)
             flash("登录成功", "success")
-            return redirect(next_url if next_url and next_url.startswith('/') else '/')
+            return redirect(next_url)
         else:
+            _record_fail(client_ip)
             flash("用户名或密码错误", "danger")
-            return render_template('login.html', username=user)
-    
+            return render_template('login.html', username=user, csrf_token='')
+
     if session.get('logged_in') and session.get('user') == ADMIN_USERNAME:
         return redirect('/')
-    return render_template('login.html', username=ADMIN_USERNAME)
+    # 确保 session 中有 csrf_token
+    if 'csrf_token' not in session:
+        session['csrf_token'] = secrets.token_hex(32)
+    return render_template('login.html', username=ADMIN_USERNAME, csrf_token=session.get('csrf_token', ''))
 
 @app.route('/logout')
 def logout():
     session.clear()
     flash("已成功退出登录", "success")
     return redirect(url_for('login_page'))
+
 
 # 线程安全且支持断点重连的日志缓冲区
 MAX_LOG_HISTORY = 500
@@ -873,25 +984,27 @@ def ensure_global_sso_client(client_secret=None):
     if extra_domain and extra_domain not in all_domains:
         all_domains.append(extra_domain)
         
-    r_uris = ["*"]
+    # 漏洞#5 修复：r_uris 不再包含裸通配符 "*"，仅精确列举各站点的 oauth2/callback 路径
+    r_uris = []
     for d in all_domains:
         d = d.strip().lower()
         if d:
-            r_uris.append(f"https://{d}/*")
-            r_uris.append(f"http://{d}/*")
             r_uris.append(f"https://{d}/oauth2/callback")
             r_uris.append(f"http://{d}/oauth2/callback")
+
             
     cookie_domains_str, _ = get_all_cookie_and_whitelist_domains(data, extra_domain=extra_domain)
     for rd in cookie_domains_str.split(','):
         rd = rd.strip().lstrip('.')
         if rd:
-            r_uris.append(f"https://*.{rd}/*")
-            r_uris.append(f"http://*.{rd}/*")
-            r_uris.append(f"https://{rd}/*")
-            r_uris.append(f"http://{rd}/*")
+            # 漏洞#5 修复：移除宽泛通配，仅保留 /oauth2/callback 精确路径
+            r_uris.append(f"https://*.{rd}/oauth2/callback")
+            r_uris.append(f"http://*.{rd}/oauth2/callback")
+            r_uris.append(f"https://{rd}/oauth2/callback")
+            r_uris.append(f"http://{rd}/oauth2/callback")
             
     redirect_uris_json = json.dumps(list(set(r_uris)))
+
     
     if uuid:
         # 更新已有的 global-sso client
@@ -904,7 +1017,7 @@ def ensure_global_sso_client(client_secret=None):
             "-s", "publicClient=false",
             "-s", "protocol=openid-connect",
             "-s", "standardFlowEnabled=true",
-            "-s", "directAccessGrantsEnabled=true",
+            "-s", "directAccessGrantsEnabled=false",
             "-s", f"redirectUris={redirect_uris_json}",
             "-s", "webOrigins=[\"+\",\"*\"]"
         ]
@@ -924,7 +1037,7 @@ def ensure_global_sso_client(client_secret=None):
             "-s", "publicClient=false",
             "-s", "protocol=openid-connect",
             "-s", "standardFlowEnabled=true",
-            "-s", "directAccessGrantsEnabled=true",
+            "-s", "directAccessGrantsEnabled=false",
             "-s", f"redirectUris={redirect_uris_json}",
             "-s", "webOrigins=[\"+\",\"*\"]"
         ]
@@ -969,6 +1082,14 @@ def ensure_global_sso_container(extra_domain=None):
             
     cookie_domains_str, whitelist_domains_str = get_all_cookie_and_whitelist_domains(extra_domain=extra_domain)
     
+    # 漏洞#4 修复：构建精确的白名单域名列表，不使用裸 * 通配，防止 OIDC Open Redirect
+    # whitelist_domains_str 已由 get_all_cookie_and_whitelist_domains() 生成精确子域名列表（如 *.example.com,example.com）
+    # 确保不包含裸 "*"
+    safe_whitelist = ",".join(
+        d.strip() for d in whitelist_domains_str.split(',')
+        if d.strip() and d.strip() != '*'
+    )
+    
     log(f"正在配置全局单一 SSO 代理服务 (Cookie域: {cookie_domains_str})...")
     
     run_cmd_args(["docker", "rm", "-f", GLOBAL_SSO_CONTAINER])
@@ -985,7 +1106,7 @@ def ensure_global_sso_container(extra_domain=None):
         "-e", f"OAUTH2_PROXY_COOKIE_SECRET={cookie_secret}",
         "-e", "OAUTH2_PROXY_COOKIE_SECURE=true",
         "-e", f"OAUTH2_PROXY_COOKIE_DOMAINS={cookie_domains_str}",
-        "-e", f"OAUTH2_PROXY_WHITELIST_DOMAINS={whitelist_domains_str}",
+        "-e", f"OAUTH2_PROXY_WHITELIST_DOMAINS={safe_whitelist}",
         "-e", "OAUTH2_PROXY_SKIP_PROVIDER_BUTTON=true",
         "-e", "OAUTH2_PROXY_CODE_CHALLENGE_METHOD=S256",
         "-e", "OAUTH2_PROXY_EMAIL_DOMAINS=*",
@@ -1001,11 +1122,14 @@ def ensure_global_sso_container(extra_domain=None):
     
     rc, out, err_out = run_cmd_args(run_args)
     if rc != 0:
-        log(f"全局 SSO 容器启动失败: {err_out.strip()}")
-        return False, err_out.strip()
+        # 漏洞#12 修复：日志脱敏，不直接打印可能含有 secret 的 err_out
+        safe_err = re.sub(r'(secret|password|key|token)=[^\s,\]]+', r'\1=***', err_out.strip(), flags=re.IGNORECASE)
+        log(f"全局 SSO 容器启动失败: {safe_err}")
+        return False, "SSO 容器启动失败，请查看系统日志"
         
     log(f"全局单一 SSO 代理服务已成功启动并就绪 (127.0.0.1:{GLOBAL_SSO_PORT})")
     return True, ""
+
 
 def create_keycloak_client(domain, client_id, client_secret):
     """创建或更新 Keycloak Client (兼容保留)"""
@@ -1132,7 +1256,7 @@ location ^~ / {
 }
 """
     else:
-        # 完整全局 SSO 认证反代（加固上游认证上下文与清理伪造请求头，支持全子域名 Passkey 免密 SSO）
+        # 完整全局 SSO 认证反代（漏洞#3/#7/#8 全部修复）
         new_content = """# OAuth2 全局 SSO 认证路径 - 需要大缓冲区处理 cookie
 location ^~ /oauth2/ {
     proxy_pass http://127.0.0.1:""" + str(sso_port) + """;
@@ -1161,16 +1285,31 @@ location = /oauth2/auth {
     proxy_set_header X-Forwarded-Uri $request_uri;
 }
 
+# 漏洞#8 修复: 使用 $uri 替代 $request_uri，防止 HTTP Response Splitting
 location @login {
-    return 302 https://$host/oauth2/sign_in?rd=$request_uri;
+    return 302 https://$host/oauth2/sign_in?rd=$uri$is_args$args;
+}
+
+# 漏洞#7 修复: auth_request 子请求 5xx 时返回 503，防止认证服务崩溃时请求穿透到后端
+location @auth_error {
+    return 503 "Authentication service unavailable";
 }
 
 # 主内容 - 需要 SSO 认证 (支持全站 Passkey 免密)
 location ^~ / {
     auth_request /oauth2/auth;
     error_page 401 = @login;
+    # 漏洞#7 修复: 5xx 错误（如 oauth2-proxy 崩溃时的 502）明确拦截，禁止穿透
+    error_page 500 502 503 504 = @auth_error;
     add_header Cache-Control "no-cache, no-store, must-revalidate";
     
+    # 漏洞#3 修复: 先将所有客户端可能伪造的身份请求头清空，再从 auth_request 结果注入
+    proxy_set_header X-User "";
+    proxy_set_header X-Email "";
+    proxy_set_header X-Auth-Request-User "";
+    proxy_set_header X-Auth-Request-Email "";
+    proxy_set_header X-Auth-Request-Preferred-Username "";
+
     auth_request_set $user $upstream_http_x_auth_request_user;
     auth_request_set $email $upstream_http_x_auth_request_email;
     auth_request_set $preferred_username $upstream_http_x_auth_request_preferred_username;
@@ -1192,6 +1331,7 @@ location ^~ / {
     proxy_set_header Connection $http_connection;
 }
 """
+
 
     try:
         with open(proxy_conf, 'w') as f:
@@ -1814,14 +1954,20 @@ def api_create():
     
     if not domain or not port:
         return json.dumps({"success": False, "error": "域名和端口必填"})
+    # 漏洞#11 修复：严格校验 domain 格式，防止路径遍历 → 任意文件写入 RCE
+    if not is_valid_domain(domain):
+        return json.dumps({"success": False, "error": "域名格式非法，仅允许合法的 DNS 域名（小写字母、数字、连字符和点）"})
     try:
         port = int(port)
+        if not (1 <= port <= 65535):
+            raise ValueError("端口范围非法")
     except Exception:
-        return json.dumps({"success": False, "error": "端口必须是数字"})
+        return json.dumps({"success": False, "error": "端口必须是 1-65535 的数字"})
     
     data = load_data()
     if domain in data:
         return json.dumps({"success": False, "error": "该域名已配置"})
+
     
     # 1. 优先执行 Cloudflare DNS 记录添加 (若启用)
     cf_add_dns = request.form.get('cf_add_dns', 'false').lower() in ['true', '1', 'on']

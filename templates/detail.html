@@ -227,6 +227,7 @@ document.addEventListener('DOMContentLoaded', function() {
             
             const formData = new FormData();
             formData.append('enabled', enabled ? 'true' : 'false');
+            formData.append('_csrf_token', document.cookie.match(/csrf_token=([^;]+)/)?.[1] || '{{ session.get("csrf_token", "") }}');
             
             fetch(`/api/toggle/{{ domain }}/${apiType}`, {
                 method: 'POST',
