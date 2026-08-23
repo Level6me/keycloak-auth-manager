@@ -1066,21 +1066,35 @@ def sync_site_policy_to_keycloak_theme():
                     "allow_password": auth.get("allow_password", True) is not False
                 }
         
-        # 1. 写入本地代码仓主题目录
+        policy_json = json.dumps(policy, indent=2, ensure_ascii=False)
+
+        # 1. 写入 Nginx 拦截规则直接读取的文件（最高优先级，绕过 Keycloak gzip 缓存）
+        nginx_policy_file = "/opt/keycloak-auth-manager/site-policy.json"
+        os.makedirs("/opt/keycloak-auth-manager", exist_ok=True)
+        with open(nginx_policy_file, "w", encoding="utf-8") as f:
+            f.write(policy_json)
+
+        # 2. 写入本地代码仓主题目录（保持代码仓同步）
         local_policy_file = "/home/ubuntu/github/keycloak-auth-manager/themes/apple/login/resources/site-policy.json"
-        os.makedirs(os.path.dirname(local_policy_file), exist_ok=True)
-        with open(local_policy_file, "w", encoding="utf-8") as f:
-            json.dump(policy, f, indent=2)
+        try:
+            os.makedirs(os.path.dirname(local_policy_file), exist_ok=True)
+            with open(local_policy_file, "w", encoding="utf-8") as f:
+                f.write(policy_json)
+        except Exception:
+            pass
             
-        # 2. 写入部署目录
+        # 3. 写入部署目录（主题文件目录）
         deploy_policy_file = "/opt/keycloak-auth-manager/themes/apple/login/resources/site-policy.json"
-        if os.path.exists("/opt/keycloak-auth-manager/themes/apple/login/resources"):
-            with open(deploy_policy_file, "w", encoding="utf-8") as f:
-                json.dump(policy, f, indent=2)
+        try:
+            if os.path.exists(os.path.dirname(deploy_policy_file)):
+                with open(deploy_policy_file, "w", encoding="utf-8") as f:
+                    f.write(policy_json)
+        except Exception:
+            pass
                 
-        # 3. 复制到运行中的 keycloak 容器内
+        # 4. 复制到运行中的 keycloak 容器内
         run_cmd_args(["docker", "exec", KEYCLOAK_CONTAINER, "mkdir", "-p", "/opt/keycloak/themes/apple/login/resources"])
-        src_file = deploy_policy_file if os.path.exists(deploy_policy_file) else local_policy_file
+        src_file = deploy_policy_file if os.path.exists(deploy_policy_file) else nginx_policy_file
         if os.path.exists(src_file):
             run_cmd_args(["docker", "cp", src_file, f"{KEYCLOAK_CONTAINER}:/opt/keycloak/themes/apple/login/resources/site-policy.json"])
         
