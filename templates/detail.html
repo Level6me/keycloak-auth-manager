@@ -97,7 +97,78 @@
         </div>
     </div>
 
-    <!-- 2. Configuration Details Card -->
+    <!-- 1.5. 登录认证模式选择卡片 -->
+    <div class="card" id="auth-mode-card">
+        <div class="card-header">
+            <span class="card-title">🔐 登录认证模式</span>
+            <span class="badge accent" id="auth-mode-badge">
+                {% if auth.get('allow_passkey', True) and auth.get('allow_password', True) %}混合模式
+                {% elif not auth.get('allow_password', True) %}纯 Passkey
+                {% else %}纯密码{% endif %}
+            </span>
+        </div>
+        <div style="padding: 4px 0 12px 0; display: flex; gap: 10px; flex-wrap: wrap;">
+
+            <!-- 纯密码 -->
+            <label id="mode-password-label" class="auth-mode-option {% if not auth.get('allow_passkey', True) and auth.get('allow_password', True) %}selected{% endif %}"
+                   onclick="setAuthMode(false, true)" title="只显示账号密码登录，隐藏 Passkey 入口">
+                <div class="mode-icon">🔑</div>
+                <div class="mode-name">纯密码</div>
+                <div class="mode-desc">仅账号密码</div>
+            </label>
+
+            <!-- 混合模式 -->
+            <label id="mode-hybrid-label" class="auth-mode-option {% if auth.get('allow_passkey', True) and auth.get('allow_password', True) %}selected{% endif %}"
+                   onclick="setAuthMode(true, true)" title="同时支持密码 + Passkey 一键免密">
+                <div class="mode-icon">🔀</div>
+                <div class="mode-name">混合模式</div>
+                <div class="mode-desc">密码 + Passkey</div>
+            </label>
+
+            <!-- 纯 Passkey -->
+            <label id="mode-passkey-label" class="auth-mode-option {% if auth.get('allow_passkey', True) and not auth.get('allow_password', True) %}selected{% endif %}"
+                   onclick="setAuthMode(true, false)" title="自动直通 Passkey，彻底隐藏密码框，安全性最高">
+                <div class="mode-icon">🔐</div>
+                <div class="mode-name">纯 Passkey</div>
+                <div class="mode-desc">仅 Passkey 免密</div>
+            </label>
+        </div>
+
+        <div id="auth-mode-saving" style="display:none; font-size:12px; color: var(--text-sec); padding: 0 4px 8px 4px;">
+            ⏳ 正在保存并同步策略...
+        </div>
+    </div>
+
+    <style>
+    .auth-mode-option {
+        flex: 1;
+        min-width: 88px;
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        gap: 5px;
+        padding: 14px 10px;
+        border-radius: 14px;
+        border: 2px solid var(--border);
+        background: var(--card);
+        cursor: pointer;
+        transition: all 0.18s ease;
+        user-select: none;
+    }
+    .auth-mode-option:hover {
+        border-color: var(--accent);
+        background: var(--accent-bg, rgba(0,113,227,0.06));
+    }
+    .auth-mode-option.selected {
+        border-color: #0071e3;
+        background: rgba(0, 113, 227, 0.08);
+        box-shadow: 0 0 0 3px rgba(0, 113, 227, 0.15);
+    }
+    .mode-icon { font-size: 26px; line-height: 1; }
+    .mode-name { font-size: 13px; font-weight: 600; color: var(--text); }
+    .mode-desc { font-size: 11px; color: var(--text-sec); text-align: center; }
+    </style>
+
     <div class="card">
         <div class="card-header">
             <span class="card-title">📋 认证与代理配置</span>
@@ -283,6 +354,43 @@ document.addEventListener('DOMContentLoaded', function() {
     setupToggle('toggle-ssl', 'ssl-status', 'ssl');
     setupToggle('toggle-auth', 'auth-status', 'auth');
 });
+
+function setAuthMode(allowPasskey, allowPassword) {
+    // 更新高亮选中
+    document.getElementById('mode-password-label').classList.toggle('selected', !allowPasskey && allowPassword);
+    document.getElementById('mode-hybrid-label').classList.toggle('selected',  allowPasskey && allowPassword);
+    document.getElementById('mode-passkey-label').classList.toggle('selected',  allowPasskey && !allowPassword);
+
+    const badge = document.getElementById('auth-mode-badge');
+    badge.textContent = allowPasskey && allowPassword ? '混合模式' : (!allowPassword ? '纯 Passkey' : '纯密码');
+
+    const saving = document.getElementById('auth-mode-saving');
+    saving.style.display = 'block';
+
+    const fd = new FormData();
+    fd.append('allow_passkey', allowPasskey ? 'true' : 'false');
+    fd.append('allow_password', allowPassword ? 'true' : 'false');
+    fd.append('_csrf_token', document.cookie.match(/csrf_token=([^;]+)/)?.[1] || '{{ session.get("csrf_token", "") }}');
+
+    fetch('/api/domain/{{ domain }}/auth_methods', { method: 'POST', body: fd })
+        .then(r => r.json())
+        .then(data => {
+            saving.style.display = 'none';
+            if (data.success) {
+                showToast('✅ 认证模式已保存并同步生效', 'success');
+                if (data.nginx_config) {
+                    const pre = document.getElementById('nginxPre');
+                    if (pre) pre.textContent = data.nginx_config;
+                }
+            } else {
+                showToast('❌ 保存失败：' + (data.error || '未知错误'), 'error');
+            }
+        })
+        .catch(() => {
+            saving.style.display = 'none';
+            showToast('❌ 网络异常，请重试', 'error');
+        });
+}
 </script>
 </body>
 </html>
