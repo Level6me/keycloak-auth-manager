@@ -90,14 +90,20 @@ input:focus,
 
 /* 密码输入框组 - 眼睛图标内嵌与用户名栏等长对齐 */
 .pf-c-input-group,
-.input-group {
+.input-group,
+div[dir="ltr"].pf-c-input-group {
     position: relative !important;
-    display: flex !important;
+    display: block !important;
     width: 100% !important;
+    margin: 0 !important;
+    padding: 0 !important;
     box-sizing: border-box !important;
     background: transparent !important;
+    background-color: transparent !important;
     border: none !important;
+    border-width: 0 !important;
     box-shadow: none !important;
+    outline: none !important;
 }
 
 .pf-c-input-group::before,
@@ -107,42 +113,76 @@ input:focus,
     display: none !important;
     content: none !important;
     border: none !important;
+    box-shadow: none !important;
 }
 
+.pf-c-input-group > input,
 .pf-c-input-group input#password,
 .pf-c-input-group input[type="password"],
+.pf-c-input-group input.pf-c-form-control,
 .input-group input#password,
 .input-group input[type="password"] {
+    position: static !important;
+    display: block !important;
     width: 100% !important;
-    flex: 1 1 100% !important;
+    max-width: 100% !important;
+    flex: none !important;
     height: 52px !important;
     line-height: 52px !important;
     padding-left: 16px !important;
     padding-right: 48px !important;
+    margin: 0 !important;
     border-radius: 14px !important;
+    background-color: #f5f5f7 !important;
+    border: 1px solid transparent !important;
     box-sizing: border-box !important;
+    font-size: 15px !important;
+    color: #1d1d1f !important;
+    box-shadow: none !important;
+    transition: all 0.2s ease !important;
+}
+
+.pf-c-input-group > input:focus,
+.pf-c-input-group input#password:focus,
+.pf-c-input-group input[type="password"]:focus,
+.pf-c-input-group input.pf-c-form-control:focus {
+    background-color: #ffffff !important;
+    box-shadow: 0 0 0 4px rgba(0, 113, 227, 0.2) !important;
+    border-color: #0071e3 !important;
 }
 
 /* 眼睛显隐按钮 - 彻底去除所有方框、边框与伪类边框 */
+.pf-c-input-group > button,
 .pf-c-input-group button,
 .pf-c-input-group .pf-c-button,
 .input-group button,
+.pf-c-button.pf-m-control,
 button[data-password-toggle],
 button.pf-c-button.pf-m-control {
     position: absolute !important;
-    right: 6px !important;
+    right: 8px !important;
     top: 50% !important;
+    bottom: auto !important;
+    left: auto !important;
     transform: translateY(-50%) !important;
-    width: 38px !important;
-    height: 38px !important;
+    -webkit-transform: translateY(-50%) !important;
+    width: 36px !important;
+    height: 36px !important;
+    min-width: 36px !important;
+    max-width: 36px !important;
+    min-height: 36px !important;
+    max-height: 36px !important;
     background: transparent !important;
     background-color: transparent !important;
     border: none !important;
     border-width: 0 !important;
     border-style: none !important;
+    border-color: transparent !important;
     outline: none !important;
     box-shadow: none !important;
     -webkit-box-shadow: none !important;
+    -webkit-appearance: none !important;
+    appearance: none !important;
     color: #86868b !important;
     padding: 0 !important;
     margin: 0 !important;
@@ -150,11 +190,13 @@ button.pf-c-button.pf-m-control {
     align-items: center !important;
     justify-content: center !important;
     cursor: pointer !important;
-    z-index: 10 !important;
+    z-index: 20 !important;
     border-radius: 8px !important;
     transition: color 0.15s ease, background-color 0.15s ease !important;
 }
 
+.pf-c-input-group > button::before,
+.pf-c-input-group > button::after,
 .pf-c-input-group button::before,
 .pf-c-input-group button::after,
 .pf-c-button.pf-m-control::before,
@@ -168,6 +210,7 @@ button[data-password-toggle]::after {
     outline: none !important;
 }
 
+.pf-c-input-group > button:hover,
 .pf-c-input-group button:hover,
 .pf-c-input-group .pf-c-button:hover,
 .input-group button:hover,
@@ -181,8 +224,12 @@ button.pf-c-button.pf-m-control:hover {
 }
 
 .pf-c-input-group button i,
-button[data-password-toggle] i {
+button[data-password-toggle] i,
+.pf-c-button.pf-m-control i {
     font-size: 16px !important;
+    line-height: 1 !important;
+    color: inherit !important;
+}
     color: inherit !important;
 }
 

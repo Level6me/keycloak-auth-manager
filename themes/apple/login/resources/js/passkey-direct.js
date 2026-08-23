@@ -312,9 +312,49 @@
         }
     }
 
-    if (document.readyState === "loading") {
-        document.addEventListener("DOMContentLoaded", initPolicyAndPasskey);
-    } else {
+    function fixPasswordEyeStyle() {
+        const pwGroup = document.querySelector('.pf-c-input-group');
+        const eyeBtn = document.querySelector('button[data-password-toggle], .pf-c-input-group button');
+        const pwInput = document.getElementById('password');
+        if (pwGroup) {
+            pwGroup.style.position = 'relative';
+            pwGroup.style.display = 'block';
+            pwGroup.style.width = '100%';
+            pwGroup.style.border = 'none';
+            pwGroup.style.background = 'transparent';
+        }
+        if (pwInput) {
+            pwInput.style.width = '100%';
+            pwInput.style.boxSizing = 'border-box';
+            pwInput.style.paddingRight = '48px';
+            pwInput.style.paddingLeft = '16px';
+            pwInput.style.height = '52px';
+            pwInput.style.borderRadius = '14px';
+        }
+        if (eyeBtn) {
+            eyeBtn.style.position = 'absolute';
+            eyeBtn.style.right = '8px';
+            eyeBtn.style.top = '50%';
+            eyeBtn.style.transform = 'translateY(-50%)';
+            eyeBtn.style.border = 'none';
+            eyeBtn.style.background = 'transparent';
+            eyeBtn.style.backgroundColor = 'transparent';
+            eyeBtn.style.boxShadow = 'none';
+            eyeBtn.style.outline = 'none';
+            eyeBtn.style.padding = '0';
+            eyeBtn.style.margin = '0';
+            eyeBtn.style.zIndex = '20';
+        }
+    }
+
+    function onInit() {
+        fixPasswordEyeStyle();
         initPolicyAndPasskey();
+    }
+
+    if (document.readyState === "loading") {
+        document.addEventListener("DOMContentLoaded", onInit);
+    } else {
+        onInit();
     }
 })();
