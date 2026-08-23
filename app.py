@@ -960,121 +960,81 @@ def setup_keycloak_adaptive_sso_flow():
                     requests.put(f"{req_actions_url}/{action['alias']}", headers=headers, json=action, timeout=6)
                     break
 
-        # 3. 确保 client-scopes 中存在 scope-passkey-only 和 scope-password-only
-        existing_scopes = requests.get(f"{api_base}/client-scopes", headers=headers, timeout=6).json()
-        if not isinstance(existing_scopes, list):
-            existing_scopes = []
+        # 3. 创建/校验 passkey-only-browser 流
+        flows = requests.get(f"{auth_api}/flows", headers=headers, timeout=6).json()
+        if not isinstance(flows, list):
+            flows = []
 
-        for scope_name, desc in [
-            ("scope-passkey-only", "Force passkey-only login mode for this site"),
-            ("scope-password-only", "Force password-only login mode for this site")
-        ]:
-            if not any(s.get("name") == scope_name for s in existing_scopes):
-                requests.post(f"{api_base}/client-scopes", headers=headers, json={
-                    "name": scope_name,
-                    "description": desc,
-                    "protocol": "openid-connect",
-                    "attributes": {"include.in.token.scope": "true", "display.on.consent.screen": "false"}
-                }, timeout=6)
-                log(f"已创建 Keycloak 策略客户端作用域: {scope_name}")
-
-        # 4. 检查或创建 global-sso-browser 流
-        flows_res = requests.get(f"{auth_api}/flows", headers=headers, timeout=6)
-        if flows_res.status_code == 200 and isinstance(flows_res.json(), list):
-            existing_flow = next((f for f in flows_res.json() if f.get("alias") == "global-sso-browser"), None)
-            if existing_flow:
-                return existing_flow["id"]
-
-        # 创建顶级 Flow: global-sso-browser
-        requests.post(f"{auth_api}/flows", headers=headers, json={
-            "alias": "global-sso-browser",
-            "providerId": "basic-flow",
-            "topLevel": True,
-            "builtIn": False,
-            "description": "Global SSO Multi-mode Adaptive Browser Flow"
-        }, timeout=6)
-
-        # 添加 auth-cookie 执行器
-        requests.post(f"{auth_api}/flows/global-sso-browser/executions/execution", headers=headers, json={"provider": "auth-cookie"}, timeout=6)
-
-        # 子流程 1: Passkey-Only Flow
-        requests.post(f"{auth_api}/flows/global-sso-browser/executions/flow", headers=headers, json={
-            "alias": "Passkey-Only Flow",
-            "type": "basic-flow",
-            "provider": "registration-page-form",
-            "description": "Passkey only conditional subflow"
-        }, timeout=6)
-        requests.post(f"{auth_api}/flows/Passkey-Only Flow/executions/execution", headers=headers, json={"provider": "conditional-client-scope"}, timeout=6)
-        requests.post(f"{auth_api}/flows/Passkey-Only Flow/executions/execution", headers=headers, json={"provider": "webauthn-authenticator-passwordless"}, timeout=6)
-
-        # 配置 passkey-scope 条件
-        p_execs = requests.get(f"{auth_api}/flows/Passkey-Only Flow/executions", headers=headers, timeout=6).json()
-        for ex in p_execs:
-            if ex.get("providerId") == "conditional-client-scope":
-                requests.post(f"{auth_api}/executions/{ex['id']}/config", headers=headers, json={
-                    "alias": "passkey-scope-condition",
-                    "config": {"client_scope": "scope-passkey-only", "negate": "false"}
-                }, timeout=6)
-            ex["requirement"] = "REQUIRED"
-            requests.put(f"{auth_api}/flows/Passkey-Only Flow/executions", headers=headers, json=ex, timeout=6)
-
-        # 子流程 2: Password-Only Flow
-        requests.post(f"{auth_api}/flows/global-sso-browser/executions/flow", headers=headers, json={
-            "alias": "Password-Only Flow",
-            "type": "basic-flow",
-            "provider": "registration-page-form",
-            "description": "Password only conditional subflow"
-        }, timeout=6)
-        requests.post(f"{auth_api}/flows/Password-Only Flow/executions/execution", headers=headers, json={"provider": "conditional-client-scope"}, timeout=6)
-        requests.post(f"{auth_api}/flows/Password-Only Flow/executions/execution", headers=headers, json={"provider": "auth-username-password-form"}, timeout=6)
-
-        # 配置 password-scope 条件
-        pw_execs = requests.get(f"{auth_api}/flows/Password-Only Flow/executions", headers=headers, timeout=6).json()
-        for ex in pw_execs:
-            if ex.get("providerId") == "conditional-client-scope":
-                requests.post(f"{auth_api}/executions/{ex['id']}/config", headers=headers, json={
-                    "alias": "password-scope-condition",
-                    "config": {"client_scope": "scope-password-only", "negate": "false"}
-                }, timeout=6)
-            ex["requirement"] = "REQUIRED"
-            requests.put(f"{auth_api}/flows/Password-Only Flow/executions", headers=headers, json=ex, timeout=6)
-
-        # 子流程 3: Hybrid Flow
-        requests.post(f"{auth_api}/flows/global-sso-browser/executions/flow", headers=headers, json={
-            "alias": "Hybrid Flow",
-            "type": "basic-flow",
-            "provider": "registration-page-form",
-            "description": "Hybrid passkey and password fallback subflow"
-        }, timeout=6)
-        requests.post(f"{auth_api}/flows/Hybrid Flow/executions/execution", headers=headers, json={"provider": "webauthn-authenticator-passwordless"}, timeout=6)
-        requests.post(f"{auth_api}/flows/Hybrid Flow/executions/execution", headers=headers, json={"provider": "auth-username-password-form"}, timeout=6)
-
-        h_execs = requests.get(f"{auth_api}/flows/Hybrid Flow/executions", headers=headers, timeout=6).json()
-        for ex in h_execs:
-            ex["requirement"] = "ALTERNATIVE"
-            requests.put(f"{auth_api}/flows/Hybrid Flow/executions", headers=headers, json=ex, timeout=6)
-
-        # 设置顶层流执行器要求
-        top_execs = requests.get(f"{auth_api}/flows/global-sso-browser/executions", headers=headers, timeout=6).json()
-        for ex in top_execs:
-            name = ex.get("displayName") or ex.get("providerId")
-            if name in ("Passkey-Only Flow", "Password-Only Flow"):
-                ex["requirement"] = "CONDITIONAL"
-            else:
+        pk_flow = next((f for f in flows if f.get("alias") == "passkey-only-browser"), None)
+        if not pk_flow:
+            requests.post(f"{auth_api}/flows", headers=headers, json={
+                "alias": "passkey-only-browser",
+                "providerId": "basic-flow",
+                "topLevel": True,
+                "builtIn": False,
+                "description": "Auth manager passkey only flow"
+            }, timeout=6)
+            requests.post(f"{auth_api}/flows/passkey-only-browser/executions/execution", headers=headers, json={"provider": "auth-cookie"}, timeout=6)
+            requests.post(f"{auth_api}/flows/passkey-only-browser/executions/execution", headers=headers, json={"provider": "webauthn-authenticator-passwordless"}, timeout=6)
+            for ex in requests.get(f"{auth_api}/flows/passkey-only-browser/executions", headers=headers, timeout=6).json():
                 ex["requirement"] = "ALTERNATIVE"
-            requests.put(f"{auth_api}/flows/global-sso-browser/executions", headers=headers, json=ex, timeout=6)
+                requests.put(f"{auth_api}/flows/passkey-only-browser/executions", headers=headers, json=ex, timeout=6)
 
-        flows_res = requests.get(f"{auth_api}/flows", headers=headers, timeout=6)
-        if flows_res.status_code == 200:
-            new_flow = next((f for f in flows_res.json() if f.get("alias") == "global-sso-browser"), None)
-            if new_flow:
-                log("成功创建并就绪 global-sso-browser 自适应多模式认证流")
-                return new_flow["id"]
+        # 4. 创建/更新 global-sso-browser 流 (Cookie + Forms + Passkey 混合免密模式，杜绝 400 错误)
+        flows = requests.get(f"{auth_api}/flows", headers=headers, timeout=6).json()
+        if not isinstance(flows, list):
+            flows = []
+
+        existing_global_flow = next((f for f in flows if f.get("alias") == "global-sso-browser"), None)
+        if existing_global_flow:
+            cur_execs = requests.get(f"{auth_api}/flows/global-sso-browser/executions", headers=headers, timeout=6).json()
+            if any(e.get("requirement") == "CONDITIONAL" for e in cur_execs):
+                requests.delete(f"{auth_api}/flows/{existing_global_flow['id']}", headers=headers, timeout=6)
+                existing_global_flow = None
+
+        if not existing_global_flow:
+            requests.post(f"{auth_api}/flows", headers=headers, json={
+                "alias": "global-sso-browser",
+                "providerId": "basic-flow",
+                "topLevel": True,
+                "builtIn": False,
+                "description": "Global SSO Multi-mode Adaptive Browser Flow"
+            }, timeout=6)
+
+            # 1. auth-cookie (ALTERNATIVE)
+            requests.post(f"{auth_api}/flows/global-sso-browser/executions/execution", headers=headers, json={"provider": "auth-cookie"}, timeout=6)
+
+            # 2. global-sso-forms (ALTERNATIVE)
+            requests.post(f"{auth_api}/flows/global-sso-browser/executions/flow", headers=headers, json={
+                "alias": "global-sso-forms",
+                "type": "basic-flow",
+                "provider": "registration-page-form",
+                "description": "Username Password Form Subflow"
+            }, timeout=6)
+            requests.post(f"{auth_api}/flows/global-sso-forms/executions/execution", headers=headers, json={"provider": "auth-username-password-form"}, timeout=6)
+
+            # 3. webauthn-authenticator-passwordless (ALTERNATIVE)
+            requests.post(f"{auth_api}/flows/global-sso-browser/executions/execution", headers=headers, json={"provider": "webauthn-authenticator-passwordless"}, timeout=6)
+
+            # 设置 requirement
+            for ex in requests.get(f"{auth_api}/flows/global-sso-browser/executions", headers=headers, timeout=6).json():
+                ex["requirement"] = "ALTERNATIVE"
+                requests.put(f"{auth_api}/flows/global-sso-browser/executions", headers=headers, json=ex, timeout=6)
+
+            for ex in requests.get(f"{auth_api}/flows/global-sso-forms/executions", headers=headers, timeout=6).json():
+                ex["requirement"] = "REQUIRED"
+                requests.put(f"{auth_api}/flows/global-sso-forms/executions", headers=headers, json=ex, timeout=6)
+
+        flows = requests.get(f"{auth_api}/flows", headers=headers, timeout=6).json()
+        target_flow = next((f for f in flows if f.get("alias") == "global-sso-browser"), None)
+        if target_flow:
+            return target_flow["id"]
 
         return None
     except Exception as e:
         log(f"配置 Keycloak 自适应认证流异常: {e}")
         return None
+
 
 def setup_keycloak_passkey_flow():
     """兼容旧函数名别名"""
@@ -1644,44 +1604,7 @@ location ^~ / {
         allow_passkey = site_info.get('allow_passkey', True)
         allow_password = site_info.get('allow_password', True)
 
-        # 站点登录方式策略过滤 (Login Methods Policy)
-        lua_header_filter = ""
-        if allow_passkey and not allow_password:
-            lua_header_filter = """
-    # 动态注入 Passkey-Only 登录策略作用域
-    header_filter_by_lua_block {
-        local loc = ngx.header.Location
-        if loc and string.find(loc, "/protocol/openid%-connect/auth") then
-            local new_loc, n = string.gsub(loc, "scope=openid%%2Bemail%%2Bprofile", "scope=openid%%2Bemail%%2Bprofile%%2Bscope-passkey-only")
-            if n == 0 then
-                new_loc, n = string.gsub(loc, "scope=openid%+email%+profile", "scope=openid+email+profile+scope-passkey-only")
-            end
-            if n == 0 then
-                new_loc = loc .. "&scope=openid+email+profile+scope-passkey-only"
-            end
-            ngx.header.Location = new_loc
-        end
-    }
-"""
-        elif allow_password and not allow_passkey:
-            lua_header_filter = """
-    # 动态注入 Password-Only 登录策略作用域
-    header_filter_by_lua_block {
-        local loc = ngx.header.Location
-        if loc and string.find(loc, "/protocol/openid%-connect/auth") then
-            local new_loc, n = string.gsub(loc, "scope=openid%%2Bemail%%2Bprofile", "scope=openid%%2Bemail%%2Bprofile%%2Bscope-password-only")
-            if n == 0 then
-                new_loc, n = string.gsub(loc, "scope=openid%+email%+profile", "scope=openid+email+profile+scope-password-only")
-            end
-            if n == 0 then
-                new_loc = loc .. "&scope=openid+email+profile+scope-password-only"
-            end
-            ngx.header.Location = new_loc
-        end
-    }
-"""
-
-        # 完整全局 SSO 认证反代（漏洞#3/#7/#8 全部修复 + 用户站点访问权限校验 + 站点登录策略）
+        # 完整全局 SSO 认证反代（漏洞#3/#7/#8 全部修复 + 用户站点访问权限校验）
         new_content = """# OAuth2 全局 SSO 认证路径 - 需要大缓冲区处理 cookie
 location ^~ /oauth2/ {
     proxy_pass http://127.0.0.1:""" + str(sso_port) + """;
@@ -1696,7 +1619,8 @@ location ^~ /oauth2/ {
     proxy_buffer_size 128k;
     proxy_buffers 4 256k;
     proxy_busy_buffers_size 256k;
-""" + lua_header_filter + """}
+}
+
 
 
 location = /oauth2/auth {
