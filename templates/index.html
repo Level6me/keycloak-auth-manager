@@ -327,9 +327,37 @@
                     </div>
                 </div>
 
+                <div class="card" style="background: var(--card-sec); border-color: var(--border-subtle); padding: 16px; margin: 20px 0;">
+                    <div style="font-size: 14px; font-weight: 700; color: var(--text); margin-bottom: 10px; display: flex; align-items: center; gap: 6px;">
+                        <span>🔐</span>
+                        <span>站点认证登录策略 (Authentication Policy)</span>
+                    </div>
+                    <div class="setting-row" style="padding: 4px 0;">
+                        <div class="setting-info">
+                            <span class="setting-label" style="font-size: 13px;">🔑 允许 Passkey (WebAuthn) 免密登录</span>
+                            <span class="setting-desc" style="font-size: 11px;">指纹、面容 ID、硬件安全密钥秒级登入</span>
+                        </div>
+                        <label class="switch">
+                            <input type="checkbox" id="add_allow_passkey" name="allow_passkey" checked>
+                            <span class="slider"></span>
+                        </label>
+                    </div>
+                    <div class="setting-row" style="padding: 4px 0; margin-top: 6px; border-top: 1px solid var(--border-subtle); padding-top: 8px;">
+                        <div class="setting-info">
+                            <span class="setting-label" style="font-size: 13px;">🔒 允许 账号 + 密码 登录</span>
+                            <span class="setting-desc" style="font-size: 11px;">传统用户名密码表单输入</span>
+                        </div>
+                        <label class="switch">
+                            <input type="checkbox" id="add_allow_password" name="allow_password" checked>
+                            <span class="slider"></span>
+                        </label>
+                    </div>
+                </div>
+
                 <button type="submit" id="addSubmitBtn" class="btn w-full" style="padding: 12px; font-size: 14px;">
                     🚀 创建认证服务
                 </button>
+
             </form>
         </div>
 
@@ -668,8 +696,39 @@
             </div>
         </div>
 
+        <!-- Authentication Methods Policy -->
+        <div class="card" style="padding: 12px 16px; margin-bottom: 16px;">
+            <div style="font-size: 13px; font-weight: 700; margin-bottom: 10px; display: flex; align-items: center; gap: 6px;">
+                <span>🔐</span>
+                <span>登录认证方式策略 (Login Methods)</span>
+            </div>
+            
+            <div class="setting-row" style="padding: 6px 0;">
+                <div class="setting-info">
+                    <span class="setting-label" style="font-size: 13px;">🔑 允许 Passkey (WebAuthn) 免密</span>
+                    <span class="setting-desc" style="font-size: 11px;">指纹、面容 ID、硬件安全密钥秒级登入</span>
+                </div>
+                <label class="switch">
+                    <input type="checkbox" id="modalToggleAllowPasskey" onchange="handleAuthMethodsToggle()">
+                    <span class="slider"></span>
+                </label>
+            </div>
+            
+            <div class="setting-row" style="padding: 6px 0; border-top: 1px solid var(--border-subtle); margin-top: 6px; padding-top: 8px;">
+                <div class="setting-info">
+                    <span class="setting-label" style="font-size: 13px;">🔒 允许 账号 + 密码 登录</span>
+                    <span class="setting-desc" style="font-size: 11px;">传统用户名密码登录表单</span>
+                </div>
+                <label class="switch">
+                    <input type="checkbox" id="modalToggleAllowPassword" onchange="handleAuthMethodsToggle()">
+                    <span class="slider"></span>
+                </label>
+            </div>
+        </div>
+
         <!-- Details Info -->
         <div class="card" style="padding: 12px 16px; margin-bottom: 16px;">
+
             <div class="setting-row" style="padding: 6px 0;">
                 <span class="setting-label" style="font-size: 13px;">🎯 目标服务</span>
                 <code id="modalTargetHost" style="background: var(--card-sec); padding: 2px 6px; border-radius: 6px;">127.0.0.1:8080</code>
