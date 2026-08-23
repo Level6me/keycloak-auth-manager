@@ -1,0 +1,10 @@
+{
+  "ips.abab.pw": {
+    "allow_passkey": true,
+    "allow_password": true
+  },
+  "g.abab.pw": {
+    "allow_passkey": true,
+    "allow_password": true
+  }
+}
