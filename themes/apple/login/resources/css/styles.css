@@ -18,33 +18,45 @@ div, span, p {
     background-color: #ffffff !important;
 }
 
-/* 登录卡片 - 大圆角、柔和阴影 */
+/* 登录卡片 - 大圆角、柔和阴影、适度收敛宽度 */
 .card-pf, 
 .login-pf .card-pf {
     background: #ffffff !important;
     border: none !important;
-    border-radius: 20px !important;
-    box-shadow: 0 2px 20px rgba(0, 0, 0, 0.08) !important;
-    padding: 40px !important;
+    border-radius: 24px !important;
+    box-shadow: 0 4px 24px rgba(0, 0, 0, 0.06) !important;
+    padding: 40px 36px !important;
+    max-width: 390px !important;
+    width: 100% !important;
+    margin: 0 auto !important;
+    box-sizing: border-box !important;
 }
 
 /* 页面整体布局 */
 #kc-content, 
 #kc-content-wrapper {
     background: #ffffff !important;
-    border-radius: 20px !important;
+    border-radius: 24px !important;
+}
+
+#kc-form,
+#kc-form-wrapper,
+form#kc-form-login {
+    max-width: 320px !important;
+    margin: 0 auto !important;
+    width: 100% !important;
 }
 
 /* 标题 */
 h1, #kc-page-title, #kc-header-wrapper {
     color: #1d1d1f !important;
     font-weight: 600 !important;
-    font-size: 28px !important;
+    font-size: 26px !important;
     text-align: center !important;
     margin-bottom: 24px !important;
 }
 
-/* 所有输入框 - 苹果风格 */
+/* 所有输入框 - 苹果风格，增加高度(52px) */
 input[type="text"],
 input[type="password"],
 input[type="email"],
@@ -57,19 +69,23 @@ input:not([type]),
 .form-group input {
     background-color: #f5f5f7 !important;
     border: none !important;
-    border-radius: 12px !important;
-    padding: 14px 16px !important;
-    font-size: 17px !important;
+    border-radius: 14px !important;
+    height: 52px !important;
+    line-height: 52px !important;
+    padding: 0 16px !important;
+    font-size: 16px !important;
     color: #1d1d1f !important;
     width: 100% !important;
     outline: none !important;
     box-shadow: none !important;
+    box-sizing: border-box !important;
+    transition: all 0.2s ease !important;
 }
 
 input:focus,
 .form-control:focus {
     background-color: #ffffff !important;
-    box-shadow: 0 0 0 4px rgba(0, 122, 255, 0.2) !important;
+    box-shadow: 0 0 0 4px rgba(0, 113, 227, 0.2) !important;
 }
 
 /* 密码输入框组 - 眼睛图标内嵌与用户名栏等长对齐 */
@@ -81,6 +97,16 @@ input:focus,
     box-sizing: border-box !important;
     background: transparent !important;
     border: none !important;
+    box-shadow: none !important;
+}
+
+.pf-c-input-group::before,
+.pf-c-input-group::after,
+.input-group::before,
+.input-group::after {
+    display: none !important;
+    content: none !important;
+    border: none !important;
 }
 
 .pf-c-input-group input#password,
@@ -89,16 +115,20 @@ input:focus,
 .input-group input[type="password"] {
     width: 100% !important;
     flex: 1 1 100% !important;
+    height: 52px !important;
+    line-height: 52px !important;
+    padding-left: 16px !important;
     padding-right: 48px !important;
-    border-radius: 12px !important;
+    border-radius: 14px !important;
     box-sizing: border-box !important;
 }
 
-/* 眼睛显隐按钮 - 绝对定位悬浮在密码框内部右侧 */
+/* 眼睛显隐按钮 - 彻底去除所有方框、边框与伪类边框 */
 .pf-c-input-group button,
 .pf-c-input-group .pf-c-button,
 .input-group button,
-button[data-password-toggle] {
+button[data-password-toggle],
+button.pf-c-button.pf-m-control {
     position: absolute !important;
     right: 6px !important;
     top: 50% !important;
@@ -108,8 +138,11 @@ button[data-password-toggle] {
     background: transparent !important;
     background-color: transparent !important;
     border: none !important;
+    border-width: 0 !important;
+    border-style: none !important;
     outline: none !important;
     box-shadow: none !important;
+    -webkit-box-shadow: none !important;
     color: #86868b !important;
     padding: 0 !important;
     margin: 0 !important;
@@ -122,13 +155,29 @@ button[data-password-toggle] {
     transition: color 0.15s ease, background-color 0.15s ease !important;
 }
 
+.pf-c-input-group button::before,
+.pf-c-input-group button::after,
+.pf-c-button.pf-m-control::before,
+.pf-c-button.pf-m-control::after,
+button[data-password-toggle]::before,
+button[data-password-toggle]::after {
+    display: none !important;
+    content: none !important;
+    border: none !important;
+    box-shadow: none !important;
+    outline: none !important;
+}
+
 .pf-c-input-group button:hover,
 .pf-c-input-group .pf-c-button:hover,
 .input-group button:hover,
-button[data-password-toggle]:hover {
+button[data-password-toggle]:hover,
+button.pf-c-button.pf-m-control:hover {
     color: #1d1d1f !important;
     background-color: rgba(0, 0, 0, 0.05) !important;
     background: rgba(0, 0, 0, 0.05) !important;
+    border: none !important;
+    box-shadow: none !important;
 }
 
 .pf-c-input-group button i,
@@ -142,9 +191,9 @@ button[data-password-toggle] i {
     margin-bottom: 16px !important;
 }
 
-/* 主按钮 - 苹果蓝色 */
+/* 主按钮 - 苹果蓝色，高度加高(52px) */
 .kc-login-button,
-input[type="submit"],
+input[type="submit"]#kc-login,
 #kc-login,
 .btn-primary,
 .btn-lg,
@@ -152,19 +201,26 @@ button.primary {
     background-color: #0071e3 !important;
     color: #ffffff !important;
     border: none !important;
-    border-radius: 12px !important;
-    padding: 14px 24px !important;
-    font-size: 17px !important;
-    font-weight: 500 !important;
+    border-radius: 14px !important;
+    height: 52px !important;
+    line-height: 52px !important;
+    padding: 0 24px !important;
+    font-size: 16px !important;
+    font-weight: 600 !important;
+    letter-spacing: -0.01em !important;
     width: 100% !important;
     cursor: pointer !important;
-    transition: background-color 0.2s ease !important;
+    transition: all 0.2s ease !important;
+    display: block !important;
+    box-sizing: border-box !important;
 }
 
 .kc-login-button:hover,
-input[type="submit"]:hover,
+input[type="submit"]#kc-login:hover,
+#kc-login:hover,
 .btn-primary:hover {
     background-color: #0077ed !important;
+    box-shadow: 0 4px 14px rgba(0, 113, 227, 0.3) !important;
 }
 
 /* 次级按钮 */
