@@ -1,10 +1,30 @@
 {
   "_comment": "三种认证模式：混合(allow_passkey+allow_password均true)、纯Passkey(allow_password:false)、纯密码(allow_passkey:false)",
-  "ips.abab.pw": {
+  "home.abab.pw": {
+    "allow_passkey": true,
+    "allow_password": false
+  },
+  "frp.abab.pw": {
+    "allow_passkey": false,
+    "allow_password": true
+  },
+  "oauth.abab.pw": {
+    "allow_passkey": true,
+    "allow_password": true
+  },
+  "frps.abab.pw": {
+    "allow_passkey": true,
+    "allow_password": false
+  },
+  "stats.abab.pw": {
     "allow_passkey": true,
     "allow_password": true
   },
   "g.abab.pw": {
+    "allow_passkey": true,
+    "allow_password": true
+  },
+  "ips.abab.pw": {
     "allow_passkey": true,
     "allow_password": true
   },
