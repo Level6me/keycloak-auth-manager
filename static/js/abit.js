@@ -232,6 +232,17 @@ function renderDomainsUI(auths) {
             const sslBadge = auth.ssl_enabled ? '<span class="badge success">🔒 SSL</span>' : '';
             const authBadge = auth.auth_enabled ? '<span class="badge accent">🛡️ 认证</span>' : '';
 
+            let loginPolicyBadge = '';
+            if (auth.auth_enabled) {
+                if (auth.allow_passkey === false && auth.allow_password !== false) {
+                    loginPolicyBadge = '<span class="badge secondary" title="该站点仅允许用户名+密码登录">🔒 仅密码</span>';
+                } else if (auth.allow_password === false && auth.allow_passkey !== false) {
+                    loginPolicyBadge = '<span class="badge accent" title="该站点仅允许 Passkey 免密登录">🔑 仅 Passkey</span>';
+                } else {
+                    loginPolicyBadge = '<span class="badge success" title="该站点允许 Passkey 免密或密码登录">🔑 Passkey+密码</span>';
+                }
+            }
+
             return `
             <div class="domain-card" data-domain="${domain}" data-target="${targetStr}" data-port="${auth.oauth_port}">
                 <div>
@@ -254,6 +265,7 @@ function renderDomainsUI(auths) {
                             ${proxyBadge}
                             ${sslBadge}
                             ${authBadge}
+                            ${loginPolicyBadge}
                         </div>
 
                         <div style="display: inline-flex; align-items: center; gap: 6px; margin-left: auto;">
@@ -277,6 +289,17 @@ function renderDomainsUI(auths) {
             const sslBadge = auth.ssl_enabled ? '<span class="badge success">🔒 SSL</span>' : '';
             const authBadge = auth.auth_enabled ? '<span class="badge accent">🛡️ 认证</span>' : '';
 
+            let loginPolicyBadge = '';
+            if (auth.auth_enabled) {
+                if (auth.allow_passkey === false && auth.allow_password !== false) {
+                    loginPolicyBadge = '<span class="badge secondary" title="该站点仅允许用户名+密码登录">🔒 仅密码</span>';
+                } else if (auth.allow_password === false && auth.allow_passkey !== false) {
+                    loginPolicyBadge = '<span class="badge accent" title="该站点仅允许 Passkey 免密登录">🔑 仅 Passkey</span>';
+                } else {
+                    loginPolicyBadge = '<span class="badge success" title="该站点允许 Passkey 免密或密码登录">🔑 Passkey+密码</span>';
+                }
+            }
+
             return `
             <tr data-domain="${domain}" data-target="${targetStr}" data-port="${auth.oauth_port}">
                 <td>
@@ -290,6 +313,7 @@ function renderDomainsUI(auths) {
                         ${proxyBadge}
                         ${sslBadge}
                         ${authBadge}
+                        ${loginPolicyBadge}
                     </div>
                 </td>
                 <td><code>${targetStr}</code></td>
@@ -334,10 +358,14 @@ function openDomainDetail(domain) {
     const toggleProxy = document.getElementById('modalToggleProxy');
     const toggleSsl = document.getElementById('modalToggleSsl');
     const toggleAuth = document.getElementById('modalToggleAuth');
+    const toggleAllowPasskey = document.getElementById('modalToggleAllowPasskey');
+    const toggleAllowPassword = document.getElementById('modalToggleAllowPassword');
 
     if (toggleProxy) toggleProxy.checked = !!auth.proxy_enabled;
     if (toggleSsl) toggleSsl.checked = !!auth.ssl_enabled;
     if (toggleAuth) toggleAuth.checked = !!auth.auth_enabled;
+    if (toggleAllowPasskey) toggleAllowPasskey.checked = (auth.allow_passkey !== false);
+    if (toggleAllowPassword) toggleAllowPassword.checked = (auth.allow_password !== false);
 
     updateModalSwitchBadges(auth);
 
@@ -408,6 +436,63 @@ async function handleModalToggle(feature, enabled, checkboxEl) {
         showToast('网络通信异常', 'error');
     }
 }
+
+async function handleAuthMethodsToggle() {
+    if (!currentDetailDomain) return;
+    const domain = currentDetailDomain;
+    const passkeyToggle = document.getElementById('modalToggleAllowPasskey');
+    const passwordToggle = document.getElementById('modalToggleAllowPassword');
+    const allowPasskey = passkeyToggle ? passkeyToggle.checked : true;
+    const allowPassword = passwordToggle ? passwordToggle.checked : true;
+
+    if (!allowPasskey && !allowPassword) {
+        showToast('必须至少保留一种登录认证方式（Passkey 或密码）！', 'warning');
+        if (passkeyToggle) passkeyToggle.checked = true;
+        return;
+    }
+
+    if (passkeyToggle) passkeyToggle.disabled = true;
+    if (passwordToggle) passwordToggle.disabled = true;
+
+    try {
+        const formData = new FormData();
+        formData.append('allow_passkey', allowPasskey ? 'true' : 'false');
+        formData.append('allow_password', allowPassword ? 'true' : 'false');
+        formData.append('_csrf_token', (document.cookie.match(/(?:^|;\s*)csrf_token=([^;]+)/) || [])[1] || '');
+
+        const res = await fetch(`/api/domain/${domain}/auth_methods`, {
+            method: 'POST',
+            body: formData
+        });
+        const data = await res.json();
+        if (passkeyToggle) passkeyToggle.disabled = false;
+        if (passwordToggle) passwordToggle.disabled = false;
+
+        if (data.success) {
+            if (cachedDomainsData && cachedDomainsData[domain]) {
+                cachedDomainsData[domain].allow_passkey = allowPasskey;
+                cachedDomainsData[domain].allow_password = allowPassword;
+                if (data.nginx_config) {
+                    cachedDomainsData[domain].nginx_config = data.nginx_config;
+                    const pre = document.getElementById('modalNginxPre');
+                    if (pre) pre.textContent = data.nginx_config;
+                }
+            }
+            renderDomainsUI(cachedDomainsData);
+            let modeDesc = 'Passkey + 密码混合模式';
+            if (allowPasskey && !allowPassword) modeDesc = '仅限 Passkey 免密登录';
+            if (allowPassword && !allowPasskey) modeDesc = '仅限账号密码登录';
+            showToast(`站点 ${domain} 登录策略已成功更新为：${modeDesc}`, 'success');
+        } else {
+            showToast('更新失败: ' + (data.error || '未知错误'), 'error');
+        }
+    } catch (e) {
+        if (passkeyToggle) passkeyToggle.disabled = false;
+        if (passwordToggle) passwordToggle.disabled = false;
+        showToast('网络请求异常: ' + e.message, 'error');
+    }
+}
+
 
 async function deleteDomainAjax(domain) {
     if (!confirm(`确定要彻底删除域名 ${domain} 的认证配置吗？\n此操作将同时销毁 OAuth2 容器与 Nginx 配置，不可撤销！`)) {
@@ -1370,6 +1455,11 @@ window.deleteUserAjax = deleteUserAjax;
 window.loadUsersAjax = loadUsersAjax;
 window.switchUserView = switchUserView;
 window.filterUsers = filterUsers;
+window.handleAuthMethodsToggle = handleAuthMethodsToggle;
+window.openDomainDetail = openDomainDetail;
+window.closeDetailModal = closeDetailModal;
+window.handleModalToggle = handleModalToggle;
+
 
 // ─── 全局事件委托：监听用户管理操作按钮点击，杜绝 DOM 重绘丢失或内联调用偶发无响应 ───
 document.addEventListener('click', (e) => {

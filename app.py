@@ -935,21 +935,22 @@ def ensure_keycloak_user_profile_allowed_sites():
     except Exception as e:
         log(f"配置 Keycloak 用户属性规范异常: {e}")
 
-def setup_keycloak_passkey_flow():
+def setup_keycloak_adaptive_sso_flow():
     token, active_base = get_keycloak_admin_token()
     if not token or not active_base:
-        log("提示: 暂未连接到 Keycloak API (可忽略)，跳过 Passkey 自定义认证流配置")
+        log("提示: 暂未连接到 Keycloak API (可忽略)，跳过自适应认证流配置")
         return None
 
     try:
-        # 确保 Keycloak User Profile 允许保存 allowed_sites
+        # 1. 确保 Keycloak User Profile 允许保存 allowed_sites
         ensure_keycloak_user_profile_allowed_sites()
 
         headers = {"Authorization": f"Bearer {token}", "Content-Type": "application/json"}
-        api_base = f"{active_base}/admin/realms/master/authentication"
-        
-        # 1. 强制注册时绑定 Passkey
-        req_actions_url = f"{api_base}/required-actions"
+        api_base = f"{active_base}/admin/realms/master"
+        auth_api = f"{api_base}/authentication"
+
+        # 2. 强制注册时绑定 Passkey Required Action
+        req_actions_url = f"{auth_api}/required-actions"
         actions_res = requests.get(req_actions_url, headers=headers, timeout=6)
         if actions_res.status_code == 200:
             for action in actions_res.json():
@@ -957,55 +958,128 @@ def setup_keycloak_passkey_flow():
                     action["enabled"] = True
                     action["defaultAction"] = True
                     requests.put(f"{req_actions_url}/{action['alias']}", headers=headers, json=action, timeout=6)
-                    log("成功将 WebAuthn Passwordless 设为注册时的默认必填项")
                     break
 
+        # 3. 确保 client-scopes 中存在 scope-passkey-only 和 scope-password-only
+        existing_scopes = requests.get(f"{api_base}/client-scopes", headers=headers, timeout=6).json()
+        if not isinstance(existing_scopes, list):
+            existing_scopes = []
 
+        for scope_name, desc in [
+            ("scope-passkey-only", "Force passkey-only login mode for this site"),
+            ("scope-password-only", "Force password-only login mode for this site")
+        ]:
+            if not any(s.get("name") == scope_name for s in existing_scopes):
+                requests.post(f"{api_base}/client-scopes", headers=headers, json={
+                    "name": scope_name,
+                    "description": desc,
+                    "protocol": "openid-connect",
+                    "attributes": {"include.in.token.scope": "true", "display.on.consent.screen": "false"}
+                }, timeout=6)
+                log(f"已创建 Keycloak 策略客户端作用域: {scope_name}")
 
-        # 2. 检查或创建专属的 passkey-only-browser 流
-        flows_res = requests.get(f"{api_base}/flows", headers=headers, timeout=6)
-        if flows_res.status_code == 200:
-            flows = flows_res.json()
-            existing_flow = next((f for f in flows if f.get("alias") == "passkey-only-browser"), None)
+        # 4. 检查或创建 global-sso-browser 流
+        flows_res = requests.get(f"{auth_api}/flows", headers=headers, timeout=6)
+        if flows_res.status_code == 200 and isinstance(flows_res.json(), list):
+            existing_flow = next((f for f in flows_res.json() if f.get("alias") == "global-sso-browser"), None)
             if existing_flow:
                 return existing_flow["id"]
-                
-        # 创建 Flow
-        requests.post(f"{api_base}/flows", headers=headers, json={
-            "alias": "passkey-only-browser",
+
+        # 创建顶级 Flow: global-sso-browser
+        requests.post(f"{auth_api}/flows", headers=headers, json={
+            "alias": "global-sso-browser",
             "providerId": "basic-flow",
             "topLevel": True,
             "builtIn": False,
-            "description": "Auth manager passkey only flow"
+            "description": "Global SSO Multi-mode Adaptive Browser Flow"
         }, timeout=6)
-        
-        # 获取新创建的 Flow ID
-        flows_res = requests.get(f"{api_base}/flows", headers=headers, timeout=6)
-        if flows_res.status_code != 200:
-            return None
-        flows = flows_res.json()
-        new_flow_id = next((f["id"] for f in flows if f.get("alias") == "passkey-only-browser"), None)
-        if not new_flow_id:
-            return None
-        
-        # 添加执行器: auth-cookie
-        requests.post(f"{api_base}/flows/passkey-only-browser/executions/execution", headers=headers, json={"provider": "auth-cookie"}, timeout=6)
-        # 添加执行器: webauthn-authenticator-passwordless
-        requests.post(f"{api_base}/flows/passkey-only-browser/executions/execution", headers=headers, json={"provider": "webauthn-authenticator-passwordless"}, timeout=6)
-        
-        # 将其 requirement 改为 ALTERNATIVE
-        execs_res = requests.get(f"{api_base}/flows/passkey-only-browser/executions", headers=headers, timeout=6)
-        if execs_res.status_code == 200:
-            for ex in execs_res.json():
+
+        # 添加 auth-cookie 执行器
+        requests.post(f"{auth_api}/flows/global-sso-browser/executions/execution", headers=headers, json={"provider": "auth-cookie"}, timeout=6)
+
+        # 子流程 1: Passkey-Only Flow
+        requests.post(f"{auth_api}/flows/global-sso-browser/executions/flow", headers=headers, json={
+            "alias": "Passkey-Only Flow",
+            "type": "basic-flow",
+            "provider": "registration-page-form",
+            "description": "Passkey only conditional subflow"
+        }, timeout=6)
+        requests.post(f"{auth_api}/flows/Passkey-Only Flow/executions/execution", headers=headers, json={"provider": "conditional-client-scope"}, timeout=6)
+        requests.post(f"{auth_api}/flows/Passkey-Only Flow/executions/execution", headers=headers, json={"provider": "webauthn-authenticator-passwordless"}, timeout=6)
+
+        # 配置 passkey-scope 条件
+        p_execs = requests.get(f"{auth_api}/flows/Passkey-Only Flow/executions", headers=headers, timeout=6).json()
+        for ex in p_execs:
+            if ex.get("providerId") == "conditional-client-scope":
+                requests.post(f"{auth_api}/executions/{ex['id']}/config", headers=headers, json={
+                    "alias": "passkey-scope-condition",
+                    "config": {"client_scope": "scope-passkey-only", "negate": "false"}
+                }, timeout=6)
+            ex["requirement"] = "REQUIRED"
+            requests.put(f"{auth_api}/flows/Passkey-Only Flow/executions", headers=headers, json=ex, timeout=6)
+
+        # 子流程 2: Password-Only Flow
+        requests.post(f"{auth_api}/flows/global-sso-browser/executions/flow", headers=headers, json={
+            "alias": "Password-Only Flow",
+            "type": "basic-flow",
+            "provider": "registration-page-form",
+            "description": "Password only conditional subflow"
+        }, timeout=6)
+        requests.post(f"{auth_api}/flows/Password-Only Flow/executions/execution", headers=headers, json={"provider": "conditional-client-scope"}, timeout=6)
+        requests.post(f"{auth_api}/flows/Password-Only Flow/executions/execution", headers=headers, json={"provider": "auth-username-password-form"}, timeout=6)
+
+        # 配置 password-scope 条件
+        pw_execs = requests.get(f"{auth_api}/flows/Password-Only Flow/executions", headers=headers, timeout=6).json()
+        for ex in pw_execs:
+            if ex.get("providerId") == "conditional-client-scope":
+                requests.post(f"{auth_api}/executions/{ex['id']}/config", headers=headers, json={
+                    "alias": "password-scope-condition",
+                    "config": {"client_scope": "scope-password-only", "negate": "false"}
+                }, timeout=6)
+            ex["requirement"] = "REQUIRED"
+            requests.put(f"{auth_api}/flows/Password-Only Flow/executions", headers=headers, json=ex, timeout=6)
+
+        # 子流程 3: Hybrid Flow
+        requests.post(f"{auth_api}/flows/global-sso-browser/executions/flow", headers=headers, json={
+            "alias": "Hybrid Flow",
+            "type": "basic-flow",
+            "provider": "registration-page-form",
+            "description": "Hybrid passkey and password fallback subflow"
+        }, timeout=6)
+        requests.post(f"{auth_api}/flows/Hybrid Flow/executions/execution", headers=headers, json={"provider": "webauthn-authenticator-passwordless"}, timeout=6)
+        requests.post(f"{auth_api}/flows/Hybrid Flow/executions/execution", headers=headers, json={"provider": "auth-username-password-form"}, timeout=6)
+
+        h_execs = requests.get(f"{auth_api}/flows/Hybrid Flow/executions", headers=headers, timeout=6).json()
+        for ex in h_execs:
+            ex["requirement"] = "ALTERNATIVE"
+            requests.put(f"{auth_api}/flows/Hybrid Flow/executions", headers=headers, json=ex, timeout=6)
+
+        # 设置顶层流执行器要求
+        top_execs = requests.get(f"{auth_api}/flows/global-sso-browser/executions", headers=headers, timeout=6).json()
+        for ex in top_execs:
+            name = ex.get("displayName") or ex.get("providerId")
+            if name in ("Passkey-Only Flow", "Password-Only Flow"):
+                ex["requirement"] = "CONDITIONAL"
+            else:
                 ex["requirement"] = "ALTERNATIVE"
-                requests.put(f"{api_base}/flows/passkey-only-browser/executions", headers=headers, json=ex, timeout=6)
-                
-        log("成功创建 passkey-only-browser 自定义认证流")
-        return new_flow_id
-        
-    except Exception as e:
-        log(f"设置 Passkey 认证流异常: {e}")
+            requests.put(f"{auth_api}/flows/global-sso-browser/executions", headers=headers, json=ex, timeout=6)
+
+        flows_res = requests.get(f"{auth_api}/flows", headers=headers, timeout=6)
+        if flows_res.status_code == 200:
+            new_flow = next((f for f in flows_res.json() if f.get("alias") == "global-sso-browser"), None)
+            if new_flow:
+                log("成功创建并就绪 global-sso-browser 自适应多模式认证流")
+                return new_flow["id"]
+
         return None
+    except Exception as e:
+        log(f"配置 Keycloak 自适应认证流异常: {e}")
+        return None
+
+def setup_keycloak_passkey_flow():
+    """兼容旧函数名别名"""
+    return setup_keycloak_adaptive_sso_flow()
+
 
 GLOBAL_SSO_PORT = 4180
 GLOBAL_SSO_CLIENT_ID = "global-sso"
@@ -1145,13 +1219,30 @@ def ensure_global_sso_client(client_secret=None, extra_domain=None):
             if cid:
                 u_data, u_code, u_err = call_keycloak_api(f"clients/{cid}", "PUT", json_data=client_payload)
                 if u_code in (200, 204):
-                    log("Keycloak 全局 SSO Passkey 客户端已通过 REST API 成功同步更新")
+                    scopes_list, _, _ = call_keycloak_api("client-scopes", "GET")
+                    if isinstance(scopes_list, list):
+                        for sc_name in ("scope-passkey-only", "scope-password-only"):
+                            sc_obj = next((s for s in scopes_list if s.get("name") == sc_name), None)
+                            if sc_obj:
+                                call_keycloak_api(f"clients/{cid}/optional-client-scopes/{sc_obj['id']}", "PUT")
+                    log("Keycloak 全局 SSO 自适应客户端已通过 REST API 成功同步更新")
                     return True, "", client_secret
         elif code == 200 and isinstance(clients_res, list) and not clients_res:
             c_data, c_code, c_err = call_keycloak_api("clients", "POST", json_data=client_payload)
             if c_code in (200, 201, 204):
-                log("Keycloak 全局 SSO Passkey 客户端已通过 REST API 成功创建")
+                # 获取新建客户端 ID 并绑定 optional scopes
+                new_c_res, _, _ = call_keycloak_api("clients", "GET", params={"clientId": GLOBAL_SSO_CLIENT_ID})
+                if isinstance(new_c_res, list) and new_c_res:
+                    new_cid = new_c_res[0].get("id")
+                    scopes_list, _, _ = call_keycloak_api("client-scopes", "GET")
+                    if isinstance(scopes_list, list) and new_cid:
+                        for sc_name in ("scope-passkey-only", "scope-password-only"):
+                            sc_obj = next((s for s in scopes_list if s.get("name") == sc_name), None)
+                            if sc_obj:
+                                call_keycloak_api(f"clients/{new_cid}/optional-client-scopes/{sc_obj['id']}", "PUT")
+                log("Keycloak 全局 SSO 自适应客户端已通过 REST API 成功创建")
                 return True, "", client_secret
+
     except Exception as e:
         log(f"通过 REST API 同步 Keycloak 客户端异常: {e}")
 
@@ -1548,7 +1639,49 @@ location ^~ / {
     }}
 """
 
-        # 完整全局 SSO 认证反代（漏洞#3/#7/#8 全部修复 + 用户站点访问权限校验）
+        all_data_for_site = load_data()
+        site_info = all_data_for_site.get(domain, {}) if isinstance(all_data_for_site, dict) else {}
+        allow_passkey = site_info.get('allow_passkey', True)
+        allow_password = site_info.get('allow_password', True)
+
+        # 站点登录方式策略过滤 (Login Methods Policy)
+        lua_header_filter = ""
+        if allow_passkey and not allow_password:
+            lua_header_filter = """
+    # 动态注入 Passkey-Only 登录策略作用域
+    header_filter_by_lua_block {
+        local loc = ngx.header.Location
+        if loc and string.find(loc, "/protocol/openid%-connect/auth") then
+            local new_loc, n = string.gsub(loc, "scope=openid%%2Bemail%%2Bprofile", "scope=openid%%2Bemail%%2Bprofile%%2Bscope-passkey-only")
+            if n == 0 then
+                new_loc, n = string.gsub(loc, "scope=openid%+email%+profile", "scope=openid+email+profile+scope-passkey-only")
+            end
+            if n == 0 then
+                new_loc = loc .. "&scope=openid+email+profile+scope-passkey-only"
+            end
+            ngx.header.Location = new_loc
+        end
+    }
+"""
+        elif allow_password and not allow_passkey:
+            lua_header_filter = """
+    # 动态注入 Password-Only 登录策略作用域
+    header_filter_by_lua_block {
+        local loc = ngx.header.Location
+        if loc and string.find(loc, "/protocol/openid%-connect/auth") then
+            local new_loc, n = string.gsub(loc, "scope=openid%%2Bemail%%2Bprofile", "scope=openid%%2Bemail%%2Bprofile%%2Bscope-password-only")
+            if n == 0 then
+                new_loc, n = string.gsub(loc, "scope=openid%+email%+profile", "scope=openid+email+profile+scope-password-only")
+            end
+            if n == 0 then
+                new_loc = loc .. "&scope=openid+email+profile+scope-password-only"
+            end
+            ngx.header.Location = new_loc
+        end
+    }
+"""
+
+        # 完整全局 SSO 认证反代（漏洞#3/#7/#8 全部修复 + 用户站点访问权限校验 + 站点登录策略）
         new_content = """# OAuth2 全局 SSO 认证路径 - 需要大缓冲区处理 cookie
 location ^~ /oauth2/ {
     proxy_pass http://127.0.0.1:""" + str(sso_port) + """;
@@ -1563,7 +1696,8 @@ location ^~ /oauth2/ {
     proxy_buffer_size 128k;
     proxy_buffers 4 256k;
     proxy_busy_buffers_size 256k;
-}
+""" + lua_header_filter + """}
+
 
 location = /oauth2/auth {
     internal;
@@ -2288,11 +2422,11 @@ def api_create():
     if not ok:
         return json.dumps({"success": False, "error": f"全局 SSO 认证服务就绪失败: {err}"})
     
-    # 3. 极速生成 Nginx / OpenResty 反代配置（统一接入 127.0.0.1:4180）
-    conf = create_nginx_auth(domain, GLOBAL_SSO_PORT, target_host, port)
-    if not conf:
-        log("Nginx 配置失败，请手动检查")
-    
+    allow_passkey = request.form.get('allow_passkey', 'true').lower() in ['true', '1', 'on']
+    allow_password = request.form.get('allow_password', 'true').lower() in ['true', '1', 'on']
+    if not allow_passkey and not allow_password:
+        return json.dumps({"success": False, "error": "必须至少启用一种登录认证方式（Passkey 或密码）"})
+
     fresh_data = load_data()
     fresh_data[domain] = {
         'client_id': GLOBAL_SSO_CLIENT_ID, 
@@ -2300,13 +2434,23 @@ def api_create():
         'target_host': target_host,
         'target_port': port,
         'container_name': GLOBAL_SSO_CONTAINER, 
-        'nginx_config': conf, 
         'created_at': datetime.now().isoformat(),
         'proxy_enabled': True,
         'ssl_enabled': check_domain_ssl_enabled(domain),
-        'auth_enabled': True
+        'auth_enabled': True,
+        'allow_passkey': allow_passkey,
+        'allow_password': allow_password
     }
     save_data(fresh_data)
+
+    # 3. 极速生成 Nginx / OpenResty 反代配置（统一接入 127.0.0.1:4180）
+    conf = create_nginx_auth(domain, GLOBAL_SSO_PORT, target_host, port)
+    if conf:
+        fresh_data[domain]['nginx_config'] = conf
+        save_data(fresh_data)
+    else:
+        log("Nginx 配置失败，请手动检查")
+
     
     # 检查是否勾选了同时申请 SSL 证书
     apply_ssl = request.form.get('apply_ssl', 'false').lower() in ['true', '1', 'on']
@@ -2508,9 +2652,48 @@ def api_toggle(domain, feature):
         
     return json.dumps({"success": False, "error": "无效的控制类型"})
 
+@app.route('/api/domain/<domain>/auth_methods', methods=['POST'])
+def api_update_domain_auth_methods(domain):
+    domain = domain.strip().lower()
+    data = load_data()
+    if domain not in data:
+        return json.dumps({"success": False, "error": "域名配置不存在"})
+
+    allow_passkey = request.form.get('allow_passkey', 'true').lower() == 'true'
+    allow_password = request.form.get('allow_password', 'true').lower() == 'true'
+
+    if not allow_passkey and not allow_password:
+        return json.dumps({"success": False, "error": "必须至少保留一种登录认证方式（Passkey 或密码）"})
+
+    auth = data[domain]
+    auth['allow_passkey'] = allow_passkey
+    auth['allow_password'] = allow_password
+
+    target_host = auth.get('target_host', '127.0.0.1')
+    target_port = auth.get('target_port', 80)
+    oauth_port = auth.get('oauth_port', GLOBAL_SSO_PORT)
+    auth_enabled = auth.get('auth_enabled', True)
+    proxy_enabled = auth.get('proxy_enabled', True)
+
+    save_data(data)
+    new_conf = update_nginx_config(domain, oauth_port, target_host, target_port, auth_enabled, proxy_enabled)
+    if new_conf:
+        auth['nginx_config'] = new_conf
+        save_data(data)
+        log(f"域名 {domain} 登录方式策略已更新 (Passkey: {allow_passkey}, Password: {allow_password})")
+        return json.dumps({
+            "success": True,
+            "allow_passkey": allow_passkey,
+            "allow_password": allow_password,
+            "nginx_config": new_conf
+        })
+
+    return json.dumps({"success": False, "error": "更新 Nginx 反代配置失败"})
+
 @app.route('/api/list')
 def api_list():
     return json.dumps(load_data())
+
 
 @app.route('/ssl')
 def ssl_page():
