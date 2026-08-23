@@ -72,6 +72,71 @@ input:focus,
     box-shadow: 0 0 0 4px rgba(0, 122, 255, 0.2) !important;
 }
 
+/* 密码输入框组 - 眼睛图标内嵌与用户名栏等长对齐 */
+.pf-c-input-group,
+.input-group {
+    position: relative !important;
+    display: flex !important;
+    width: 100% !important;
+    box-sizing: border-box !important;
+    background: transparent !important;
+    border: none !important;
+}
+
+.pf-c-input-group input#password,
+.pf-c-input-group input[type="password"],
+.input-group input#password,
+.input-group input[type="password"] {
+    width: 100% !important;
+    flex: 1 1 100% !important;
+    padding-right: 48px !important;
+    border-radius: 12px !important;
+    box-sizing: border-box !important;
+}
+
+/* 眼睛显隐按钮 - 绝对定位悬浮在密码框内部右侧 */
+.pf-c-input-group button,
+.pf-c-input-group .pf-c-button,
+.input-group button,
+button[data-password-toggle] {
+    position: absolute !important;
+    right: 6px !important;
+    top: 50% !important;
+    transform: translateY(-50%) !important;
+    width: 38px !important;
+    height: 38px !important;
+    background: transparent !important;
+    background-color: transparent !important;
+    border: none !important;
+    outline: none !important;
+    box-shadow: none !important;
+    color: #86868b !important;
+    padding: 0 !important;
+    margin: 0 !important;
+    display: flex !important;
+    align-items: center !important;
+    justify-content: center !important;
+    cursor: pointer !important;
+    z-index: 10 !important;
+    border-radius: 8px !important;
+    transition: color 0.15s ease, background-color 0.15s ease !important;
+}
+
+.pf-c-input-group button:hover,
+.pf-c-input-group .pf-c-button:hover,
+.input-group button:hover,
+button[data-password-toggle]:hover {
+    color: #1d1d1f !important;
+    background-color: rgba(0, 0, 0, 0.05) !important;
+    background: rgba(0, 0, 0, 0.05) !important;
+}
+
+.pf-c-input-group button i,
+button[data-password-toggle] i {
+    font-size: 16px !important;
+    color: inherit !important;
+}
+
 /* 按钮组 */
 .form-group, .kc-form-group {
     margin-bottom: 16px !important;
