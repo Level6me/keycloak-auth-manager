@@ -2,8 +2,19 @@
    Abit Design System - Modern SPA & AJAX Interactive Engine for KAM
    ========================================================================== */
 
+function escapeHtml(str) {
+    if (str === null || str === undefined) return '';
+    return String(str)
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;')
+        .replace(/'/g, '&#39;');
+}
+
 // --- 1. Theme Management (Auto 🌓 / Light ☀️ / Dark 🌙) ---
 let themeMode = localStorage.getItem('abit_theme') || 'auto';
+
 
 function initTheme() {
     setTheme(themeMode);
@@ -504,6 +515,19 @@ function stopLogStream() {
     if (pollTimer) setTimeout(() => clearInterval(pollTimer), 3500);
 }
 
+// --- 9. Keycloak User Management Interactive Engine (with Local Persistence & Incremental Sync) ---
+let cachedUsersData = [];
+try {
+    const stored = localStorage.getItem('abit_cached_users');
+    if (stored) {
+        cachedUsersData = JSON.parse(stored) || [];
+    }
+} catch (e) {
+    cachedUsersData = [];
+}
+let usersInitialLoaded = (cachedUsersData && cachedUsersData.length > 0);
+let userViewMode = localStorage.getItem('abit_user_view_mode') || 'card';
+
 // --- 8. 初始化与 Hash 路由自适应 ---
 document.addEventListener('DOMContentLoaded', () => {
     initTheme();
@@ -530,18 +554,6 @@ document.addEventListener('DOMContentLoaded', () => {
     }
 });
 
-// --- 9. Keycloak User Management Interactive Engine (with Local Persistence & Incremental Sync) ---
-let cachedUsersData = [];
-try {
-    const stored = localStorage.getItem('abit_cached_users');
-    if (stored) {
-        cachedUsersData = JSON.parse(stored) || [];
-    }
-} catch (e) {
-    cachedUsersData = [];
-}
-let usersInitialLoaded = (cachedUsersData && cachedUsersData.length > 0);
-let userViewMode = localStorage.getItem('abit_user_view_mode') || 'card';
 
 function saveUsersToLocalStorage(users) {
     cachedUsersData = users || [];
@@ -715,10 +727,10 @@ function renderUsersUI(users) {
                         </div>
 
                         <div style="display: inline-flex; align-items: center; gap: 5px; margin-left: auto;">
-                            <button class="btn secondary sm" onclick="openResetUserModal('${u.id}', '${u.username}', ${u.has_passkey})" style="padding: 4px 7px; font-size: 11px;" title="重置密码或重新绑定 Passkey">🔐 凭据</button>
-                            <button class="btn secondary sm" onclick="openUserSitesModal('${u.id}', '${u.username}')" style="padding: 4px 7px; font-size: 11px;" title="配置可访问站点权限">🌐 站点</button>
-                            <button class="btn secondary sm" onclick="openUserRolesModal('${u.id}', '${u.username}')" style="padding: 4px 7px; font-size: 11px;" title="分配角色权限">🛡️ 角色</button>
-                            <button class="btn danger sm" onclick="deleteUserAjax('${u.id}', '${u.username}')" style="padding: 4px 7px; font-size: 11px;" title="删除用户">🗑️</button>
+                            <button type="button" class="btn secondary sm btn-user-action" data-action="reset" data-user-id="${escapeHtml(u.id)}" data-username="${escapeHtml(u.username)}" data-has-passkey="${u.has_passkey ? 'true' : 'false'}" onclick="openResetUserModal('${u.id}', '${escapeHtml(u.username)}', ${Boolean(u.has_passkey)})" style="padding: 4px 7px; font-size: 11px;" title="重置密码或重新绑定 Passkey">🔐 凭据</button>
+                            <button type="button" class="btn secondary sm btn-user-action" data-action="sites" data-user-id="${escapeHtml(u.id)}" data-username="${escapeHtml(u.username)}" onclick="openUserSitesModal('${u.id}', '${escapeHtml(u.username)}')" style="padding: 4px 7px; font-size: 11px;" title="配置可访问站点权限">🌐 站点</button>
+                            <button type="button" class="btn secondary sm btn-user-action" data-action="roles" data-user-id="${escapeHtml(u.id)}" data-username="${escapeHtml(u.username)}" onclick="openUserRolesModal('${u.id}', '${escapeHtml(u.username)}')" style="padding: 4px 7px; font-size: 11px;" title="分配角色权限">🛡️ 角色</button>
+                            <button type="button" class="btn danger sm btn-user-action" data-action="delete" data-user-id="${escapeHtml(u.id)}" data-username="${escapeHtml(u.username)}" onclick="deleteUserAjax('${u.id}', '${escapeHtml(u.username)}')" style="padding: 4px 7px; font-size: 11px;" title="删除用户">🗑️</button>
                         </div>
                     </div>
 
@@ -766,11 +778,11 @@ function renderUsersUI(users) {
                 <td>
                     <div style="display: flex; align-items: center; gap: 8px; font-weight: 700;">
                         ${statusDot}
-                        <span>${u.username}</span>
+                        <span>${escapeHtml(u.username)}</span>
                     </div>
                 </td>
                 <td>
-                    <span style="font-size: 13px; color: ${u.email ? 'var(--text)' : 'var(--text-sec)'};">${u.email || '-'}</span>
+                    <span style="font-size: 13px; color: ${u.email ? 'var(--text)' : 'var(--text-sec)'};">${escapeHtml(u.email) || '-'}</span>
                 </td>
                 <td>
                     <div class="badges-wrap" style="margin: 0;">
@@ -798,13 +810,14 @@ function renderUsersUI(users) {
                 </td>
                 <td style="text-align: right;">
                     <div style="display: inline-flex; align-items: center; gap: 4px;">
-                        <button class="btn secondary sm" onclick="openResetUserModal('${u.id}', '${u.username}', ${u.has_passkey})" style="padding: 4px 7px; font-size: 11px;">🔐 凭据</button>
-                        <button class="btn secondary sm" onclick="openUserSitesModal('${u.id}', '${u.username}')" style="padding: 4px 7px; font-size: 11px;">🌐 站点</button>
-                        <button class="btn secondary sm" onclick="openUserRolesModal('${u.id}', '${u.username}')" style="padding: 4px 7px; font-size: 11px;">🛡️ 角色</button>
-                        <button class="btn danger sm" onclick="deleteUserAjax('${u.id}', '${u.username}')" style="padding: 4px 7px; font-size: 11px;">🗑️</button>
+                        <button type="button" class="btn secondary sm btn-user-action" data-action="reset" data-user-id="${escapeHtml(u.id)}" data-username="${escapeHtml(u.username)}" data-has-passkey="${u.has_passkey ? 'true' : 'false'}" onclick="openResetUserModal('${u.id}', '${escapeHtml(u.username)}', ${Boolean(u.has_passkey)})" style="padding: 4px 7px; font-size: 11px;">🔐 凭据</button>
+                        <button type="button" class="btn secondary sm btn-user-action" data-action="sites" data-user-id="${escapeHtml(u.id)}" data-username="${escapeHtml(u.username)}" onclick="openUserSitesModal('${u.id}', '${escapeHtml(u.username)}')" style="padding: 4px 7px; font-size: 11px;">🌐 站点</button>
+                        <button type="button" class="btn secondary sm btn-user-action" data-action="roles" data-user-id="${escapeHtml(u.id)}" data-username="${escapeHtml(u.username)}" onclick="openUserRolesModal('${u.id}', '${escapeHtml(u.username)}')" style="padding: 4px 7px; font-size: 11px;">🛡️ 角色</button>
+                        <button type="button" class="btn danger sm btn-user-action" data-action="delete" data-user-id="${escapeHtml(u.id)}" data-username="${escapeHtml(u.username)}" onclick="deleteUserAjax('${u.id}', '${escapeHtml(u.username)}')" style="padding: 4px 7px; font-size: 11px;">🗑️</button>
                     </div>
                 </td>
             `;
+
             tableBody.appendChild(tr);
         });
     }
@@ -1000,13 +1013,17 @@ async function deleteUserAjax(userId, username) {
 
 // --- Reset User Credentials Modal Logic ---
 function openResetUserModal(userId, username, hasPasskey) {
+    document.querySelectorAll('.modal-overlay.active').forEach(m => m.classList.remove('active'));
     const modal = document.getElementById('userResetModal');
     if (!modal) return;
-    document.getElementById('formResetUser').reset();
-    document.getElementById('reset_user_id').value = userId;
-    document.getElementById('reset_user_name_display').textContent = username;
-    document.getElementById('reset_require_passkey').checked = false;
-    document.getElementById('reset_clear_passkey').checked = false;
+    const form = document.getElementById('formResetUser');
+    if (form) form.reset();
+    document.getElementById('reset_user_id').value = userId || '';
+    document.getElementById('reset_user_name_display').textContent = username || '';
+    const reqPk = document.getElementById('reset_require_passkey');
+    if (reqPk) reqPk.checked = false;
+    const clearPk = document.getElementById('reset_clear_passkey');
+    if (clearPk) clearPk.checked = false;
     modal.classList.add('active');
 }
 
@@ -1042,20 +1059,25 @@ async function submitResetUser(e) {
         return;
     }
 
-    btn.disabled = true;
-    btn.textContent = '正在保存中...';
+    if (btn) {
+        btn.disabled = true;
+        btn.textContent = '正在保存中...';
+    }
 
+    const csrfToken = (typeof getCsrfToken === 'function') ? getCsrfToken() : ((document.cookie.match(/(?:^|;\s*)csrf_token=([^;]+)/) || [])[1] || '');
     const formData = new FormData();
     formData.append('new_password', newPwd);
     formData.append('require_passkey', reqPasskey ? 'true' : 'false');
     formData.append('clear_passkey', clearPasskey ? 'true' : 'false');
-    formData.append('_csrf_token', (document.cookie.match(/(?:^|;\s*)csrf_token=([^;]+)/) || [])[1] || '');
+    formData.append('_csrf_token', csrfToken);
 
     try {
         const res = await fetch(`/api/users/${userId}/reset_password`, { method: 'POST', body: formData });
         const data = await res.json();
-        btn.disabled = false;
-        btn.textContent = '💾 保存并应用';
+        if (btn) {
+            btn.disabled = false;
+            btn.textContent = '💾 保存并应用';
+        }
 
         if (data.success) {
             showToast('用户凭据设置已成功应用！', 'success');
@@ -1065,32 +1087,34 @@ async function submitResetUser(e) {
             showToast('重置失败: ' + (data.error || '未知错误'), 'error');
         }
     } catch (err) {
-        btn.disabled = false;
-        btn.textContent = '💾 保存并应用';
-        showToast('网络请求异常', 'error');
+        if (btn) {
+            btn.disabled = false;
+            btn.textContent = '💾 保存并应用';
+        }
+        showToast('网络请求异常: ' + err.message, 'error');
     }
 }
 
 // --- User Roles Modal Logic ---
 async function openUserRolesModal(userId, username) {
+    document.querySelectorAll('.modal-overlay.active').forEach(m => m.classList.remove('active'));
     const modal = document.getElementById('userRolesModal');
     if (!modal) return;
-    document.getElementById('roles_user_id').value = userId;
-    document.getElementById('roles_user_name_display').textContent = username;
+    document.getElementById('roles_user_id').value = userId || '';
+    document.getElementById('roles_user_name_display').textContent = username || '';
     const container = document.getElementById('rolesCheckboxContainer');
-    container.innerHTML = '<div style="text-align: center; color: var(--text-sec); font-size: 12px; padding: 10px;">正在加载角色列表...</div>';
+    if (container) {
+        container.innerHTML = '<div style="text-align: center; color: var(--text-sec); font-size: 12px; padding: 10px;">正在加载角色列表...</div>';
+    }
     modal.classList.add('active');
 
     try {
-        const [rolesRes, usersRes] = await Promise.all([
-            fetch('/api/roles').then(r => r.json()),
-            fetch('/api/users').then(r => r.json())
-        ]);
+        const userObj = (cachedUsersData || []).find(u => u.id === userId);
+        const userRoles = userObj ? (userObj.roles || []) : [];
 
-        if (rolesRes.success) {
-            const userObj = (usersRes.users || []).find(u => u.id === userId);
-            const userRoles = userObj ? (userObj.roles || []) : [];
+        const rolesRes = await fetch('/api/roles').then(r => r.json());
 
+        if (rolesRes && rolesRes.success && Array.isArray(rolesRes.roles)) {
             container.innerHTML = '';
             rolesRes.roles.forEach(r => {
                 const isChecked = userRoles.includes(r.name);
@@ -1100,21 +1124,23 @@ async function openUserRolesModal(userId, username) {
                 row.style.padding = '6px 0';
                 row.innerHTML = `
                     <div class="setting-info">
-                        <span class="setting-label" style="font-size: 13px;">${r.name === 'admin' ? '👑' : '🏷️'} ${r.name}</span>
-                        <span class="setting-desc" style="font-size: 11px;">${r.description || (isDefault ? '系统默认基础角色' : 'Realm 角色')}</span>
+                        <span class="setting-label" style="font-size: 13px;">${r.name === 'admin' ? '👑' : '🏷️'} ${escapeHtml(r.name)}</span>
+                        <span class="setting-desc" style="font-size: 11px;">${escapeHtml(r.description || (isDefault ? '系统默认基础角色' : 'Realm 角色'))}</span>
                     </div>
                     <label class="switch">
-                        <input type="checkbox" value="${r.name}" ${isChecked ? 'checked' : ''} ${isDefault ? 'disabled' : ''}>
+                        <input type="checkbox" value="${escapeHtml(r.name)}" ${isChecked ? 'checked' : ''} ${isDefault ? 'disabled' : ''}>
                         <span class="slider"></span>
                     </label>
                 `;
                 container.appendChild(row);
             });
         } else {
-            container.innerHTML = `<div style="color: var(--danger); font-size: 12px;">加载失败: ${rolesRes.error}</div>`;
+            container.innerHTML = `<div style="color: var(--danger); font-size: 12px; padding: 8px; text-align: center;">加载失败: ${(rolesRes && rolesRes.error) || '未知错误'}</div>`;
         }
     } catch (e) {
-        container.innerHTML = '<div style="color: var(--danger); font-size: 12px;">加载角色列表发生异常</div>';
+        if (container) {
+            container.innerHTML = '<div style="color: var(--danger); font-size: 12px; padding: 8px; text-align: center;">加载角色列表发生异常</div>';
+        }
     }
 }
 
@@ -1131,18 +1157,23 @@ async function submitUserRoles(e) {
     const checkboxes = container.querySelectorAll('input[type="checkbox"]:checked');
     const selectedRoles = Array.from(checkboxes).map(cb => cb.value);
 
-    btn.disabled = true;
-    btn.textContent = '正在更新权限...';
+    if (btn) {
+        btn.disabled = true;
+        btn.textContent = '正在更新权限...';
+    }
 
+    const csrfToken = (typeof getCsrfToken === 'function') ? getCsrfToken() : ((document.cookie.match(/(?:^|;\s*)csrf_token=([^;]+)/) || [])[1] || '');
     const formData = new FormData();
     formData.append('roles', selectedRoles.join(','));
-    formData.append('_csrf_token', (document.cookie.match(/(?:^|;\s*)csrf_token=([^;]+)/) || [])[1] || '');
+    formData.append('_csrf_token', csrfToken);
 
     try {
         const res = await fetch(`/api/users/${userId}/roles`, { method: 'POST', body: formData });
         const data = await res.json();
-        btn.disabled = false;
-        btn.textContent = '💾 更新角色权限';
+        if (btn) {
+            btn.disabled = false;
+            btn.textContent = '💾 更新角色权限';
+        }
 
         if (data.success) {
             showToast('用户角色权限已成功更新！', 'success');
@@ -1152,9 +1183,11 @@ async function submitUserRoles(e) {
             showToast('更新失败: ' + (data.error || '未知错误'), 'error');
         }
     } catch (err) {
-        btn.disabled = false;
-        btn.textContent = '💾 更新角色权限';
-        showToast('网络请求发生异常', 'error');
+        if (btn) {
+            btn.disabled = false;
+            btn.textContent = '💾 更新角色权限';
+        }
+        showToast('网络请求发生异常: ' + err.message, 'error');
     }
 }
 
@@ -1162,13 +1195,16 @@ async function submitUserRoles(e) {
 let cachedDomainsForSitesModal = [];
 
 async function openUserSitesModal(userId, username) {
+    document.querySelectorAll('.modal-overlay.active').forEach(m => m.classList.remove('active'));
     const modal = document.getElementById('userSitesModal');
     if (!modal) return;
-    document.getElementById('sites_user_id').value = userId;
-    document.getElementById('sites_user_name_display').textContent = username;
+    document.getElementById('sites_user_id').value = userId || '';
+    document.getElementById('sites_user_name_display').textContent = username || '';
 
     const container = document.getElementById('sitesCheckboxContainer');
-    container.innerHTML = '<div style="text-align: center; color: var(--text-sec); font-size: 12px; padding: 12px;">正在加载受保护站点列表...</div>';
+    if (container) {
+        container.innerHTML = '<div style="text-align: center; color: var(--text-sec); font-size: 12px; padding: 12px;">正在加载受保护站点列表...</div>';
+    }
     modal.classList.add('active');
 
     // 查找当前用户的站点权限配置
@@ -1182,19 +1218,15 @@ async function openUserSitesModal(userId, username) {
     }
     toggleSitesAllowAll(allSites);
 
-    try {
-        const res = await fetch('/api/list');
-        if (!res.ok) throw new Error('获取站点列表失败');
-        const domainsData = await res.json();
-        cachedDomainsForSitesModal = Object.keys(domainsData || {});
-
+    const renderSiteCheckboxes = (domains) => {
+        if (!container) return;
         container.innerHTML = '';
-        if (cachedDomainsForSitesModal.length === 0) {
+        if (!domains || domains.length === 0) {
             container.innerHTML = '<div style="text-align: center; color: var(--text-sec); font-size: 12px; padding: 12px;">系统内暂无配置受保护的域名</div>';
             return;
         }
 
-        cachedDomainsForSitesModal.forEach(domain => {
+        domains.forEach(domain => {
             const isChecked = allSites || allowedSites.includes(domain);
             const row = document.createElement('div');
             row.className = 'setting-row';
@@ -1204,17 +1236,37 @@ async function openUserSitesModal(userId, username) {
             row.innerHTML = `
                 <div class="setting-info" style="display: flex; align-items: center; gap: 8px;">
                     <span style="font-size: 14px;">🌐</span>
-                    <span class="setting-label" style="font-size: 13px; font-family: monospace;">${domain}</span>
+                    <span class="setting-label" style="font-size: 13px; font-family: monospace;">${escapeHtml(domain)}</span>
                 </div>
                 <label class="switch" style="transform: scale(0.85); transform-origin: right center;">
-                    <input type="checkbox" class="site-domain-checkbox" value="${domain}" ${isChecked ? 'checked' : ''} ${allSites ? 'disabled' : ''}>
+                    <input type="checkbox" class="site-domain-checkbox" value="${escapeHtml(domain)}" ${isChecked ? 'checked' : ''} ${allSites ? 'disabled' : ''}>
                     <span class="slider"></span>
                 </label>
             `;
             container.appendChild(row);
         });
+    };
+
+    let domainsList = Object.keys(cachedDomainsData || {});
+    if (domainsList.length === 0 && cachedDomainsForSitesModal.length > 0) {
+        domainsList = cachedDomainsForSitesModal;
+    }
+    if (domainsList.length > 0) {
+        renderSiteCheckboxes(domainsList);
+    }
+
+    try {
+        const res = await fetch('/api/list');
+        if (res.ok) {
+            const domainsData = await res.json();
+            cachedDomainsData = domainsData || {};
+            cachedDomainsForSitesModal = Object.keys(domainsData || {});
+            renderSiteCheckboxes(cachedDomainsForSitesModal);
+        }
     } catch (err) {
-        container.innerHTML = `<div style="color: var(--danger); font-size: 12px; padding: 12px; text-align: center;">加载站点列表异常: ${err.message}</div>`;
+        if (domainsList.length === 0 && container) {
+            container.innerHTML = `<div style="color: var(--danger); font-size: 12px; padding: 12px; text-align: center;">加载站点列表异常: ${err.message}</div>`;
+        }
     }
 }
 
@@ -1305,6 +1357,46 @@ async function submitUserSites(e) {
     }
 }
 
+// ─── 显式暴露全局函数，确保无论在任何内联或异步上下文中均 100% 可用 ───
+window.openResetUserModal = openResetUserModal;
+window.closeResetUserModal = closeResetUserModal;
+window.openUserSitesModal = openUserSitesModal;
+window.closeUserSitesModal = closeUserSitesModal;
+window.openUserRolesModal = openUserRolesModal;
+window.closeUserRolesModal = closeUserRolesModal;
+window.openAddUserModal = openAddUserModal;
+window.closeAddUserModal = closeAddUserModal;
+window.deleteUserAjax = deleteUserAjax;
+window.loadUsersAjax = loadUsersAjax;
+window.switchUserView = switchUserView;
+window.filterUsers = filterUsers;
+
+// ─── 全局事件委托：监听用户管理操作按钮点击，杜绝 DOM 重绘丢失或内联调用偶发无响应 ───
+document.addEventListener('click', (e) => {
+    const btn = e.target.closest('.btn-user-action');
+    if (!btn) return;
+
+    e.preventDefault();
+    e.stopPropagation();
+
+    const action = btn.dataset.action;
+    const userId = btn.dataset.userId;
+    const username = btn.dataset.username;
+    const hasPasskey = btn.dataset.hasPasskey === 'true';
+
+    if (!userId) return;
+
+    if (action === 'reset') {
+        openResetUserModal(userId, username, hasPasskey);
+    } else if (action === 'sites') {
+        openUserSitesModal(userId, username);
+    } else if (action === 'roles') {
+        openUserRolesModal(userId, username);
+    } else if (action === 'delete') {
+        deleteUserAjax(userId, username);
+    }
+});
+
 // ─── 全局模态框遮罩点击关闭与 ESC 快捷关闭 ───
 document.addEventListener('DOMContentLoaded', () => {
     document.querySelectorAll('.modal-overlay').forEach(overlay => {
@@ -1321,6 +1413,7 @@ document.addEventListener('DOMContentLoaded', () => {
         }
     });
 });
+
 
 
 

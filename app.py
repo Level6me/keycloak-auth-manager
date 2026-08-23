@@ -1012,7 +1012,7 @@ GLOBAL_SSO_CLIENT_ID = "global-sso"
 GLOBAL_SSO_CONTAINER = "oauth2-proxy-sso"
 
 def get_root_domain(domain):
-    """从域名中提取用于 SSO Cookie 共享的根域 (如 ips.example.com -> .example.com)"""
+    """从域名中提取用于 SSO Cookie 共享的根域 (如 ips.abab.pw -> .abab.pw)"""
     if not domain:
         return ""
     domain = domain.strip().lower()
@@ -1058,9 +1058,9 @@ def get_all_cookie_and_whitelist_domains(data=None, extra_domain=None):
 
     # 默认兜底
     if not cookie_domains:
-        cookie_domains.add(".example.com")
-        whitelist_domains.add("*.example.com")
-        whitelist_domains.add("example.com")
+        cookie_domains.add(".abab.pw")
+        whitelist_domains.add("*.abab.pw")
+        whitelist_domains.add("abab.pw")
         
     return ",".join(sorted(list(cookie_domains))), ",".join(sorted(list(whitelist_domains)))
 
