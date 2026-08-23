@@ -1053,6 +1053,44 @@ def setup_keycloak_passkey_flow():
     return setup_keycloak_adaptive_sso_flow()
 
 
+def sync_site_policy_to_keycloak_theme():
+    """将所有站点的登录认证方式策略 (allow_passkey, allow_password) 同步至 Keycloak 主题静态资源"""
+    try:
+        data = load_data()
+        policy = {}
+        for domain, auth in data.items():
+            d = domain.strip().lower()
+            if d:
+                policy[d] = {
+                    "allow_passkey": auth.get("allow_passkey", True) is not False,
+                    "allow_password": auth.get("allow_password", True) is not False
+                }
+        
+        # 1. 写入本地代码仓主题目录
+        local_policy_file = "/home/ubuntu/github/keycloak-auth-manager/themes/apple/login/resources/site-policy.json"
+        os.makedirs(os.path.dirname(local_policy_file), exist_ok=True)
+        with open(local_policy_file, "w", encoding="utf-8") as f:
+            json.dump(policy, f, indent=2)
+            
+        # 2. 写入部署目录
+        deploy_policy_file = "/opt/keycloak-auth-manager/themes/apple/login/resources/site-policy.json"
+        if os.path.exists("/opt/keycloak-auth-manager/themes/apple/login/resources"):
+            with open(deploy_policy_file, "w", encoding="utf-8") as f:
+                json.dump(policy, f, indent=2)
+                
+        # 3. 复制到运行中的 keycloak 容器内
+        run_cmd_args(["docker", "exec", KEYCLOAK_CONTAINER, "mkdir", "-p", "/opt/keycloak/themes/apple/login/resources"])
+        src_file = deploy_policy_file if os.path.exists(deploy_policy_file) else local_policy_file
+        if os.path.exists(src_file):
+            run_cmd_args(["docker", "cp", src_file, f"{KEYCLOAK_CONTAINER}:/opt/keycloak/themes/apple/login/resources/site-policy.json"])
+        
+        log(f"已同步站点登录策略至 Keycloak 主题: {list(policy.keys())}")
+        return True
+    except Exception as e:
+        log(f"同步站点登录策略异常: {e}")
+        return False
+
+
 GLOBAL_SSO_PORT = 4180
 GLOBAL_SSO_CLIENT_ID = "global-sso"
 GLOBAL_SSO_CONTAINER = "oauth2-proxy-sso"
@@ -2612,6 +2650,7 @@ def api_update_domain_auth_methods(domain):
     proxy_enabled = auth.get('proxy_enabled', True)
 
     save_data(data)
+    sync_site_policy_to_keycloak_theme()
     new_conf = update_nginx_config(domain, oauth_port, target_host, target_port, auth_enabled, proxy_enabled)
     if new_conf:
         auth['nginx_config'] = new_conf

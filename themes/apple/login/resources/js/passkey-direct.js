@@ -1,4 +1,4 @@
-// Passkey 极致直通登录脚本 (支持应用内直接拉起 Face ID / Touch ID / WebAuthn)
+// Passkey 与多站点按需认证策略控制器 (支持纯 Passkey / 纯密码 / 混合登录)
 (function() {
     function base64urlToBuffer(base64url) {
         let base64 = base64url.replace(/-/g, "+").replace(/_/g, "/");
@@ -17,14 +17,131 @@
         return btoa(binary).replace(/\+/g, "-").replace(/\//g, "_").replace(/=/g, "");
     }
 
-    function initPasskeyDirect() {
+    function getTargetDomain() {
+        const urlParams = new URLSearchParams(window.location.search);
+        let redirectUri = urlParams.get("redirect_uri") || "";
+        
+        if (!redirectUri) {
+            const clientData = urlParams.get("client_data") || "";
+            if (clientData) {
+                try {
+                    const decoded = JSON.parse(atob(clientData));
+                    redirectUri = decoded.ru || "";
+                } catch (e) {}
+            }
+        }
+        
+        if (!redirectUri) {
+            const forms = document.querySelectorAll("form");
+            for (const f of forms) {
+                if (f.action && f.action.includes("redirect_uri=")) {
+                    const match = f.action.match(/redirect_uri=([^&]+)/);
+                    if (match) redirectUri = decodeURIComponent(match[1]);
+                }
+            }
+        }
+        
+        if (redirectUri) {
+            try {
+                const u = new URL(redirectUri);
+                return u.hostname.toLowerCase();
+            } catch (e) {
+                const match = redirectUri.match(/https?:\/\/([^\/:]+)/i);
+                if (match) return match[1].toLowerCase();
+            }
+        }
+        return window.location.hostname.toLowerCase();
+    }
+
+    async function fetchSitePolicy() {
+        try {
+            const scripts = document.querySelectorAll('script[src*="passkey-direct.js"]');
+            let policyUrl = "/resources/login/apple/site-policy.json";
+            if (scripts.length > 0) {
+                policyUrl = scripts[0].src.replace(/\/js\/passkey-direct\.js.*/, "/site-policy.json");
+            }
+            const res = await fetch(policyUrl + "?t=" + Date.now());
+            if (res.ok) {
+                return await res.json();
+            }
+        } catch (e) {
+            console.warn("获取 site-policy.json 失败:", e);
+        }
+        return {};
+    }
+
+    async function initPolicyAndPasskey() {
+        const domain = getTargetDomain();
+        const policy = await fetchSitePolicy();
+        const domainPolicy = policy[domain] || { allow_passkey: true, allow_password: true };
+        const allowPasskey = domainPolicy.allow_passkey !== false;
+        const allowPassword = domainPolicy.allow_password !== false;
+
         const tryAnotherLink = document.getElementById("try-another-way");
         const tryAnotherForm = document.getElementById("kc-select-try-another-way-form");
         const isPasswordPage = !!document.getElementById("kc-form-login");
         const isWebAuthnPage = !!document.getElementById("kc-form-webauthn");
 
+        // 场景 1: 该站点禁用了 Passkey 认证 (仅允许账号密码登录)
+        if (!allowPasskey && allowPassword) {
+            if (tryAnotherForm) tryAnotherForm.style.display = "none";
+            if (tryAnotherLink) tryAnotherLink.style.display = "none";
+            return;
+        }
+
+        // 场景 2: 该站点禁用了密码认证 (仅允许 Passkey 认证)
+        if (!allowPassword && allowPasskey) {
+            if (isPasswordPage && tryAnotherForm) {
+                // 在密码界面：静默直通进入 Passkey 界面
+                if (tryAnotherLink) tryAnotherLink.innerHTML = "正在进入 Passkey 认证...";
+                try {
+                    const actionUrl = tryAnotherForm.action;
+                    const res1 = await fetch(actionUrl, {
+                        method: "POST",
+                        headers: { "Content-Type": "application/x-www-form-urlencoded" },
+                        body: new URLSearchParams({ "tryAnotherWay": "on" })
+                    });
+                    const html1 = await res1.text();
+                    const doc1 = new DOMParser().parseFromString(html1, "text/html");
+
+                    let passkeyExecId = null;
+                    const buttons = doc1.querySelectorAll("button[name='authenticationExecution']");
+                    for (const btn of buttons) {
+                        const txt = (btn.innerText || btn.textContent || "").toLowerCase();
+                        if (txt.includes("密钥") || txt.includes("安全") || txt.includes("webauthn") || txt.includes("passkey")) {
+                            passkeyExecId = btn.value;
+                            break;
+                        }
+                    }
+
+                    const selForm = doc1.getElementById("kc-select-credential-form");
+                    const action2 = selForm ? selForm.action : actionUrl;
+
+                    const targetForm = document.createElement("form");
+                    targetForm.method = "POST";
+                    targetForm.action = action2;
+                    const input = document.createElement("input");
+                    input.type = "hidden";
+                    input.name = "authenticationExecution";
+                    input.value = passkeyExecId || "";
+                    targetForm.appendChild(input);
+                    document.body.appendChild(targetForm);
+                    targetForm.submit();
+                    return;
+                } catch (e) {
+                    tryAnotherForm.requestSubmit();
+                    return;
+                }
+            } else if (isWebAuthnPage) {
+                // 在 Passkey 界面：隐藏切换密码入口，保持纯净 Passkey 页面
+                if (tryAnotherForm) tryAnotherForm.style.display = "none";
+                if (tryAnotherLink) tryAnotherLink.style.display = "none";
+                return;
+            }
+        }
+
+        // 场景 3: 两种方式均开启 (混合免密自适应模式)
         if (isPasswordPage && tryAnotherLink && tryAnotherForm) {
-            // 密码登录界面：链接显示为「使用 Passkey 登录」
             tryAnotherLink.innerHTML = "使用 Passkey 登录";
             tryAnotherLink.style.display = "inline-flex";
             tryAnotherLink.style.alignItems = "center";
@@ -42,7 +159,6 @@
 
                 try {
                     const actionUrl = tryAnotherForm.action;
-                    // Step 1: 请求切换其他方式
                     const res1 = await fetch(actionUrl, {
                         method: "POST",
                         headers: { "Content-Type": "application/x-www-form-urlencoded" },
@@ -53,7 +169,6 @@
                     const html1 = await res1.text();
                     const doc1 = new DOMParser().parseFromString(html1, "text/html");
 
-                    // 寻找 Passkey / 安全密钥执行器 ID
                     let passkeyExecId = null;
                     const buttons = doc1.querySelectorAll("button[name='authenticationExecution']");
                     for (const btn of buttons) {
@@ -69,7 +184,6 @@
                         return;
                     }
 
-                    // Step 2: 获取 WebAuthn Challenge 与表单参数
                     const selForm = doc1.getElementById("kc-select-credential-form");
                     const action2 = selForm ? selForm.action : actionUrl;
 
@@ -82,14 +196,12 @@
 
                     const html2 = await res2.text();
 
-                    // 解析 WebAuthn 参数
                     const mChallenge = html2.match(/challenge\s*:\s*"([^"]+)"/);
                     const mRpId = html2.match(/rpId\s*:\s*"([^"]+)"/);
                     const mUV = html2.match(/userVerification\s*:\s*"([^"]+)"/);
                     const mAction = html2.match(/id="webauth"[^>]*action="([^"]+)"/);
 
                     if (!mChallenge || !mRpId || !window.PublicKeyCredential) {
-                        // 降级：通过表单导航至 WebAuthn 页面
                         const fallbackForm = document.createElement("form");
                         fallbackForm.method = "POST";
                         fallbackForm.action = action2;
@@ -108,7 +220,6 @@
                     const userVerification = mUV ? mUV[1] : "preferred";
                     const webauthAction = mAction ? mAction[1].replace(/&amp;/g, "&") : action2;
 
-                    // Step 3: 原生触发 Face ID / Touch ID / Passkey 认证弹窗
                     const credential = await navigator.credentials.get({
                         publicKey: {
                             challenge: base64urlToBuffer(challenge),
@@ -119,7 +230,6 @@
 
                     if (!credential) throw new Error("No credential returned");
 
-                    // Step 4: 构造登录认证结果并提交至 Keycloak
                     const submitForm = document.createElement("form");
                     submitForm.method = "POST";
                     submitForm.action = webauthAction;
@@ -145,14 +255,13 @@
                     submitForm.submit();
 
                 } catch (err) {
-                    console.warn("Passkey 直接认证取消或未成功:", err);
+                    console.warn("Passkey 直接认证取消或降级:", err);
                     tryAnotherLink.innerHTML = originalText;
                     tryAnotherLink.style.pointerEvents = "auto";
                     tryAnotherLink.style.opacity = "1";
                 }
             };
         } else if (isWebAuthnPage && tryAnotherLink && tryAnotherForm) {
-            // WebAuthn 界面：链接显示为「使用密码登录」
             tryAnotherLink.innerHTML = "使用账号密码登录";
             tryAnotherLink.style.display = "inline-flex";
             tryAnotherLink.style.alignItems = "center";
@@ -204,8 +313,8 @@
     }
 
     if (document.readyState === "loading") {
-        document.addEventListener("DOMContentLoaded", initPasskeyDirect);
+        document.addEventListener("DOMContentLoaded", initPolicyAndPasskey);
     } else {
-        initPasskeyDirect();
+        initPolicyAndPasskey();
     }
 })();
