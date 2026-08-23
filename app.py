@@ -980,7 +980,7 @@ def setup_keycloak_adaptive_sso_flow():
                 ex["requirement"] = "ALTERNATIVE"
                 requests.put(f"{auth_api}/flows/passkey-only-browser/executions", headers=headers, json=ex, timeout=6)
 
-        # 4. 创建/更新 global-sso-browser 流 (Cookie + Forms + Passkey 混合免密模式，杜绝 400 错误)
+        # 4. 创建/更新 global-sso-browser 流 (Cookie + Forms + Passkey 混合免密模式，杜绝 400 错误与多余重复项)
         flows = requests.get(f"{auth_api}/flows", headers=headers, timeout=6).json()
         if not isinstance(flows, list):
             flows = []
@@ -988,7 +988,9 @@ def setup_keycloak_adaptive_sso_flow():
         existing_global_flow = next((f for f in flows if f.get("alias") == "global-sso-browser"), None)
         if existing_global_flow:
             cur_execs = requests.get(f"{auth_api}/flows/global-sso-browser/executions", headers=headers, timeout=6).json()
-            if any(e.get("requirement") == "CONDITIONAL" for e in cur_execs):
+            top_providers = [e.get("displayName") or e.get("providerId") for e in cur_execs if e.get("level") == 0]
+            # 严格确保只有 3 个顶级项：Cookie、global-sso-forms、WebAuthn
+            if len(top_providers) != 3 or any(e.get("requirement") == "CONDITIONAL" for e in cur_execs):
                 requests.delete(f"{auth_api}/flows/{existing_global_flow['id']}", headers=headers, timeout=6)
                 existing_global_flow = None
 
@@ -1000,6 +1002,7 @@ def setup_keycloak_adaptive_sso_flow():
                 "builtIn": False,
                 "description": "Global SSO Multi-mode Adaptive Browser Flow"
             }, timeout=6)
+
 
             # 1. auth-cookie (ALTERNATIVE)
             requests.post(f"{auth_api}/flows/global-sso-browser/executions/execution", headers=headers, json={"provider": "auth-cookie"}, timeout=6)
