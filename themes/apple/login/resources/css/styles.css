@@ -230,8 +230,7 @@ button[data-password-toggle] i,
     line-height: 1 !important;
     color: inherit !important;
 }
-    color: inherit !important;
-}
+
 
 /* 按钮组 */
 .form-group, .kc-form-group {

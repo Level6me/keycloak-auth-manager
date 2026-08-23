@@ -1,9 +1,14 @@
 {
+  "_comment": "三种认证模式：混合(allow_passkey+allow_password均true)、纯Passkey(allow_password:false)、纯密码(allow_passkey:false)",
   "ips.abab.pw": {
     "allow_passkey": true,
     "allow_password": true
   },
   "g.abab.pw": {
+    "allow_passkey": true,
+    "allow_password": true
+  },
+  "bwhau.abab.pw": {
     "allow_passkey": true,
     "allow_password": true
   }
