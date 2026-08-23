@@ -124,14 +124,48 @@ a:hover {
     text-decoration: underline !important;
 }
 
+/* 「尝试其他方法 / Passkey 登录」链接居中美化 */
+#kc-select-try-another-way-form,
+.kc-select-try-another-way-form {
+    margin-top: 18px !important;
+    text-align: center !important;
+}
+
+#kc-select-try-another-way-form a,
+a#try-another-way {
+    color: #0071e3 !important;
+    font-size: 15px !important;
+    font-weight: 500 !important;
+    display: inline-flex !important;
+    align-items: center !important;
+    justify-content: center !important;
+    gap: 6px !important;
+    padding: 8px 16px !important;
+    border-radius: 10px !important;
+    transition: all 0.2s ease !important;
+    cursor: pointer !important;
+}
+
+#kc-select-try-another-way-form a:hover,
+a#try-another-way:hover {
+    background-color: rgba(0, 113, 227, 0.08) !important;
+    color: #0077ed !important;
+    text-decoration: none !important;
+}
+
 /* Passkey/WebAuthn 特殊按钮 */
 #kc-webauthn-button,
-.webauthn-button {
+.webauthn-button,
+#authenticateWebAuthnButton {
     background-color: #1d1d1f !important;
     color: #ffffff !important;
+    border: none !important;
     border-radius: 12px !important;
     padding: 14px 24px !important;
     font-weight: 500 !important;
+    font-size: 16px !important;
+    width: 100% !important;
+    cursor: pointer !important;
 }
 
 /* 错误提示 */
