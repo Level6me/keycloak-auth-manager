@@ -2657,13 +2657,13 @@ def api_update_domain_auth_methods(domain):
     domain = domain.strip().lower()
     data = load_data()
     if domain not in data:
-        return json.dumps({"success": False, "error": "域名配置不存在"})
+        return jsonify({"success": False, "error": "域名配置不存在"})
 
     allow_passkey = request.form.get('allow_passkey', 'true').lower() == 'true'
     allow_password = request.form.get('allow_password', 'true').lower() == 'true'
 
     if not allow_passkey and not allow_password:
-        return json.dumps({"success": False, "error": "必须至少保留一种登录认证方式（Passkey 或密码）"})
+        return jsonify({"success": False, "error": "必须至少保留一种登录认证方式（Passkey 或密码）"})
 
     auth = data[domain]
     auth['allow_passkey'] = allow_passkey
@@ -2681,14 +2681,15 @@ def api_update_domain_auth_methods(domain):
         auth['nginx_config'] = new_conf
         save_data(data)
         log(f"域名 {domain} 登录方式策略已更新 (Passkey: {allow_passkey}, Password: {allow_password})")
-        return json.dumps({
+        return jsonify({
             "success": True,
             "allow_passkey": allow_passkey,
             "allow_password": allow_password,
             "nginx_config": new_conf
         })
 
-    return json.dumps({"success": False, "error": "更新 Nginx 反代配置失败"})
+    return jsonify({"success": False, "error": "更新 Nginx 反代配置失败"})
+
 
 @app.route('/api/list')
 def api_list():
