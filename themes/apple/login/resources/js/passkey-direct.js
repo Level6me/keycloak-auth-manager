@@ -82,62 +82,87 @@
         const isPasswordPage = !!document.getElementById("kc-form-login");
         const isWebAuthnPage = !!document.getElementById("kc-form-webauthn");
 
-        // 场景 1: 该站点禁用了 Passkey 认证 (仅允许账号密码登录)
+        // 场景 1: 该站点禁用了 Passkey 认证（纯密码登录模式）
         if (!allowPasskey && allowPassword) {
+            // 隐藏「换一种方式」入口，防止用户绕过限制切换到 Passkey
             if (tryAnotherForm) tryAnotherForm.style.display = "none";
             if (tryAnotherLink) tryAnotherLink.style.display = "none";
+            // 若因异常直接落在 WebAuthn 页面，需要将密码输入框显示出来
+            // （这种情况极少，但保险起见隐藏 WebAuthn 相关 UI）
+            if (isWebAuthnPage) {
+                const webauthnForm = document.getElementById("kc-form-webauthn");
+                if (webauthnForm) webauthnForm.style.display = "none";
+                const authBtn = document.getElementById("authenticateWebAuthnButton");
+                if (authBtn) authBtn.style.display = "none";
+            }
             return;
         }
 
-        // 场景 2: 该站点禁用了密码认证 (仅允许 Passkey 认证)
+        // 场景 2: 该站点禁用了密码认证（纯 Passkey 认证模式）
         if (!allowPassword && allowPasskey) {
-            if (isPasswordPage && tryAnotherForm) {
-                // 在密码界面：静默直通进入 Passkey 界面
-                if (tryAnotherLink) tryAnotherLink.innerHTML = "正在进入 Passkey 认证...";
-                try {
-                    const actionUrl = tryAnotherForm.action;
-                    const res1 = await fetch(actionUrl, {
-                        method: "POST",
-                        headers: { "Content-Type": "application/x-www-form-urlencoded" },
-                        body: new URLSearchParams({ "tryAnotherWay": "on" })
-                    });
-                    const html1 = await res1.text();
-                    const doc1 = new DOMParser().parseFromString(html1, "text/html");
+            if (isPasswordPage) {
+                // 隐藏密码输入表单，防止用户在密码页停留
+                const loginForm = document.getElementById("kc-form-login");
+                if (loginForm) loginForm.style.display = "none";
 
-                    let passkeyExecId = null;
-                    const buttons = doc1.querySelectorAll("button[name='authenticationExecution']");
-                    for (const btn of buttons) {
-                        const txt = (btn.innerText || btn.textContent || "").toLowerCase();
-                        if (txt.includes("密钥") || txt.includes("安全") || txt.includes("webauthn") || txt.includes("passkey")) {
-                            passkeyExecId = btn.value;
-                            break;
+                if (tryAnotherForm) {
+                    // 静默直通进入 Passkey 界面
+                    if (tryAnotherLink) tryAnotherLink.innerHTML = "正在进入 Passkey 认证...";
+                    try {
+                        const actionUrl = tryAnotherForm.action;
+                        const res1 = await fetch(actionUrl, {
+                            method: "POST",
+                            headers: { "Content-Type": "application/x-www-form-urlencoded" },
+                            body: new URLSearchParams({ "tryAnotherWay": "on" })
+                        });
+                        const html1 = await res1.text();
+                        const doc1 = new DOMParser().parseFromString(html1, "text/html");
+
+                        let passkeyExecId = null;
+                        const buttons = doc1.querySelectorAll("button[name='authenticationExecution']");
+                        for (const btn of buttons) {
+                            const txt = (btn.innerText || btn.textContent || "").toLowerCase();
+                            if (txt.includes("密钥") || txt.includes("安全") || txt.includes("webauthn") || txt.includes("passkey")) {
+                                passkeyExecId = btn.value;
+                                break;
+                            }
                         }
+
+                        // 如果找不到 Passkey 选项，选第一个认证选项
+                        if (!passkeyExecId) {
+                            const firstBtn = doc1.querySelector("button[name='authenticationExecution']");
+                            if (firstBtn) passkeyExecId = firstBtn.value;
+                        }
+
+                        const selForm = doc1.getElementById("kc-select-credential-form");
+                        const action2 = selForm ? selForm.action : actionUrl;
+
+                        const targetForm = document.createElement("form");
+                        targetForm.method = "POST";
+                        targetForm.action = action2;
+                        const input = document.createElement("input");
+                        input.type = "hidden";
+                        input.name = "authenticationExecution";
+                        input.value = passkeyExecId || "";
+                        targetForm.appendChild(input);
+                        document.body.appendChild(targetForm);
+                        targetForm.submit();
+                        return;
+                    } catch (e) {
+                        // 自动跳转失败，直接提交「换一种方式」表单
+                        tryAnotherForm.requestSubmit();
+                        return;
                     }
-
-                    const selForm = doc1.getElementById("kc-select-credential-form");
-                    const action2 = selForm ? selForm.action : actionUrl;
-
-                    const targetForm = document.createElement("form");
-                    targetForm.method = "POST";
-                    targetForm.action = action2;
-                    const input = document.createElement("input");
-                    input.type = "hidden";
-                    input.name = "authenticationExecution";
-                    input.value = passkeyExecId || "";
-                    targetForm.appendChild(input);
-                    document.body.appendChild(targetForm);
-                    targetForm.submit();
-                    return;
-                } catch (e) {
-                    tryAnotherForm.requestSubmit();
-                    return;
+                } else {
+                    // 无「换一种方式」表单：提示用户配置错误
+                    console.warn("纯 Passkey 模式：当前页面未找到 tryAnotherForm，无法自动跳转");
                 }
             } else if (isWebAuthnPage) {
-                // 在 Passkey 界面：隐藏切换密码入口，保持纯净 Passkey 页面
+                // 在 Passkey 界面：彻底隐藏「切换至密码」入口，保持纯净 Passkey 页面
                 if (tryAnotherForm) tryAnotherForm.style.display = "none";
                 if (tryAnotherLink) tryAnotherLink.style.display = "none";
-                return;
             }
+            return;
         }
 
         // 场景 3: 两种方式均开启 (混合免密自适应模式)
@@ -180,6 +205,10 @@
                     }
 
                     if (!passkeyExecId) {
+                        // 找不到 Passkey 选项，降级为原生页面跳转（让 Keycloak 自动导航）
+                        tryAnotherLink.innerHTML = originalText;
+                        tryAnotherLink.style.pointerEvents = "auto";
+                        tryAnotherLink.style.opacity = "1";
                         tryAnotherForm.requestSubmit();
                         return;
                     }
@@ -270,7 +299,10 @@
 
             tryAnotherLink.onclick = async function(e) {
                 e.preventDefault();
+                const originalText2 = tryAnotherLink.innerHTML;
                 tryAnotherLink.innerHTML = "正在切换至密码登录...";
+                tryAnotherLink.style.pointerEvents = "none";
+                tryAnotherLink.style.opacity = "0.7";
 
                 try {
                     const actionUrl = tryAnotherForm.action;
@@ -306,6 +338,10 @@
                     document.body.appendChild(form);
                     form.submit();
                 } catch (err) {
+                    console.warn("切换密码登录失败:", err);
+                    tryAnotherLink.innerHTML = originalText2;
+                    tryAnotherLink.style.pointerEvents = "auto";
+                    tryAnotherLink.style.opacity = "1";
                     tryAnotherForm.requestSubmit();
                 }
             };
