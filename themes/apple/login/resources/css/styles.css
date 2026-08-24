@@ -343,6 +343,12 @@ a#try-another-way {
     box-shadow: 0 4px 12px rgba(0, 113, 227, 0.15) !important;
 }
 
+/* 彻底隐藏 WebAuthn 错误页面的尝试其他方法 */
+#kc-error-credential-form + #kc-select-try-another-way-form,
+#kc-error-credential-form ~ #kc-select-try-another-way-form {
+    display: none !important;
+}
+
 #kc-select-try-another-way-form a:hover,
 a#try-another-way:hover {
     background-color: rgba(0, 113, 227, 0.08) !important;
