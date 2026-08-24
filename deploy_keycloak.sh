@@ -101,9 +101,12 @@ else
         -e KEYCLOAK_ADMIN_PASSWORD="$ADMIN_PASSWORD" \
         -e KC_PROXY_HEADERS=xforwarded \
         -e KC_HTTP_ENABLED=true \
+        -e KC_SPI_THEME_DEFAULT_CACHE_THEMES=true \
+        -e KC_SPI_THEME_DEFAULT_CACHE_TEMPLATES=true \
+        -e KC_SPI_THEME_DEFAULT_STATIC_MAX_AGE=2592000 \
         -e JAVA_OPTS_APPEND="-Xms128m -Xmx384m -XX:MaxMetaspaceSize=256m -XX:+UseG1GC -Djava.awt.headless=true" \
         quay.io/keycloak/keycloak:26.1.0 \
-        start-dev
+        start-dev --spi-theme-static-max-age=2592000 --spi-theme-cache-themes=true --spi-theme-cache-templates=true
 fi
 
 echo "=== Keycloak 部署指令已发送 ==="
