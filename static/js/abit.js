@@ -163,6 +163,9 @@ function switchTab(pageId, title, btnEl) {
         load1PanelAccounts();
     } else if (pageId === 'p-ssl') {
         loadSSLAccounts();
+    } else if (pageId === 'p-apps') {
+        const hasLoaded = appsInitialLoaded || (cachedOidcClientsData && cachedOidcClientsData.length > 0);
+        loadOidcClientsAjax(hasLoaded);
     } else if (pageId === 'p-users') {
         const hasLoaded = usersInitialLoaded || (cachedUsersData && cachedUsersData.length > 0);
         loadUsersAjax(hasLoaded);
@@ -631,8 +634,8 @@ document.addEventListener('DOMContentLoaded', () => {
 
     // 根据 URL Hash 激活对应 Tab
     const hash = (window.location.hash || '').replace('#', '');
-    if (hash && ['domains', 'add', 'ssl', 'users', 'settings'].includes(hash)) {
-        const titleMap = { 'domains': '总览', 'add': '添加认证', 'ssl': '证书申请', 'users': '用户管理', 'settings': '系统配置' };
+    if (hash && ['domains', 'add', 'apps', 'ssl', 'users', 'settings'].includes(hash)) {
+        const titleMap = { 'domains': '总览', 'add': '添加认证', 'apps': '应用接入', 'ssl': '证书申请', 'users': '用户管理', 'settings': '系统配置' };
         switchTab(`p-${hash}`, titleMap[hash] || hash, document.getElementById(`dock-btn-${hash}`));
     } else {
         switchTab('p-domains', '总览', document.getElementById('dock-btn-domains'));
@@ -1503,6 +1506,332 @@ document.addEventListener('DOMContentLoaded', () => {
         }
     });
 });
+
+
+// ═════════════════════════════════════════════════════════════════════
+// ─── 8. OIDC 客户端应用接入管理 (App Management) ───
+// ═════════════════════════════════════════════════════════════════════
+let cachedOidcClientsData = [];
+let cachedOidcEndpoints = null;
+let appsInitialLoaded = false;
+let currentGuideClient = null;
+
+async function loadOidcClientsAjax(silent = false) {
+    const loadingTip = document.getElementById('appsLoadingTip');
+    const emptyTip = document.getElementById('appsEmptyTip');
+    const container = document.getElementById('appsCardContainer');
+
+    if (!silent && loadingTip) loadingTip.style.display = 'block';
+
+    try {
+        const res = await fetch('/api/oidc/clients');
+        const data = await res.json();
+
+        if (loadingTip) loadingTip.style.display = 'none';
+
+        if (data.success && Array.isArray(data.clients)) {
+            cachedOidcClientsData = data.clients;
+            cachedOidcEndpoints = data.endpoints || null;
+            appsInitialLoaded = true;
+            renderOidcClients();
+            updateOidcStats();
+        } else {
+            if (!silent) showToast(data.error || '加载应用列表失败', 'error');
+        }
+    } catch (e) {
+        if (loadingTip) loadingTip.style.display = 'none';
+        if (!silent) showToast('网络连接异常', 'error');
+    }
+}
+
+function updateOidcStats() {
+    const totalEl = document.getElementById('stat-total-apps');
+    const pkEl = document.getElementById('stat-passkey-apps');
+    const hybridEl = document.getElementById('stat-hybrid-apps');
+    const sysEl = document.getElementById('stat-system-apps');
+
+    if (!totalEl) return;
+
+    const total = cachedOidcClientsData.length;
+    const pk = cachedOidcClientsData.filter(c => c.auth_method === 'passkey_only').length;
+    const hybrid = cachedOidcClientsData.filter(c => c.auth_method === 'hybrid').length;
+    const sys = cachedOidcClientsData.filter(c => c.is_system).length;
+
+    totalEl.textContent = total;
+    if (pkEl) pkEl.textContent = pk;
+    if (hybridEl) hybridEl.textContent = hybrid;
+    if (sysEl) sysEl.textContent = sys;
+}
+
+function filterOidcApps(keyword) {
+    renderOidcClients(keyword);
+}
+
+function renderOidcClients(filterKeyword = '') {
+    const container = document.getElementById('appsCardContainer');
+    const emptyTip = document.getElementById('appsEmptyTip');
+    if (!container) return;
+
+    const keyword = (filterKeyword || '').trim().toLowerCase();
+    const clients = cachedOidcClientsData.filter(c => {
+        if (!keyword) return true;
+        return (c.name && c.name.toLowerCase().includes(keyword)) ||
+               (c.client_id && c.client_id.toLowerCase().includes(keyword)) ||
+               (c.description && c.description.toLowerCase().includes(keyword));
+    });
+
+    if (clients.length === 0) {
+        container.style.display = 'none';
+        if (emptyTip) emptyTip.style.display = 'block';
+        return;
+    }
+
+    if (emptyTip) emptyTip.style.display = 'none';
+    container.style.display = 'grid';
+
+    container.innerHTML = clients.map(c => {
+        const isSys = c.is_system;
+        const authBadge = c.auth_method === 'passkey_only' ? 
+            `<span class="badge success">🔑 纯 Passkey</span>` : 
+            (c.auth_method === 'password_only' ? `<span class="badge secondary">🔒 传统密码</span>` : `<span class="badge accent">✨ 混合免密</span>`);
+
+        const sysBadge = isSys ? `<span class="badge warning" style="font-size: 10px;">系统核心</span>` : '';
+        const uris = (c.redirect_uris || []).slice(0, 2).map(u => `<div style="font-family: monospace; font-size: 11px; color: var(--text-sec); overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">🔗 ${escapeHtml(u)}</div>`).join('');
+
+        const secretId = `secret_${c.client_id.replace(/[^a-zA-Z0-9]/g, '_')}`;
+
+        return `
+        <div class="domain-card" style="display: flex; flex-direction: column;">
+            <div class="domain-header" style="align-items: flex-start;">
+                <div>
+                    <div style="display: flex; align-items: center; gap: 6px; margin-bottom: 4px;">
+                        <span style="font-size: 18px;">${isSys ? '🛡️' : '📱'}</span>
+                        <span style="font-size: 16px; font-weight: 700; color: var(--text);">${escapeHtml(c.name)}</span>
+                        ${sysBadge}
+                    </div>
+                    <div style="font-size: 12px; font-family: monospace; color: var(--accent);">${escapeHtml(c.client_id)}</div>
+                </div>
+                <div>${authBadge}</div>
+            </div>
+
+            <div style="margin: 10px 0; display: flex; flex-direction: column; gap: 4px; min-height: 48px;">
+                ${c.description ? `<div style="font-size: 12px; color: var(--text-sec); margin-bottom: 2px;">${escapeHtml(c.description)}</div>` : ''}
+                ${uris || '<div style="font-size: 11px; color: var(--text-sec);">暂无回调地址</div>'}
+            </div>
+
+            <!-- Client Secret Box -->
+            <div style="background: var(--card-sec); border-radius: 8px; padding: 8px 10px; margin-bottom: 12px; display: flex; justify-content: space-between; align-items: center;">
+                <div style="display: flex; flex-direction: column; min-width: 0;">
+                    <span style="font-size: 10px; color: var(--text-sec); font-weight: 700;">CLIENT SECRET</span>
+                    <div style="display: flex; align-items: center; gap: 6px;">
+                        <input type="password" id="${secretId}" value="${escapeHtml(c.client_secret || '')}" readonly style="background: transparent; border: none; font-family: monospace; font-size: 11px; color: var(--text); outline: none; width: 140px; text-overflow: ellipsis;">
+                        <button type="button" onclick="toggleSecretInputVisibility('${secretId}')" class="pill-btn" style="padding: 2px 6px; font-size: 10px;">👁️</button>
+                    </div>
+                </div>
+                <div style="display: flex; gap: 4px;">
+                    <button class="pill-btn" onclick="copyToClipboard('${escapeHtml(c.client_secret || '')}', 'Client Secret')" style="padding: 4px 8px; font-size: 11px;">📋 复制</button>
+                    ${!isSys ? `<button class="pill-btn" onclick="regenerateOidcSecret('${escapeHtml(c.client_id)}')" title="重置密钥" style="padding: 4px 8px; font-size: 11px;">🔄</button>` : ''}
+                </div>
+            </div>
+
+            <div class="domain-actions" style="margin-top: auto; padding-top: 10px; border-top: 1px solid var(--border-subtle); display: flex; justify-content: space-between; align-items: center;">
+                <button class="btn secondary sm" onclick="openOidcGuideModal('${escapeHtml(c.client_id)}')" style="font-size: 12px; padding: 5px 12px;">📋 查看对接参数</button>
+                ${!isSys ? `<button class="btn danger sm" onclick="deleteOidcClientAjax('${escapeHtml(c.client_id)}', '${escapeHtml(c.name)}')" style="font-size: 12px; padding: 5px 10px;">🗑️ 删除</button>` : '<span style="font-size: 11px; color: var(--text-sec);">系统内置</span>'}
+            </div>
+        </div>`;
+    }).join('');
+}
+
+function toggleSecretInputVisibility(inputId) {
+    const input = document.getElementById(inputId);
+    if (!input) return;
+    input.type = input.type === 'password' ? 'text' : 'password';
+}
+
+function openAddOidcClientModal() {
+    const modal = document.getElementById('addOidcClientModal');
+    if (modal) {
+        document.getElementById('addOidcClientForm').reset();
+        modal.classList.add('active');
+    }
+}
+
+function closeAddOidcClientModal() {
+    const modal = document.getElementById('addOidcClientModal');
+    if (modal) modal.classList.remove('active');
+}
+
+async function submitAddOidcClientForm(e) {
+    e.preventDefault();
+    const btn = document.getElementById('btnSubmitAddOidcClient');
+    const name = document.getElementById('oidc_app_name').value.trim();
+    const clientId = document.getElementById('oidc_client_id').value.trim();
+    const authMethod = document.getElementById('oidc_auth_method').value;
+    const redirectUris = document.getElementById('oidc_redirect_uris').value.trim();
+    const desc = document.getElementById('oidc_app_desc').value.trim();
+
+    if (!name || !clientId || !redirectUris) {
+        showToast('请完整填写应用名称、Client ID 与回调地址', 'warning');
+        return;
+    }
+
+    btn.disabled = true;
+    btn.innerHTML = '⏳ 正在 Keycloak 中创建...';
+
+    const formData = new FormData();
+    formData.append('name', name);
+    formData.append('client_id', clientId);
+    formData.append('auth_method', authMethod);
+    formData.append('redirect_uris', redirectUris);
+    formData.append('description', desc);
+    formData.append('_csrf_token', getCsrfToken());
+
+    try {
+        const res = await fetch('/api/oidc/clients', { method: 'POST', body: formData });
+        const result = await res.json();
+
+        if (result.success) {
+            showToast(result.msg || '客户端创建成功！', 'success');
+            closeAddOidcClientModal();
+            await loadOidcClientsAjax(true);
+            // 自动弹出该应用的对接指南参数表
+            openOidcGuideModal(clientId);
+        } else {
+            showToast(result.error || '创建失败', 'error');
+        }
+    } catch (err) {
+        showToast('网络通信异常', 'error');
+    } finally {
+        btn.disabled = false;
+        btn.innerHTML = '🚀 立即在 Keycloak 创建';
+    }
+}
+
+async function regenerateOidcSecret(clientId) {
+    if (!confirm(`确定要重置应用 [${clientId}] 的 Client Secret 吗？\n重置后已对接的系统需要同步更新此密钥。`)) {
+        return;
+    }
+
+    const formData = new FormData();
+    formData.append('_csrf_token', getCsrfToken());
+
+    try {
+        const res = await fetch(`/api/oidc/clients/${encodeURIComponent(clientId)}/secret/regenerate`, {
+            method: 'POST',
+            body: formData
+        });
+        const result = await res.json();
+        if (result.success) {
+            showToast('Client Secret 已成功重置！', 'success');
+            await loadOidcClientsAjax(true);
+        } else {
+            showToast(result.error || '重置密钥失败', 'error');
+        }
+    } catch (e) {
+        showToast('网络通信异常', 'error');
+    }
+}
+
+async function deleteOidcClientAjax(clientId, appName) {
+    if (!confirm(`⚠️ 危险操作：确定要彻底删除应用 [${appName} (${clientId})] 吗？\n删除后该应用将无法再通过 Keycloak 进行身份认证！`)) {
+        return;
+    }
+
+    try {
+        const res = await fetch(`/api/oidc/clients/${encodeURIComponent(clientId)}`, {
+            method: 'DELETE',
+            headers: {
+                'X-CSRFToken': getCsrfToken()
+            }
+        });
+        const result = await res.json();
+        if (result.success) {
+            showToast(result.msg || '应用已成功删除！', 'success');
+            await loadOidcClientsAjax(true);
+        } else {
+            showToast(result.error || '删除失败', 'error');
+        }
+    } catch (e) {
+        showToast('网络通信异常', 'error');
+    }
+}
+
+function openGlobalOidcEndpointsModal() {
+    openOidcGuideModal('global-sso');
+}
+
+function openOidcGuideModal(clientId) {
+    const client = cachedOidcClientsData.find(c => c.client_id === clientId) || {
+        client_id: clientId,
+        name: 'OIDC 客户端',
+        client_secret: ''
+    };
+    currentGuideClient = client;
+
+    const endpoints = cachedOidcEndpoints || {
+        issuer: 'https://au.abab.pw/realms/master',
+        discovery_url: 'https://au.abab.pw/realms/master/.well-known/openid-configuration',
+        authorization_endpoint: 'https://au.abab.pw/realms/master/protocol/openid-connect/auth',
+        token_endpoint: 'https://au.abab.pw/realms/master/protocol/openid-connect/token',
+        userinfo_endpoint: 'https://au.abab.pw/realms/master/protocol/openid-connect/userinfo'
+    };
+
+    document.getElementById('guideModalTitle').textContent = `[${client.name || client.client_id}] 对接配置指南`;
+    document.getElementById('guide_discovery_url').textContent = endpoints.discovery_url;
+    document.getElementById('guide_issuer').textContent = endpoints.issuer;
+    document.getElementById('guide_client_id').textContent = client.client_id;
+    document.getElementById('guide_client_secret').textContent = client.client_secret || '（未获取到或已隐藏）';
+    document.getElementById('guide_auth_url').textContent = endpoints.authorization_endpoint;
+    document.getElementById('guide_token_url').textContent = endpoints.token_endpoint;
+    document.getElementById('guide_userinfo_url').textContent = endpoints.userinfo_endpoint;
+
+    // 生成 Git YAML 示例
+    const gitYaml = `# GitLab / Gitea OIDC 配置示例
+oauth2_client:
+  name: "Keycloak"
+  client_id: "${client.client_id}"
+  client_secret: "${client.client_secret || 'YOUR_CLIENT_SECRET'}"
+  open_id_connect_url: "${endpoints.discovery_url}"
+  scopes: ["openid", "profile", "email"]
+  auto_register: true`;
+    const gitEl = document.getElementById('guide_git_yaml');
+    if (gitEl) gitEl.textContent = gitYaml;
+
+    switchGuideTab('standard');
+
+    const modal = document.getElementById('oidcGuideModal');
+    if (modal) modal.classList.add('active');
+}
+
+function closeOidcGuideModal() {
+    const modal = document.getElementById('oidcGuideModal');
+    if (modal) modal.classList.remove('active');
+    currentGuideClient = null;
+}
+
+function switchGuideTab(tab) {
+    document.getElementById('btnGuideTabStandard').classList.toggle('active', tab === 'standard');
+    document.getElementById('btnGuideTabWordpress').classList.toggle('active', tab === 'wordpress');
+    document.getElementById('btnGuideTabGit').classList.toggle('active', tab === 'git');
+
+    document.getElementById('guideTabContentStandard').style.display = tab === 'standard' ? 'block' : 'none';
+    document.getElementById('guideTabContentWordpress').style.display = tab === 'wordpress' ? 'block' : 'none';
+    document.getElementById('guideTabContentGit').style.display = tab === 'git' ? 'block' : 'none';
+}
+
+// 导出 OIDC 全局函数
+window.loadOidcClientsAjax = loadOidcClientsAjax;
+window.filterOidcApps = filterOidcApps;
+window.openAddOidcClientModal = openAddOidcClientModal;
+window.closeAddOidcClientModal = closeAddOidcClientModal;
+window.submitAddOidcClientForm = submitAddOidcClientForm;
+window.regenerateOidcSecret = regenerateOidcSecret;
+window.deleteOidcClientAjax = deleteOidcClientAjax;
+window.openGlobalOidcEndpointsModal = openGlobalOidcEndpointsModal;
+window.openOidcGuideModal = openOidcGuideModal;
+window.closeOidcGuideModal = closeOidcGuideModal;
+window.switchGuideTab = switchGuideTab;
+window.toggleSecretInputVisibility = toggleSecretInputVisibility;
 
 
 
