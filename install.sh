@@ -148,6 +148,24 @@ else
     echo "    ✓ 基础系统依赖 (Docker, Python3, pip3) 已全部存在"
 fi
 
+# 检查并自动配置 2GB Swap 虚拟内存（防止低内存 VPS 运行 Keycloak 时发生 OOM 崩溃）
+if [ -f /proc/meminfo ] && [ -w / ]; then
+    swap_total=$(free -m 2>/dev/null | awk '/Swap:/ {print $2}' || echo "0")
+    if [ "${swap_total:-0}" -lt 512 ] && [ ! -f /swapfile ]; then
+        echo "[1.1] 检测到系统未配置 Swap，正在自动创建 2GB 虚拟内存以保障 Keycloak 稳定运行..."
+        dd if=/dev/zero of=/swapfile bs=1M count=2048 2>/dev/null || true
+        if [ -f /swapfile ]; then
+            chmod 600 /swapfile
+            mkswap /swapfile >/dev/null 2>&1 || true
+            swapon /swapfile 2>/dev/null || true
+            if ! grep -q "/swapfile" /etc/fstab 2>/dev/null; then
+                echo '/swapfile none swap sw 0 0' >> /etc/fstab
+            fi
+            echo "    ✓ 2GB Swap 虚拟内存已就绪"
+        fi
+    fi
+fi
+
 # 检查 Docker 是否运行
 if command -v docker &> /dev/null; then
     if docker ps &> /dev/null; then
@@ -489,9 +507,13 @@ Wants=docker.service
 Type=simple
 User=root
 WorkingDirectory=$INSTALL_DIR
+ExecStartPre=/bin/sh -c "pkill -f app.py || true; sleep 1"
 ExecStart=$PYTHON_BIN $INSTALL_DIR/app.py
 Restart=always
 RestartSec=5
+KillMode=mixed
+KillSignal=SIGTERM
+TimeoutStopSec=10
 
 [Install]
 WantedBy=multi-user.target
