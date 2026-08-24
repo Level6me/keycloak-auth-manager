@@ -68,7 +68,7 @@ if [ "$DB_TYPE" = "postgres" ]; then
         -e KC_DB_PASSWORD="$DB_PASSWORD" \
         -e KC_PROXY_HEADERS=xforwarded \
         -e KC_HTTP_ENABLED=true \
-        -e JAVA_OPTS_APPEND="-Xms128m -Xmx192m -XX:MaxMetaspaceSize=128m -XX:+UseG1GC -Djava.awt.headless=true" \
+        -e JAVA_OPTS_APPEND="-Xms128m -Xmx384m -XX:MaxMetaspaceSize=256m -XX:+UseG1GC -Djava.awt.headless=true" \
         quay.io/keycloak/keycloak:26.1.0 \
         start
 else
@@ -83,7 +83,7 @@ else
         -e KEYCLOAK_ADMIN_PASSWORD="$ADMIN_PASSWORD" \
         -e KC_PROXY_HEADERS=xforwarded \
         -e KC_HTTP_ENABLED=true \
-        -e JAVA_OPTS_APPEND="-Xms128m -Xmx192m -XX:MaxMetaspaceSize=128m -XX:+UseG1GC -Djava.awt.headless=true" \
+        -e JAVA_OPTS_APPEND="-Xms128m -Xmx384m -XX:MaxMetaspaceSize=256m -XX:+UseG1GC -Djava.awt.headless=true" \
         quay.io/keycloak/keycloak:26.1.0 \
         start-dev
 fi
