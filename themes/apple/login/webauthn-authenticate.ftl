@@ -5,6 +5,12 @@
     <#elseif section = "header">
         ${msg("webauthn-login-title")}
     <#elseif section = "form">
+        <style>
+            #kc-select-try-another-way-form,
+            #try-another-way {
+                display: none;
+            }
+        </style>
         <div id="kc-form-webauthn" class="${properties.kcFormClass!}">
             <form id="webauth" action="${url.loginAction}" method="post">
                 <input type="hidden" id="clientDataJSON" name="clientDataJSON"/>
