@@ -3255,6 +3255,278 @@ def api_users_update_sites(user_id):
     log(f"用户站点访问权限已更新: {username} -> {sites_list}")
     return json.dumps({"success": True, "msg": f"用户 {username} 站点权限已成功更新", "allowed_sites": sites_list})
 
+
+# ─── OIDC 客户端应用接入管理模块 ───
+OIDC_CLIENTS_FILE = os.path.join(os.path.dirname(DATA_FILE), "oidc_clients.json")
+SYSTEM_RESERVED_CLIENT_IDS = {
+    "master-realm", "account", "account-console", "admin-cli", 
+    "broker", "realm-management", "security-admin-console"
+}
+
+def load_oidc_clients():
+    """读取本地 OIDC 客户端元数据缓存"""
+    if os.path.exists(OIDC_CLIENTS_FILE):
+        try:
+            with open(OIDC_CLIENTS_FILE, 'r', encoding='utf-8') as f:
+                return json.load(f)
+        except Exception:
+            return {}
+    return {}
+
+def save_oidc_clients(clients):
+    """原子保存本地 OIDC 客户端元数据"""
+    try:
+        tmp = OIDC_CLIENTS_FILE + ".tmp"
+        with open(tmp, 'w', encoding='utf-8') as f:
+            json.dump(clients, f, indent=2, ensure_ascii=False)
+        os.replace(tmp, OIDC_CLIENTS_FILE)
+        try:
+            os.chmod(OIDC_CLIENTS_FILE, 0o600)
+        except Exception:
+            pass
+        return True
+    except Exception as e:
+        log(f"保存 OIDC 客户端元数据失败: {e}")
+        return False
+
+def get_keycloak_public_url():
+    """获取 Keycloak 外部公网访问 URL"""
+    cfg = {}
+    if os.path.exists(CONFIG_FILE):
+        try:
+            with open(CONFIG_FILE, 'r', encoding='utf-8') as f:
+                cfg = json.load(f)
+        except Exception:
+            pass
+    url = cfg.get("keycloak_url", "").strip().rstrip('/')
+    if not url:
+        _, _, url = get_keycloak_admin_credentials()
+        url = (url or "").strip().rstrip('/')
+    return url or "https://au.abab.pw"
+
+def get_standard_oidc_endpoints():
+    """生成 Keycloak 标准 OIDC 端点字典"""
+    kc_url = get_keycloak_public_url()
+    realm = "master"
+    return {
+        "issuer": f"{kc_url}/realms/{realm}",
+        "discovery_url": f"{kc_url}/realms/{realm}/.well-known/openid-configuration",
+        "authorization_endpoint": f"{kc_url}/realms/{realm}/protocol/openid-connect/auth",
+        "token_endpoint": f"{kc_url}/realms/{realm}/protocol/openid-connect/token",
+        "userinfo_endpoint": f"{kc_url}/realms/{realm}/protocol/openid-connect/userinfo",
+        "jwks_uri": f"{kc_url}/realms/{realm}/protocol/openid-connect/certs",
+        "end_session_endpoint": f"{kc_url}/realms/{realm}/protocol/openid-connect/logout",
+        "realm": realm,
+        "keycloak_url": kc_url
+    }
+
+@app.route('/api/oidc/endpoints', methods=['GET'])
+def api_get_oidc_endpoints():
+    """获取当前身份中心标准 OIDC 端点配置"""
+    return jsonify(get_standard_oidc_endpoints())
+
+@app.route('/api/oidc/clients', methods=['GET'])
+def api_list_oidc_clients():
+    """获取所有 OIDC 客户端列表（整合 Keycloak 实时状态与本地元数据）"""
+    clients_res, code, err = call_keycloak_api("clients", "GET")
+    if code != 200 or not isinstance(clients_res, list):
+        return jsonify({"success": False, "error": err or "获取 Keycloak 客户端列表失败"}), 500
+
+    local_meta = load_oidc_clients()
+    result = []
+
+    # 查 flow 映射
+    flows_res, f_code, _ = call_keycloak_api("authentication/flows", "GET")
+    flow_map = {}
+    if f_code == 200 and isinstance(flows_res, list):
+        for f in flows_res:
+            flow_map[f.get("id")] = f.get("alias")
+
+    for c in clients_res:
+        cid = c.get("clientId", "")
+        # 排除 Keycloak 内部保留客户端
+        if cid in SYSTEM_RESERVED_CLIENT_IDS:
+            continue
+
+        c_uuid = c.get("id", "")
+        is_public = c.get("publicClient", False)
+        
+        # 获取 client secret
+        secret = ""
+        if not is_public and c_uuid:
+            s_res, s_code, _ = call_keycloak_api(f"clients/{c_uuid}/client-secret", "GET")
+            if s_code == 200 and isinstance(s_res, dict):
+                secret = s_res.get("value", "")
+
+        # 解析 flow 绑定
+        overrides = c.get("authenticationFlowBindingOverrides", {}) or {}
+        browser_flow_id = overrides.get("browser", "")
+        browser_flow_alias = flow_map.get(browser_flow_id, "")
+
+        meta = local_meta.get(cid, {})
+        app_name = meta.get("name") or c.get("name") or cid
+        auth_method = meta.get("auth_method") or ("passkey_only" if browser_flow_alias == "passkey-only-browser" else "hybrid")
+        created_at = meta.get("created_at") or ""
+        description = meta.get("description") or c.get("description") or ""
+
+        # 是否为系统核心代理客户端
+        is_system = cid in (GLOBAL_SSO_CLIENT_ID, GLOBAL_PASSKEY_SSO_CLIENT_ID)
+
+        result.append({
+            "id": c_uuid,
+            "client_id": cid,
+            "name": app_name,
+            "description": description,
+            "enabled": c.get("enabled", True),
+            "public_client": is_public,
+            "redirect_uris": c.get("redirectUris", []),
+            "web_origins": c.get("webOrigins", []),
+            "client_secret": secret,
+            "auth_method": auth_method,
+            "browser_flow": browser_flow_alias or "默认流",
+            "created_at": created_at,
+            "is_system": is_system
+        })
+
+    # 排序：系统客户端在前，其他按创建时间倒序
+    result.sort(key=lambda x: (not x["is_system"], x.get("created_at", "")), reverse=True)
+    return jsonify({"success": True, "clients": result, "endpoints": get_standard_oidc_endpoints()})
+
+@app.route('/api/oidc/clients', methods=['POST'])
+def api_create_oidc_client():
+    """在 Keycloak 中一键创建新的 OIDC 客户端应用"""
+    name = request.form.get("name", "").strip()
+    client_id = request.form.get("client_id", "").strip().lower()
+    redirect_uris_raw = request.form.get("redirect_uris", "").strip()
+    auth_method = request.form.get("auth_method", "hybrid").strip().lower()
+    description = request.form.get("description", "").strip()
+
+    if not name:
+        return jsonify({"success": False, "error": "请输入应用名称"}), 400
+
+    if not client_id:
+        return jsonify({"success": False, "error": "请输入 Client ID"}), 400
+
+    if not re.match(r'^[a-zA-Z0-9_-]{2,50}$', client_id):
+        return jsonify({"success": False, "error": "Client ID 格式非法（仅支持 2-50 位字母、数字、下划线与连字符）"}), 400
+
+    if client_id in SYSTEM_RESERVED_CLIENT_IDS or client_id in (GLOBAL_SSO_CLIENT_ID, GLOBAL_PASSKEY_SSO_CLIENT_ID):
+        return jsonify({"success": False, "error": "该 Client ID 为系统保留名称，禁止使用"}), 400
+
+    # 检查是否已存在
+    existing, code, _ = call_keycloak_api("clients", "GET", params={"clientId": client_id})
+    if code == 200 and isinstance(existing, list) and len(existing) > 0:
+        return jsonify({"success": False, "error": f"Client ID '{client_id}' 已存在，请更换"}), 400
+
+    # 解析 Redirect URIs
+    r_uris = []
+    for line in re.split(r'[\r\n,]+', redirect_uris_raw):
+        uri = line.strip()
+        if uri:
+            if not (uri.startswith("http://") or uri.startswith("https://")):
+                return jsonify({"success": False, "error": f"回调地址格式非法: '{uri}'（必须以 http:// 或 https:// 开头）"}), 400
+            r_uris.append(uri)
+
+    if not r_uris:
+        return jsonify({"success": False, "error": "请至少填写一个合法的回调地址 (Redirect URI)"}), 400
+
+    # 确定 Browser Flow 绑定
+    flow_id = ""
+    flows_res, f_code, _ = call_keycloak_api("authentication/flows", "GET")
+    if f_code == 200 and isinstance(flows_res, list):
+        target_alias = "passkey-only-browser" if auth_method == "passkey_only" else "global-sso-browser"
+        for f in flows_res:
+            if f.get("alias") == target_alias:
+                flow_id = f.get("id")
+                break
+
+    # 生成 32 位安全强随机 Secret
+    secret_val = generate_secret(32)
+
+    payload = {
+        "clientId": client_id,
+        "name": name,
+        "description": description,
+        "secret": secret_val,
+        "enabled": True,
+        "publicClient": False,
+        "protocol": "openid-connect",
+        "standardFlowEnabled": True,
+        "directAccessGrantsEnabled": True,
+        "redirectUris": r_uris,
+        "webOrigins": ["+"]
+    }
+    if flow_id:
+        payload["authenticationFlowBindingOverrides"] = {"browser": flow_id}
+
+    c_res, c_code, c_err = call_keycloak_api("clients", "POST", json_data=payload)
+    if c_code not in (200, 201, 204):
+        return jsonify({"success": False, "error": c_err or "Keycloak 创建客户端失败"}), 500
+
+    # 保存本地元数据
+    local_meta = load_oidc_clients()
+    now_iso = datetime.now().isoformat()
+    local_meta[client_id] = {
+        "name": name,
+        "auth_method": auth_method,
+        "description": description,
+        "created_at": now_iso
+    }
+    save_oidc_clients(local_meta)
+
+    log(f"成功创建 OIDC 客户端应用: {name} ({client_id}), 认证策略: {auth_method}")
+    return jsonify({
+        "success": True,
+        "client_id": client_id,
+        "client_secret": secret_val,
+        "name": name,
+        "msg": f"OIDC 客户端应用 '{name}' 已成功创建！"
+    })
+
+@app.route('/api/oidc/clients/<client_id>/secret/regenerate', methods=['POST'])
+def api_regenerate_oidc_client_secret(client_id):
+    """一键重置指定 OIDC 客户端的 Client Secret"""
+    client_id = client_id.strip().lower()
+    if client_id in (GLOBAL_SSO_CLIENT_ID, GLOBAL_PASSKEY_SSO_CLIENT_ID):
+        return jsonify({"success": False, "error": "系统核心代理客户端禁止重置密钥"}), 400
+
+    clients_res, code, _ = call_keycloak_api("clients", "GET", params={"clientId": client_id})
+    if code != 200 or not isinstance(clients_res, list) or not clients_res:
+        return jsonify({"success": False, "error": "未找到该客户端"}), 404
+
+    c_uuid = clients_res[0].get("id")
+    reg_res, reg_code, reg_err = call_keycloak_api(f"clients/{c_uuid}/client-secret", "POST")
+    if reg_code == 200 and isinstance(reg_res, dict):
+        new_sec = reg_res.get("value", "")
+        log(f"已重置 OIDC 客户端 {client_id} 的 Client Secret")
+        return jsonify({"success": True, "client_secret": new_sec, "msg": "Client Secret 已成功重置！"})
+
+    return jsonify({"success": False, "error": reg_err or "重置密钥失败"}), 500
+
+@app.route('/api/oidc/clients/<client_id>', methods=['DELETE'])
+def api_delete_oidc_client(client_id):
+    """删除指定的 OIDC 客户端应用"""
+    client_id = client_id.strip().lower()
+    if client_id in SYSTEM_RESERVED_CLIENT_IDS or client_id in (GLOBAL_SSO_CLIENT_ID, GLOBAL_PASSKEY_SSO_CLIENT_ID):
+        return jsonify({"success": False, "error": "系统核心客户端禁止删除"}), 400
+
+    clients_res, code, _ = call_keycloak_api("clients", "GET", params={"clientId": client_id})
+    if code != 200 or not isinstance(clients_res, list) or not clients_res:
+        return jsonify({"success": False, "error": "未找到该客户端"}), 404
+
+    c_uuid = clients_res[0].get("id")
+    del_res, del_code, del_err = call_keycloak_api(f"clients/{c_uuid}", "DELETE")
+    if del_code in (200, 204):
+        local_meta = load_oidc_clients()
+        if client_id in local_meta:
+            del local_meta[client_id]
+            save_oidc_clients(local_meta)
+        log(f"已成功删除 OIDC 客户端应用: {client_id}")
+        return jsonify({"success": True, "msg": f"客户端应用 '{client_id}' 已成功删除！"})
+
+    return jsonify({"success": False, "error": del_err or "删除客户端失败"}), 500
+
+
 def init_background_startup_checks():
     """在后台异步执行开机自检与环境就绪任务（全新部署或重启时全自动初始化）"""
     def _run():

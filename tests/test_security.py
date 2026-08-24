@@ -178,5 +178,31 @@ class SecurityRegressionTestSuite(unittest.TestCase):
         default_site = {}
         self.assertEqual(get_domain_sso_port(default_site), GLOBAL_SSO_PORT)
 
-if __name__ == "__main__":
+    def test_oidc_endpoints_and_validation(self):
+        """验证 OIDC 模块端点生成与安全保留字/格式规则"""
+        from app import get_standard_oidc_endpoints, SYSTEM_RESERVED_CLIENT_IDS
+        import re
+
+        endpoints = get_standard_oidc_endpoints()
+        self.assertIn("issuer", endpoints)
+        self.assertIn("discovery_url", endpoints)
+        self.assertIn("authorization_endpoint", endpoints)
+        self.assertIn("token_endpoint", endpoints)
+        self.assertIn("userinfo_endpoint", endpoints)
+        self.assertTrue(endpoints["discovery_url"].endswith("/.well-known/openid-configuration"))
+
+        # 验证保留名保护
+        self.assertIn("admin-cli", SYSTEM_RESERVED_CLIENT_IDS)
+        self.assertIn("realm-management", SYSTEM_RESERVED_CLIENT_IDS)
+
+        # 验证 client_id 正则
+        pattern = r'^[a-zA-Z0-9_-]{2,50}$'
+        self.assertTrue(bool(re.match(pattern, "wordpress")))
+        self.assertTrue(bool(re.match(pattern, "my_gitlab_app")))
+        self.assertFalse(bool(re.match(pattern, "a")))
+        self.assertFalse(bool(re.match(pattern, "bad id with space")))
+        self.assertFalse(bool(re.match(pattern, "bad/slash")))
+        self.assertFalse(bool(re.match(pattern, "inject;drop")))
+
+if __name__ == '__main__':
     unittest.main()

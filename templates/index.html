@@ -638,6 +638,233 @@
         </div>
     </div>
 
+    <!-- ==================== PAGE 6: OIDC APP MANAGEMENT ==================== -->
+    <div id="p-apps" class="page">
+        <!-- Stat Grid -->
+        <div class="stat-grid">
+            <div class="stat-card">
+                <div class="stat-icon blue">📱</div>
+                <div class="stat-content">
+                    <span class="stat-value" id="stat-total-apps">-</span>
+                    <span class="stat-label">已接入应用</span>
+                </div>
+            </div>
+            <div class="stat-card">
+                <div class="stat-icon green">🔑</div>
+                <div class="stat-content">
+                    <span class="stat-value" id="stat-passkey-apps">-</span>
+                    <span class="stat-label">Passkey 免密应用</span>
+                </div>
+            </div>
+            <div class="stat-card">
+                <div class="stat-icon purple">⚡</div>
+                <div class="stat-content">
+                    <span class="stat-value" id="stat-hybrid-apps">-</span>
+                    <span class="stat-label">自适应混合流</span>
+                </div>
+            </div>
+            <div class="stat-card">
+                <div class="stat-icon orange">🛡️</div>
+                <div class="stat-content">
+                    <span class="stat-value" id="stat-system-apps">-</span>
+                    <span class="stat-label">系统核心客户端</span>
+                </div>
+            </div>
+        </div>
+
+        <!-- Apps Toolbar -->
+        <div style="display: flex; justify-content: space-between; align-items: center; gap: 10px; margin-bottom: 16px; flex-wrap: wrap;">
+            <div style="flex: 1; min-width: 220px; max-width: 420px; position: relative;">
+                <input type="text" id="appSearchInput" class="input-box" placeholder="🔍 快速搜索应用名称或 Client ID..." oninput="filterOidcApps(this.value)">
+            </div>
+            <div style="display: flex; align-items: center; gap: 8px;">
+                <button class="pill-btn" onclick="loadOidcClientsAjax(false); showToast('正在刷新应用列表...', 'info');" title="刷新列表">
+                    <span>🔄</span>
+                    <span class="pill-text">刷新</span>
+                </button>
+                <button class="pill-btn" onclick="openGlobalOidcEndpointsModal()" title="查看 OIDC 标准端点配置">
+                    <span>🌐</span>
+                    <span class="pill-text">标准端点</span>
+                </button>
+                <button class="btn accent" onclick="openAddOidcClientModal()" style="padding: 7px 14px; font-size: 13px; border-radius: 12px; display: inline-flex; align-items: center; gap: 6px;">
+                    <span>➕</span>
+                    <span>新建客户端应用</span>
+                </button>
+            </div>
+        </div>
+
+        <!-- Loading / Empty Tips -->
+        <div id="appsLoadingTip" style="display: none; text-align: center; padding: 40px 20px; color: var(--text-sec);">
+            <div style="font-size: 28px; margin-bottom: 8px;">⏳</div>
+            <div>正在从 Keycloak 加载应用列表...</div>
+        </div>
+
+        <div id="appsEmptyTip" style="display: none; text-align: center; padding: 60px 20px;">
+            <div style="font-size: 48px; margin-bottom: 12px;">📱</div>
+            <div style="font-size: 16px; font-weight: 700; color: var(--text); margin-bottom: 6px;">暂无自定义接入应用</div>
+            <div style="font-size: 13px; color: var(--text-sec); margin-bottom: 20px;">点击下方按钮可一键为 WordPress、GitLab 等第三方系统创建 OIDC 客户端</div>
+            <button class="btn accent" onclick="openAddOidcClientModal()" style="padding: 10px 20px; font-size: 14px;">➕ 创建第一个应用</button>
+        </div>
+
+        <!-- Apps Card Grid Container -->
+        <div id="appsCardContainer" class="domain-grid" style="display: none;"></div>
+    </div>
+
+</div>
+
+<!-- ==================== MODAL: ADD OIDC CLIENT ==================== -->
+<div id="addOidcClientModal" class="modal-overlay">
+    <div class="modal-dialog" style="max-width: 520px;">
+        <div class="modal-header">
+            <div style="display: flex; align-items: center; gap: 8px;">
+                <span style="font-size: 20px;">📱</span>
+                <span class="modal-title">新建 OIDC 客户端应用</span>
+            </div>
+            <button class="icon-btn" onclick="closeAddOidcClientModal()" style="width: 32px; height: 32px; font-size: 14px; cursor: pointer;">✕</button>
+        </div>
+        <form id="addOidcClientForm" onsubmit="submitAddOidcClientForm(event)">
+            <div class="form-group">
+                <label class="form-label">应用友好名称</label>
+                <input type="text" id="oidc_app_name" class="input-box" placeholder="例如: 我的 WordPress 博客" required autocomplete="off">
+                <div class="form-hint">仅用于面板识别与展示</div>
+            </div>
+            <div class="form-group">
+                <label class="form-label">Client ID (客户端唯一标识)</label>
+                <input type="text" id="oidc_client_id" class="input-box" placeholder="例如: wordpress 或 my-app" required autocomplete="off" style="font-family: monospace;">
+                <div class="form-hint">在第三方系统中配置填写的 Client ID（英文字母、数字或下划线）</div>
+            </div>
+            <div class="form-group">
+                <label class="form-label">认证登录策略 (Browser Flow)</label>
+                <select id="oidc_auth_method" class="select-custom">
+                    <option value="hybrid">✨ 混合免密自适应 (推荐: 支持 Passkey + 密码)</option>
+                    <option value="passkey_only">🔑 真·纯 Passkey 物理隔离 (仅允许硬件免密/无密码)</option>
+                    <option value="password_only">🔒 传统账号密码模式</option>
+                </select>
+                <div class="form-hint">指定该应用在 Keycloak 认证时呈现的登录流程与主题</div>
+            </div>
+            <div class="form-group">
+                <label class="form-label">合法回调地址 (Valid Redirect URIs)</label>
+                <textarea id="oidc_redirect_uris" class="input-box" rows="3" placeholder="例如:&#10;https://blog.example.com/*&#10;https://blog.example.com/wp-login.php?openid-connect-generic-callback=1" required style="font-family: monospace; font-size: 12px; line-height: 1.5;"></textarea>
+                <div class="form-hint">支持通配符 *，多个地址请换行输入</div>
+            </div>
+            <div class="form-group">
+                <label class="form-label">应用描述 (可选)</label>
+                <input type="text" id="oidc_app_desc" class="input-box" placeholder="例如: 生产环境公开博客系统">
+            </div>
+            <div style="display: flex; gap: 10px; margin-top: 20px;">
+                <button type="button" class="btn secondary w-full" onclick="closeAddOidcClientModal()" style="padding: 11px;">取消</button>
+                <button type="submit" id="btnSubmitAddOidcClient" class="btn accent w-full" style="padding: 11px;">🚀 立即在 Keycloak 创建</button>
+            </div>
+        </form>
+    </div>
+</div>
+
+<!-- ==================== MODAL: OIDC GUIDE & ENDPOINTS ==================== -->
+<div id="oidcGuideModal" class="modal-overlay">
+    <div class="modal-dialog" style="max-width: 680px;">
+        <div class="modal-header">
+            <div style="display: flex; align-items: center; gap: 8px;">
+                <span style="font-size: 20px;">📋</span>
+                <span class="modal-title" id="guideModalTitle">OIDC 对接配置指南</span>
+            </div>
+            <button class="icon-btn" onclick="closeOidcGuideModal()" style="width: 32px; height: 32px; font-size: 14px; cursor: pointer;">✕</button>
+        </div>
+
+        <div style="margin-bottom: 16px;">
+            <div class="segmented-control" style="width: 100%; height: 38px;">
+                <button class="segment-btn active" id="btnGuideTabStandard" onclick="switchGuideTab('standard')" style="font-size: 12px;">🌐 通用 OIDC 端点参数</button>
+                <button class="segment-btn" id="btnGuideTabWordpress" onclick="switchGuideTab('wordpress')" style="font-size: 12px;">📝 WordPress 填报指引</button>
+                <button class="segment-btn" id="btnGuideTabGit" onclick="switchGuideTab('git')" style="font-size: 12px;">🐙 GitLab / Gitea</button>
+            </div>
+        </div>
+
+        <!-- Tab 1: Standard Endpoints -->
+        <div id="guideTabContentStandard">
+            <div class="card" style="padding: 12px 16px; background: var(--card-sec); font-size: 12px;">
+                <div class="setting-row" style="padding: 8px 0; border-bottom: 1px solid var(--border-subtle);">
+                    <div class="setting-info">
+                        <span class="setting-label" style="font-size: 12px; font-weight: 700;">Discovery URL (一键发现地址)</span>
+                        <code id="guide_discovery_url" style="font-size: 11px; word-break: break-all;"></code>
+                    </div>
+                    <button class="pill-btn" onclick="copyToClipboard(document.getElementById('guide_discovery_url').textContent, 'Discovery URL')" style="padding: 3px 8px; font-size: 11px;">📋 复制</button>
+                </div>
+
+                <div class="setting-row" style="padding: 8px 0; border-bottom: 1px solid var(--border-subtle);">
+                    <div class="setting-info">
+                        <span class="setting-label" style="font-size: 12px; font-weight: 700;">Issuer (发行方 URL)</span>
+                        <code id="guide_issuer" style="font-size: 11px; word-break: break-all;"></code>
+                    </div>
+                    <button class="pill-btn" onclick="copyToClipboard(document.getElementById('guide_issuer').textContent, 'Issuer')" style="padding: 3px 8px; font-size: 11px;">📋 复制</button>
+                </div>
+
+                <div class="setting-row" style="padding: 8px 0; border-bottom: 1px solid var(--border-subtle);">
+                    <div class="setting-info">
+                        <span class="setting-label" style="font-size: 12px; font-weight: 700;">Client ID</span>
+                        <code id="guide_client_id" style="font-size: 11px; font-weight: 700; color: var(--accent);"></code>
+                    </div>
+                    <button class="pill-btn" onclick="copyToClipboard(document.getElementById('guide_client_id').textContent, 'Client ID')" style="padding: 3px 8px; font-size: 11px;">📋 复制</button>
+                </div>
+
+                <div class="setting-row" style="padding: 8px 0; border-bottom: 1px solid var(--border-subtle);">
+                    <div class="setting-info">
+                        <span class="setting-label" style="font-size: 12px; font-weight: 700;">Client Secret (密钥)</span>
+                        <code id="guide_client_secret" style="font-size: 11px; word-break: break-all;"></code>
+                    </div>
+                    <button class="pill-btn" onclick="copyToClipboard(document.getElementById('guide_client_secret').textContent, 'Client Secret')" style="padding: 3px 8px; font-size: 11px;">📋 复制</button>
+                </div>
+
+                <div class="setting-row" style="padding: 8px 0; border-bottom: 1px solid var(--border-subtle);">
+                    <div class="setting-info">
+                        <span class="setting-label" style="font-size: 12px; font-weight: 700;">Authorization Endpoint (授权跳转端点)</span>
+                        <code id="guide_auth_url" style="font-size: 11px; word-break: break-all;"></code>
+                    </div>
+                    <button class="pill-btn" onclick="copyToClipboard(document.getElementById('guide_auth_url').textContent, 'Auth Endpoint')" style="padding: 3px 8px; font-size: 11px;">📋 复制</button>
+                </div>
+
+                <div class="setting-row" style="padding: 8px 0; border-bottom: 1px solid var(--border-subtle);">
+                    <div class="setting-info">
+                        <span class="setting-label" style="font-size: 12px; font-weight: 700;">Token Endpoint (令牌交换端点)</span>
+                        <code id="guide_token_url" style="font-size: 11px; word-break: break-all;"></code>
+                    </div>
+                    <button class="pill-btn" onclick="copyToClipboard(document.getElementById('guide_token_url').textContent, 'Token Endpoint')" style="padding: 3px 8px; font-size: 11px;">📋 复制</button>
+                </div>
+
+                <div class="setting-row" style="padding: 8px 0;">
+                    <div class="setting-info">
+                        <span class="setting-label" style="font-size: 12px; font-weight: 700;">UserInfo Endpoint (用户信息端点)</span>
+                        <code id="guide_userinfo_url" style="font-size: 11px; word-break: break-all;"></code>
+                    </div>
+                    <button class="pill-btn" onclick="copyToClipboard(document.getElementById('guide_userinfo_url').textContent, 'UserInfo Endpoint')" style="padding: 3px 8px; font-size: 11px;">📋 复制</button>
+                </div>
+            </div>
+        </div>
+
+        <!-- Tab 2: WordPress Guide -->
+        <div id="guideTabContentWordpress" style="display: none;">
+            <div class="card" style="padding: 16px; background: var(--card-sec); font-size: 13px; line-height: 1.6;">
+                <div style="font-weight: 700; color: var(--text); margin-bottom: 8px;">WordPress 推荐对接插件：<strong>OpenID Connect Generic</strong></div>
+                <ol style="padding-left: 20px; margin: 0 0 14px 0; color: var(--text-sec);">
+                    <li>在 WordPress 后台安装并启用插件 <code>OpenID Connect Generic</code>；</li>
+                    <li>进入「设置」->「OpenID Connect Client」；</li>
+                    <li>在 <strong>Discovery Endpoint</strong> 处粘贴上方 <code>Discovery URL</code> 并点击保存；</li>
+                    <li>填入当前应用的 <strong>Client ID</strong> 与 <strong>Client Secret</strong>；</li>
+                    <li>Scope 填写 <code>openid email profile</code> 即可完美接入！</li>
+                </ol>
+            </div>
+        </div>
+
+        <!-- Tab 3: Git Guide -->
+        <div id="guideTabContentGit" style="display: none;">
+            <div class="card" style="padding: 16px; background: var(--card-sec); font-size: 13px; line-height: 1.6;">
+                <div style="font-weight: 700; color: var(--text); margin-bottom: 8px;">GitLab / Gitea 配置文件示例：</div>
+                <pre id="guide_git_yaml" style="background: #0f172a; color: #38bdf8; padding: 12px; border-radius: 8px; font-size: 11px; overflow-x: auto;"></pre>
+            </div>
+        </div>
+
+        <div style="margin-top: 16px; text-align: right;">
+            <button type="button" class="btn secondary" onclick="closeOidcGuideModal()" style="padding: 8px 18px;">关闭</button>
+        </div>
+    </div>
 </div>
 
 <!-- ==================== MODAL: DOMAIN DETAIL PANEL ==================== -->
@@ -994,6 +1221,10 @@
     <button class="dock-btn" id="dock-btn-add" onclick="switchTab('p-add', '添加认证', this)">
         <svg viewBox="0 0 24 24"><path d="M19 13h-6v6h-2v-6H5v-2h6V5h2v6h6v2z"/></svg>
         <span>添加</span>
+    </button>
+    <button class="dock-btn" id="dock-btn-apps" onclick="switchTab('p-apps', '应用接入', this)">
+        <svg viewBox="0 0 24 24"><path d="M4 8h4V4H4v4zm6 12h4v-4h-4v4zm-6 0h4v-4H4v4zm0-6h4v-4H4v4zm6 0h4v-4h-4v4zm6-10v4h4V4h-4zm-6 4h4V4h-4v4zm6 6h4v-4h-4v4zm0 6h4v-4h-4v4z"/></svg>
+        <span>应用</span>
     </button>
     <button class="dock-btn" id="dock-btn-ssl" onclick="switchTab('p-ssl', '证书申请', this)">
         <svg viewBox="0 0 24 24"><path d="M18 8h-1V6c0-2.76-2.24-5-5-5S7 3.24 7 6v2H6c-1.1 0-2 .9-2 2v10c0 1.1.9 2 2 2h12c1.1 0 2-.9 2-2V10c0-1.1-.9-2-2-2zm-6 9c-1.1 0-2-.9-2-2s.9-2 2-2 2 .9 2 2-.9 2-2 2zm3.1-9H8.9V6c0-1.71 1.39-3.1 3.1-3.1 1.71 0 3.1 1.39 3.1 3.1v2z"/></svg>
