@@ -1935,6 +1935,8 @@ location ^~ / {
     # 漏洞#3 修复: 先将所有客户端可能伪造的身份请求头清空，再从 auth_request 结果注入
     proxy_set_header X-User "";
     proxy_set_header X-Email "";
+    proxy_set_header X-WEBAUTH-USER "";
+    proxy_set_header X-Forwarded-User "";
     proxy_set_header X-Auth-Request-User "";
     proxy_set_header X-Auth-Request-Email "";
     proxy_set_header X-Auth-Request-Preferred-Username "";
@@ -1951,6 +1953,8 @@ location ^~ / {
     
     proxy_set_header X-User $user;
     proxy_set_header X-Email $email;
+    proxy_set_header X-WEBAUTH-USER $user;
+    proxy_set_header X-Forwarded-User $user;
     proxy_set_header X-Auth-Request-User $user;
     proxy_set_header X-Auth-Request-Email $email;
     proxy_set_header X-Auth-Request-Preferred-Username $preferred_username;
