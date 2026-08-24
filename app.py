@@ -1099,7 +1099,7 @@ def setup_keycloak_adaptive_sso_flow():
                     requests.put(f"{req_actions_url}/{action['alias']}", headers=headers, json=action, timeout=6)
                     break
 
-        # 3. 创建/校验 passkey-only-browser 纯免密流 (Cookie + WebAuthn REQUIRED，物理彻底拔除密码表单)
+        # 3. 创建/校验 passkey-only-browser 纯免密流 (Cookie ALTERNATIVE + WebAuthn ALTERNATIVE，物理彻底拔除密码表单)
         flows = requests.get(f"{auth_api}/flows", headers=headers, timeout=6).json()
         if not isinstance(flows, list):
             flows = []
@@ -1116,13 +1116,10 @@ def setup_keycloak_adaptive_sso_flow():
             requests.post(f"{auth_api}/flows/passkey-only-browser/executions/execution", headers=headers, json={"provider": "auth-cookie"}, timeout=6)
             requests.post(f"{auth_api}/flows/passkey-only-browser/executions/execution", headers=headers, json={"provider": "webauthn-authenticator-passwordless"}, timeout=6)
         
-        # 无论新建或存量，严谨设置 requirement：auth-cookie 为 ALTERNATIVE，webauthn 为 REQUIRED
+        # 严谨设置 requirement：同级全部为 ALTERNATIVE，避免 Keycloak 引擎因同级 REQUIRED 忽略 auth-cookie
         try:
             for ex in requests.get(f"{auth_api}/flows/passkey-only-browser/executions", headers=headers, timeout=6).json():
-                if ex.get("providerId") == "webauthn-authenticator-passwordless":
-                    ex["requirement"] = "REQUIRED"
-                else:
-                    ex["requirement"] = "ALTERNATIVE"
+                ex["requirement"] = "ALTERNATIVE"
                 requests.put(f"{auth_api}/flows/passkey-only-browser/executions", headers=headers, json=ex, timeout=6)
         except Exception:
             pass
@@ -1914,16 +1911,17 @@ location @login {
     return 302 https://$host/oauth2/sign_in?rd=$uri$is_args$args;
 }
 
-# 漏洞#7 修复: auth_request 子请求 5xx 时返回 503，防止认证服务崩溃时请求穿透到后端
+# 漏洞#7 修复: auth_request 子请求 5xx 或后端连接失败时返回规范的 HTML 错误卡片（彻底杜绝 Safari 误触发文件下载）
 location @auth_error {
-    return 503 "Authentication service unavailable";
+    default_type text/html;
+    return 503 '<!DOCTYPE html><html><head><meta charset="utf-8"><title>503 服务暂不可用</title><meta name="viewport" content="width=device-width,initial-scale=1"><style>body{margin:0;min-height:100vh;display:flex;align-items:center;justify-content:center;background:#0f172a;color:#f8fafc;font-family:system-ui,-apple-system,sans-serif}.card{background:#1e293b;padding:36px 32px;border-radius:20px;box-shadow:0 20px 40px rgba(0,0,0,0.5);text-align:center;max-width:440px;border:1px solid rgba(255,255,255,0.08)}.icon{font-size:48px;margin-bottom:16px}h1{font-size:22px;margin:0 0 10px;font-weight:700;color:#f59e0b}p{color:#94a3b8;font-size:14px;line-height:1.6;margin:0 0 24px}.badge{display:inline-block;padding:4px 10px;background:rgba(245,158,11,0.15);color:#fbbf24;border-radius:6px;font-family:monospace;font-size:13px;margin-bottom:16px}.btn{display:inline-block;padding:10px 22px;background:#3b82f6;color:#fff;text-decoration:none;border-radius:10px;font-size:14px;font-weight:600;transition:all .2s;cursor:pointer}.btn:hover{background:#2563eb;transform:translateY(-1px)}</style></head><body><div class="card"><div class="icon">⚠️</div><div class="badge">目标: ' + target_upstream + '</div><h1>后端服务未就绪 (503)</h1><p>身份认证已成功通过，但当前站点的目标后端服务未能正常响应连接。<br>请确认后端业务容器或服务已正常运行并监听指定端口。</p><a href="javascript:location.reload()" class="btn">🔄 重试连接</a></div></body></html>';
 }
 
 # 主内容 - 需要 SSO 认证 (支持全站 Passkey 免密)
 location ^~ / {
     auth_request /oauth2/auth;
     error_page 401 = @login;
-    # 漏洞#7 修复: 5xx 错误（如 oauth2-proxy 崩溃时的 502）明确拦截，禁止穿透
+    # 漏洞#7 修复: 5xx 错误（如 oauth2-proxy 崩溃或后端 502/503）拦截并展示友好页面，禁止穿透
     error_page 500 502 503 504 = @auth_error;
     add_header Cache-Control "no-cache, no-store, must-revalidate";
     
