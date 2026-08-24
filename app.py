@@ -1440,7 +1440,7 @@ def ensure_global_sso_client(client_secret=None, extra_domain=None):
             "-s", "standardFlowEnabled=true",
             "-s", "directAccessGrantsEnabled=false",
             "-s", f"redirectUris={redirect_uris_json}",
-            "-s", "webOrigins=[\"+\",\"*\"]"
+            "-s", "webOrigins=[\"+\"]"
         ]
         if passkey_flow_id:
             up_args.extend(["-s", f"authenticationFlowBindingOverrides={{\"browser\":\"{passkey_flow_id}\"}}"])
@@ -1459,7 +1459,7 @@ def ensure_global_sso_client(client_secret=None, extra_domain=None):
             "-s", "standardFlowEnabled=true",
             "-s", "directAccessGrantsEnabled=false",
             "-s", f"redirectUris={redirect_uris_json}",
-            "-s", "webOrigins=[\"+\",\"*\"]"
+            "-s", "webOrigins=[\"+\"]"
         ]
         if passkey_flow_id:
             create_args.extend(["-s", f"authenticationFlowBindingOverrides={{\"browser\":\"{passkey_flow_id}\"}}"])
@@ -2192,70 +2192,75 @@ def do_apply_ssl(domain, acme_id, dns_id=None):
     log("绑定失败：未能找到 1Panel 反代网站信息")
     return False, "未找到对应的反代网站信息"
 
-@app.route('/settings', methods=['GET', 'POST'])
-def settings():
-    if request.method == 'POST':
-        web_port = int(request.form.get('web_port', 8088))
-        keycloak_url = request.form.get('keycloak_url', '').strip()
-        if keycloak_url:
-            if not keycloak_url.startswith("http://") and not keycloak_url.startswith("https://"):
-                keycloak_url = "https://" + keycloak_url
-            keycloak_url = keycloak_url.rstrip("/")
-        keycloak_admin = request.form.get('keycloak_admin', '').strip()
-        keycloak_password = request.form.get('keycloak_password', '').strip()
-        keycloak_container = request.form.get('keycloak_container', '').strip()
-        onepanel_port = int(request.form.get('onepanel_port', 40455))
-        onepanel_api_key = request.form.get('onepanel_api_key', '').strip()
-        
-        cloudflare_api_token = request.form.get('cloudflare_api_token', '').strip()
-        cloudflare_server_ip = request.form.get('cloudflare_server_ip', '').strip()
-        cloudflare_proxied = request.form.get('cloudflare_proxied', 'false').lower() in ['true', '1', 'on']
-        
-        console_username = request.form.get('console_username', '').strip()
-        console_password = request.form.get('console_password', '').strip()
-        
+def _save_settings_from_dict(form_dict):
+    """统一保存系统设置配置的底层函数，消除 /settings 与 /api/settings 重复逻辑（修复A1）"""
+    with _data_lock:
         cfg = {}
         if os.path.exists(CONFIG_FILE):
             try:
-                with open(CONFIG_FILE, "r") as f:
+                with open(CONFIG_FILE, "r", encoding="utf-8") as f:
                     cfg = json.load(f)
             except Exception:
                 pass
-                
-        cfg['web_port'] = web_port
-        cfg['keycloak_url'] = keycloak_url
-        cfg['keycloak_admin'] = keycloak_admin
-        cfg['keycloak_container'] = keycloak_container
-        cfg['onepanel_port'] = onepanel_port
-        cfg['cloudflare_server_ip'] = cloudflare_server_ip
-        cfg['cloudflare_proxied'] = cloudflare_proxied
-        
-        if console_username:
-            cfg['console_username'] = console_username
-        if console_password:
-            cfg['console_password'] = encrypt_val(console_password)
-        if keycloak_password:
-            cfg['keycloak_password'] = encrypt_val(keycloak_password)
-        if onepanel_api_key:
-            cfg['onepanel_api_key'] = encrypt_val(onepanel_api_key)
-        if cloudflare_api_token:
-            cfg['cloudflare_api_token'] = encrypt_val(cloudflare_api_token)
-            
+
+        if form_dict.get('web_port'):
+            cfg['web_port'] = int(form_dict['web_port'])
+        if form_dict.get('keycloak_url') is not None:
+            k_url = form_dict['keycloak_url'].strip()
+            if k_url:
+                if not k_url.startswith("http://") and not k_url.startswith("https://"):
+                    k_url = "https://" + k_url
+                cfg['keycloak_url'] = k_url.rstrip("/")
+        if form_dict.get('keycloak_admin') is not None:
+            cfg['keycloak_admin'] = form_dict['keycloak_admin'].strip()
+        if form_dict.get('keycloak_container') is not None:
+            cfg['keycloak_container'] = form_dict['keycloak_container'].strip()
+        if form_dict.get('onepanel_port'):
+            cfg['onepanel_port'] = int(form_dict['onepanel_port'])
+        if form_dict.get('cloudflare_server_ip') is not None:
+            cfg['cloudflare_server_ip'] = form_dict['cloudflare_server_ip'].strip()
+        if form_dict.get('cloudflare_proxied') is not None:
+            cfg['cloudflare_proxied'] = str(form_dict['cloudflare_proxied']).lower() in ['true', '1', 'on']
+        if form_dict.get('console_username'):
+            cfg['console_username'] = form_dict['console_username'].strip()
+
+        # 加密敏感凭据
+        if form_dict.get('console_password'):
+            enc_pwd = encrypt_val(form_dict['console_password'].strip())
+            cfg['console_password'] = enc_pwd
+            cfg['admin_password'] = enc_pwd
+        if form_dict.get('keycloak_password'):
+            cfg['keycloak_password'] = encrypt_val(form_dict['keycloak_password'].strip())
+        if form_dict.get('onepanel_api_key'):
+            cfg['onepanel_api_key'] = encrypt_val(form_dict['onepanel_api_key'].strip())
+        if form_dict.get('cloudflare_api_token'):
+            cfg['cloudflare_api_token'] = encrypt_val(form_dict['cloudflare_api_token'].strip())
+
+        with open(CONFIG_FILE, "w", encoding="utf-8") as f:
+            json.dump(cfg, f, indent=2)
         try:
-            with open(CONFIG_FILE, "w") as f:
-                json.dump(cfg, f, indent=2)
+            os.chmod(CONFIG_FILE, 0o600)
+        except Exception:
+            pass
+
+        load_config()
+        return True, ""
+
+@app.route('/settings', methods=['GET', 'POST'])
+def settings():
+    if request.method == 'POST':
+        try:
+            _save_settings_from_dict(request.form)
+            flash('配置已成功保存！如果您修改了“面板监听端口 (web_port)”，需手动在服务器终端执行 "sudo systemctl restart keycloak-auth-manager.service" 才能生效。', 'success')
+            return redirect('/settings')
         except Exception as e:
             flash(f'保存失败: {str(e)}', 'danger')
             return redirect('/settings')
-            
-        load_config()
-        flash('配置已成功保存！如果您修改了“面板监听端口 (web_port)”，需手动在服务器终端执行 "sudo systemctl restart keycloak-auth-manager.service" 才能生效。', 'success')
-        return redirect('/settings')
-        
+
     cfg = {}
     if os.path.exists(CONFIG_FILE):
         try:
-            with open(CONFIG_FILE, "r") as f:
+            with open(CONFIG_FILE, "r", encoding="utf-8") as f:
                 cfg = json.load(f)
         except Exception:
             pass
@@ -2264,57 +2269,11 @@ def settings():
 @app.route('/api/settings', methods=['POST'])
 def api_settings():
     try:
-        web_port = int(request.form.get('web_port', 8088))
-        keycloak_url = request.form.get('keycloak_url', '').strip()
-        if keycloak_url:
-            if not keycloak_url.startswith("http://") and not keycloak_url.startswith("https://"):
-                keycloak_url = "https://" + keycloak_url
-            keycloak_url = keycloak_url.rstrip("/")
-        keycloak_admin = request.form.get('keycloak_admin', '').strip()
-        keycloak_password = request.form.get('keycloak_password', '').strip()
-        keycloak_container = request.form.get('keycloak_container', '').strip()
-        onepanel_port = int(request.form.get('onepanel_port', 40455))
-        onepanel_api_key = request.form.get('onepanel_api_key', '').strip()
-        
-        cloudflare_api_token = request.form.get('cloudflare_api_token', '').strip()
-        cloudflare_server_ip = request.form.get('cloudflare_server_ip', '').strip()
-        cloudflare_proxied = request.form.get('cloudflare_proxied', 'false').lower() in ['true', '1', 'on']
-        
-        console_username = request.form.get('console_username', '').strip()
-        console_password = request.form.get('console_password', '').strip()
-
-        cfg = {}
-        if os.path.exists(CONFIG_FILE):
-            try:
-                with open(CONFIG_FILE, "r") as f:
-                    cfg = json.load(f)
-            except Exception:
-                pass
-                
-        cfg['web_port'] = web_port
-        cfg['keycloak_url'] = keycloak_url
-        cfg['keycloak_admin'] = keycloak_admin
-        cfg['keycloak_container'] = keycloak_container
-        cfg['onepanel_port'] = onepanel_port
-        cfg['cloudflare_server_ip'] = cloudflare_server_ip
-        cfg['cloudflare_proxied'] = cloudflare_proxied
-        
-        if console_username:
-            cfg['console_username'] = console_username
-        if console_password:
-            cfg['console_password'] = encrypt_val(console_password)
-        if keycloak_password:
-            cfg['keycloak_password'] = encrypt_val(keycloak_password)
-        if onepanel_api_key:
-            cfg['onepanel_api_key'] = encrypt_val(onepanel_api_key)
-        if cloudflare_api_token:
-            cfg['cloudflare_api_token'] = encrypt_val(cloudflare_api_token)
-            
-        with open(CONFIG_FILE, "w") as f:
-            json.dump(cfg, f, indent=2)
-            
-        load_config()
-        return json.dumps({"success": True})
+        req_dict = request.form or request.get_json(silent=True) or {}
+        ok, err = _save_settings_from_dict(req_dict)
+        if ok:
+            return json.dumps({"success": True})
+        return json.dumps({"success": False, "error": err})
     except Exception as e:
         return json.dumps({"success": False, "error": str(e)})
 
