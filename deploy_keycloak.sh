@@ -19,6 +19,24 @@ echo "数据库类型: $DB_TYPE"
 echo "管理员用户: $ADMIN_USER"
 echo "映射端口: $PORT"
 
+# 0. 自动检测并启用 2GB Swap 虚拟内存（防止低内存 VPS 发生 OOM-killer 崩溃）
+if [ -f /proc/meminfo ] && [ -w / ]; then
+    swap_total=$(free -m 2>/dev/null | awk '/Swap:/ {print $2}' || echo "0")
+    if [ "${swap_total:-0}" -lt 512 ] && [ ! -f /swapfile ]; then
+        echo "检测到系统未配置 Swap，正在自动创建 2GB 虚拟内存以保障 Keycloak 稳定运行..."
+        dd if=/dev/zero of=/swapfile bs=1M count=2048 2>/dev/null || true
+        if [ -f /swapfile ]; then
+            chmod 600 /swapfile
+            mkswap /swapfile >/dev/null 2>&1 || true
+            swapon /swapfile 2>/dev/null || true
+            if ! grep -q "/swapfile" /etc/fstab 2>/dev/null; then
+                echo '/swapfile none swap sw 0 0' >> /etc/fstab
+            fi
+            echo "✓ 2GB Swap 虚拟内存已就绪"
+        fi
+    fi
+fi
+
 # 停止并删除已存在的同名容器
 docker rm -f keycloak 2>/dev/null || true
 
