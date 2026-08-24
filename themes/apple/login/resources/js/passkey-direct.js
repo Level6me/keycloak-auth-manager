@@ -167,18 +167,52 @@
 
         // 场景 3: 两种方式均开启 (混合免密自适应模式)
         if (isPasswordPage && tryAnotherLink && tryAnotherForm) {
-            tryAnotherLink.innerHTML = "使用 Passkey 登录";
-            tryAnotherLink.style.display = "inline-flex";
+            // 1. 为用户名输入框启用 WebAuthn Conditional Autofill
+            const usernameInput = document.getElementById("username");
+            if (usernameInput) {
+                usernameInput.setAttribute("autocomplete", "username webauthn");
+            }
+
+            // 2. 插入分割线并将 Passkey 登录渲染为醒目的大按钮
+            const loginForm = document.getElementById("kc-form-login");
+            if (loginForm && !document.getElementById("passkey-mixed-divider")) {
+                const divider = document.createElement("div");
+                divider.id = "passkey-mixed-divider";
+                divider.className = "passkey-divider";
+                divider.innerHTML = "<span>或</span>";
+                loginForm.parentNode.insertBefore(divider, loginForm.nextSibling);
+                divider.parentNode.insertBefore(tryAnotherForm, divider.nextSibling);
+            }
+
+            tryAnotherForm.style.display = "block";
+            tryAnotherForm.style.marginTop = "0";
+            tryAnotherForm.style.marginBottom = "16px";
+            tryAnotherForm.style.width = "100%";
+
+            tryAnotherLink.innerHTML = "🔑 使用 Passkey 一键免密登录";
+            tryAnotherLink.className = "passkey-hero-button";
+            tryAnotherLink.style.display = "flex";
             tryAnotherLink.style.alignItems = "center";
             tryAnotherLink.style.justifyContent = "center";
+            tryAnotherLink.style.width = "100%";
+            tryAnotherLink.style.height = "50px";
+            tryAnotherLink.style.boxSizing = "border-box";
+            tryAnotherLink.style.borderRadius = "14px";
+            tryAnotherLink.style.background = "rgba(0, 113, 227, 0.08)";
+            tryAnotherLink.style.border = "1.5px solid rgba(0, 113, 227, 0.35)";
+            tryAnotherLink.style.color = "#0071e3";
+            tryAnotherLink.style.fontSize = "15px";
+            tryAnotherLink.style.fontWeight = "600";
+            tryAnotherLink.style.textDecoration = "none";
             tryAnotherLink.style.cursor = "pointer";
+            tryAnotherLink.style.transition = "all 0.2s ease";
 
             tryAnotherLink.onclick = async function(e) {
                 e.preventDefault();
                 e.stopPropagation();
 
                 const originalText = tryAnotherLink.innerHTML;
-                tryAnotherLink.innerHTML = "正在调起 Passkey 登录...";
+                tryAnotherLink.innerHTML = "⏳ 正在调起 Passkey 认证...";
                 tryAnotherLink.style.pointerEvents = "none";
                 tryAnotherLink.style.opacity = "0.7";
 
@@ -291,16 +325,28 @@
                 }
             };
         } else if (isWebAuthnPage && tryAnotherLink && tryAnotherForm) {
-            tryAnotherLink.innerHTML = "使用账号密码登录";
-            tryAnotherLink.style.display = "inline-flex";
+            tryAnotherLink.innerHTML = "🔒 切换为账号密码登录";
+            tryAnotherLink.className = "passkey-switch-button";
+            tryAnotherLink.style.display = "flex";
             tryAnotherLink.style.alignItems = "center";
             tryAnotherLink.style.justifyContent = "center";
+            tryAnotherLink.style.width = "100%";
+            tryAnotherLink.style.height = "48px";
+            tryAnotherLink.style.boxSizing = "border-box";
+            tryAnotherLink.style.borderRadius = "14px";
+            tryAnotherLink.style.background = "#f5f5f7";
+            tryAnotherLink.style.border = "1px solid #d2d2d7";
+            tryAnotherLink.style.color = "#1d1d1f";
+            tryAnotherLink.style.fontSize = "14px";
+            tryAnotherLink.style.fontWeight = "500";
+            tryAnotherLink.style.marginTop = "14px";
+            tryAnotherLink.style.textDecoration = "none";
             tryAnotherLink.style.cursor = "pointer";
 
             tryAnotherLink.onclick = async function(e) {
                 e.preventDefault();
                 const originalText2 = tryAnotherLink.innerHTML;
-                tryAnotherLink.innerHTML = "正在切换至密码登录...";
+                tryAnotherLink.innerHTML = "⏳ 正在切换至密码登录...";
                 tryAnotherLink.style.pointerEvents = "none";
                 tryAnotherLink.style.opacity = "0.7";
 
