@@ -472,9 +472,11 @@ if [ -f "/tmp/keycloak_auth_manager_backup/data.json" ]; then
     cp /tmp/keycloak_auth_manager_backup/data.json "$INSTALL_DIR/"
 fi
 
-# 写入用户本次确认的最新配置文件（始终以本次输入为准）
+# 写入用户本次确认的最新配置文件（修复S11：以 umask 077 与 chmod 600 严格限制敏感文件访问权限）
 echo "[3] 创建/更新配置文件..."
-cat > "$INSTALL_DIR/config.json" << CONFIG
+(
+    umask 077
+    cat > "$INSTALL_DIR/config.json" << CONFIG
 {
     "keycloak_url": "$KEYCLOAK_URL",
     "keycloak_admin": "$KEYCLOAK_ADMIN",
@@ -486,10 +488,16 @@ cat > "$INSTALL_DIR/config.json" << CONFIG
     "install_dir": "$INSTALL_DIR"
 }
 CONFIG
-echo "    ✓ 配置已生成"
+    chmod 600 "$INSTALL_DIR/config.json" 2>/dev/null || true
+)
+echo "    ✓ 配置已安全生成 (chmod 600)"
 
 if [ ! -f "$INSTALL_DIR/data.json" ]; then
-    echo '{}' > "$INSTALL_DIR/data.json"
+    (
+        umask 077
+        echo '{}' > "$INSTALL_DIR/data.json"
+        chmod 600 "$INSTALL_DIR/data.json" 2>/dev/null || true
+    )
 fi
 
 # 获取当前 python3 实际可执行路径
