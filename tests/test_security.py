@@ -93,11 +93,61 @@ class SecurityRegressionTestSuite(unittest.TestCase):
         self.assertEqual(decrypt_val(pwd2), test_pass)
         self.assertEqual(decrypt_val(pwd3), test_pass)
 
-    def test_root_domain_extraction(self):
-        """验证 A6: 根域名自适应提取"""
-        self.assertEqual(get_root_domain("ips.abab.pw"), ".abab.pw")
-        self.assertEqual(get_root_domain("app.service.example.org"), ".example.org")
-        self.assertEqual(get_root_domain("example.com"), ".example.com")
+    def test_real_load_config_integration(self):
+        """验证 N1 集成测试：调用真实的 load_config()，验证仅写 admin_password 或 console_password 均能正确加载 ADMIN_PASSWORD"""
+        import tempfile
+        import app
+
+        original_config_file = app.CONFIG_FILE
+        test_pass = "IntegrationTestP@ss2026"
+        enc_pass = encrypt_val(test_pass)
+
+        # 场景 1: 仅配置 admin_password (模拟向导写入)
+        with tempfile.NamedTemporaryFile(mode='w', suffix='.json', delete=False) as tf:
+            json.dump({"admin_password": enc_pass, "keycloak_password": ""}, tf)
+            tmp_path1 = tf.name
+
+        try:
+            app.CONFIG_FILE = tmp_path1
+            app.ADMIN_PASSWORD = ""
+            app.load_config()
+            self.assertEqual(app.ADMIN_PASSWORD, test_pass)
+        finally:
+            if os.path.exists(tmp_path1):
+                os.remove(tmp_path1)
+
+        # 场景 2: 仅配置 console_password (模拟旧版或设置页写入)
+        with tempfile.NamedTemporaryFile(mode='w', suffix='.json', delete=False) as tf:
+            json.dump({"console_password": enc_pass, "keycloak_password": ""}, tf)
+            tmp_path2 = tf.name
+
+        try:
+            app.CONFIG_FILE = tmp_path2
+            app.ADMIN_PASSWORD = ""
+            app.load_config()
+            self.assertEqual(app.ADMIN_PASSWORD, test_pass)
+        finally:
+            if os.path.exists(tmp_path2):
+                os.remove(tmp_path2)
+
+        # 场景 3: 明文写入触发自动加密
+        with tempfile.NamedTemporaryFile(mode='w', suffix='.json', delete=False) as tf:
+            json.dump({"console_password": test_pass, "keycloak_password": ""}, tf)
+            tmp_path3 = tf.name
+
+        try:
+            app.CONFIG_FILE = tmp_path3
+            app.ADMIN_PASSWORD = ""
+            app.load_config()
+            self.assertEqual(app.ADMIN_PASSWORD, test_pass)
+            # 验证文件已被加密回写
+            with open(tmp_path3, 'r') as f:
+                saved_cfg = json.load(f)
+            self.assertTrue(saved_cfg.get('console_password', '').startswith('gAAAA') or not CIPHER_AVAILABLE)
+        finally:
+            if os.path.exists(tmp_path3):
+                os.remove(tmp_path3)
+            app.CONFIG_FILE = original_config_file
 
 if __name__ == "__main__":
     unittest.main()

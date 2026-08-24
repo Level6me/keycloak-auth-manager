@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-import os, json, subprocess, secrets, string, time, re, hashlib, requests, threading, base64, ipaddress
+import os, sys, json, subprocess, secrets, string, time, re, hashlib, requests, threading, base64, ipaddress
 import concurrent.futures
 from flask import Flask, render_template, request, redirect, url_for, flash, Response, stream_with_context, send_from_directory, session, jsonify
 from datetime import datetime
@@ -24,7 +24,11 @@ ENCRYPTION_KEY_FILE = "/opt/keycloak-auth-manager/encryption.key"
 CIPHER_AVAILABLE = False
 try:
     from cryptography.fernet import Fernet
-    _key_file = ENCRYPTION_KEY_FILE if os.access('/opt/keycloak-auth-manager', os.W_OK) or os.path.exists(ENCRYPTION_KEY_FILE) else '/tmp/test_encryption.key'
+    _is_test_env = bool(os.environ.get('TESTING') or 'unittest' in sys.modules or 'pytest' in sys.modules)
+    _key_file = ENCRYPTION_KEY_FILE
+    if _is_test_env and not (os.access('/opt/keycloak-auth-manager', os.W_OK) or os.path.exists(ENCRYPTION_KEY_FILE)):
+        _key_file = '/tmp/test_encryption.key'
+
     if not os.path.exists(_key_file):
         os.makedirs(os.path.dirname(_key_file), exist_ok=True)
         key = Fernet.generate_key()
