@@ -1913,8 +1913,15 @@ location @login {
 
 # 漏洞#7 修复: auth_request 子请求 5xx 或后端连接失败时返回规范的 HTML 错误卡片（彻底杜绝 Safari 误触发文件下载）
 location @auth_error {
-    default_type text/html;
-    return 503 '<!DOCTYPE html><html><head><meta charset="utf-8"><title>503 服务暂不可用</title><meta name="viewport" content="width=device-width,initial-scale=1"><style>body{margin:0;min-height:100vh;display:flex;align-items:center;justify-content:center;background:#0f172a;color:#f8fafc;font-family:system-ui,-apple-system,sans-serif}.card{background:#1e293b;padding:36px 32px;border-radius:20px;box-shadow:0 20px 40px rgba(0,0,0,0.5);text-align:center;max-width:440px;border:1px solid rgba(255,255,255,0.08)}.icon{font-size:48px;margin-bottom:16px}h1{font-size:22px;margin:0 0 10px;font-weight:700;color:#f59e0b}p{color:#94a3b8;font-size:14px;line-height:1.6;margin:0 0 24px}.badge{display:inline-block;padding:4px 10px;background:rgba(245,158,11,0.15);color:#fbbf24;border-radius:6px;font-family:monospace;font-size:13px;margin-bottom:16px}.btn{display:inline-block;padding:10px 22px;background:#3b82f6;color:#fff;text-decoration:none;border-radius:10px;font-size:14px;font-weight:600;transition:all .2s;cursor:pointer}.btn:hover{background:#2563eb;transform:translateY(-1px)}</style></head><body><div class="card"><div class="icon">⚠️</div><div class="badge">目标: ' + target_upstream + '</div><h1>后端服务未就绪 (503)</h1><p>身份认证已成功通过，但当前站点的目标后端服务未能正常响应连接。<br>请确认后端业务容器或服务已正常运行并监听指定端口。</p><a href="javascript:location.reload()" class="btn">🔄 重试连接</a></div></body></html>';
+    content_by_lua_block {
+        ngx.status = 503
+        ngx.header.content_type = "text/html; charset=utf-8"
+        ngx.say([[<!DOCTYPE html>
+<html><head><meta charset="utf-8"><title>503 服务暂不可用</title><meta name="viewport" content="width=device-width,initial-scale=1">
+<style>body{margin:0;min-height:100vh;display:flex;align-items:center;justify-content:center;background:#0f172a;color:#f8fafc;font-family:system-ui,-apple-system,sans-serif}.card{background:#1e293b;padding:36px 32px;border-radius:20px;box-shadow:0 20px 40px rgba(0,0,0,0.5);text-align:center;max-width:440px;border:1px solid rgba(255,255,255,0.08)}.icon{font-size:48px;margin-bottom:16px}h1{font-size:22px;margin:0 0 10px;font-weight:700;color:#f59e0b}p{color:#94a3b8;font-size:14px;line-height:1.6;margin:0 0 24px}.badge{display:inline-block;padding:4px 10px;background:rgba(245,158,11,0.15);color:#fbbf24;border-radius:6px;font-family:monospace;font-size:13px;margin-bottom:16px}.btn{display:inline-block;padding:10px 22px;background:#3b82f6;color:#fff;text-decoration:none;border-radius:10px;font-size:14px;font-weight:600;transition:all .2s;cursor:pointer}.btn:hover{background:#2563eb;transform:translateY(-1px)}</style></head>
+<body><div class="card"><div class="icon">⚠️</div><div class="badge">目标: ]] .. (ngx.var.host or "") .. [[ (]] .. "]] + target_upstream + [[" .. [[)</div><h1>后端服务未就绪 (503)</h1><p>身份认证已成功通过，但当前站点的目标后端服务未能正常响应连接。<br>请确认后端业务容器或服务已正常运行并监听指定端口。</p><a href="javascript:location.reload()" class="btn">🔄 重试连接</a></div></body></html>]])
+        ngx.exit(503)
+    }
 }
 
 # 主内容 - 需要 SSO 认证 (支持全站 Passkey 免密)
