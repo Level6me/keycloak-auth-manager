@@ -1055,7 +1055,7 @@ def setup_keycloak_adaptive_sso_flow():
     token, active_base = get_keycloak_admin_token()
     if not token or not active_base:
         log("提示: 暂未连接到 Keycloak API (可忽略)，跳过自适应认证流配置")
-        return None
+        return {}
 
     try:
         # 1. 确保 Keycloak User Profile 允许保存 allowed_sites
@@ -1099,7 +1099,7 @@ def setup_keycloak_adaptive_sso_flow():
                     requests.put(f"{req_actions_url}/{action['alias']}", headers=headers, json=action, timeout=6)
                     break
 
-        # 3. 创建/校验 passkey-only-browser 流
+        # 3. 创建/校验 passkey-only-browser 纯免密流 (Cookie + WebAuthn REQUIRED，物理彻底拔除密码表单)
         flows = requests.get(f"{auth_api}/flows", headers=headers, timeout=6).json()
         if not isinstance(flows, list):
             flows = []
@@ -1115,11 +1115,19 @@ def setup_keycloak_adaptive_sso_flow():
             }, timeout=6)
             requests.post(f"{auth_api}/flows/passkey-only-browser/executions/execution", headers=headers, json={"provider": "auth-cookie"}, timeout=6)
             requests.post(f"{auth_api}/flows/passkey-only-browser/executions/execution", headers=headers, json={"provider": "webauthn-authenticator-passwordless"}, timeout=6)
+        
+        # 无论新建或存量，严谨设置 requirement：auth-cookie 为 ALTERNATIVE，webauthn 为 REQUIRED
+        try:
             for ex in requests.get(f"{auth_api}/flows/passkey-only-browser/executions", headers=headers, timeout=6).json():
-                ex["requirement"] = "ALTERNATIVE"
+                if ex.get("providerId") == "webauthn-authenticator-passwordless":
+                    ex["requirement"] = "REQUIRED"
+                else:
+                    ex["requirement"] = "ALTERNATIVE"
                 requests.put(f"{auth_api}/flows/passkey-only-browser/executions", headers=headers, json=ex, timeout=6)
+        except Exception:
+            pass
 
-        # 4. 创建/更新 global-sso-browser 流 (Cookie + Forms + Passkey 混合免密模式，杜绝 400 错误与多余重复项)
+        # 4. 创建/更新 global-sso-browser 流 (Cookie + Forms + Passkey 混合免密模式)
         flows = requests.get(f"{auth_api}/flows", headers=headers, timeout=6).json()
         if not isinstance(flows, list):
             flows = []
@@ -1130,7 +1138,6 @@ def setup_keycloak_adaptive_sso_flow():
             if not isinstance(cur_execs, list):
                 cur_execs = []
             top_providers = [e.get("displayName") or e.get("providerId") for e in cur_execs if e.get("level") == 0]
-            # 严格确保只有 3 个顶级项：Cookie、global-sso-forms、WebAuthn
             if len(top_providers) != 3 or any(e.get("requirement") == "CONDITIONAL" for e in cur_execs):
                 for e in reversed(cur_execs):
                     eid = e.get("id")
@@ -1151,10 +1158,7 @@ def setup_keycloak_adaptive_sso_flow():
                     "description": "Global SSO Multi-mode Adaptive Browser Flow"
                 }, timeout=6)
 
-            # 1. auth-cookie (ALTERNATIVE)
             requests.post(f"{auth_api}/flows/global-sso-browser/executions/execution", headers=headers, json={"provider": "auth-cookie"}, timeout=6)
-
-            # 2. global-sso-forms (ALTERNATIVE)
             requests.post(f"{auth_api}/flows/global-sso-browser/executions/flow", headers=headers, json={
                 "alias": "global-sso-forms",
                 "type": "basic-flow",
@@ -1162,11 +1166,8 @@ def setup_keycloak_adaptive_sso_flow():
                 "description": "Username Password Form Subflow"
             }, timeout=6)
             requests.post(f"{auth_api}/flows/global-sso-forms/executions/execution", headers=headers, json={"provider": "auth-username-password-form"}, timeout=6)
-
-            # 3. webauthn-authenticator-passwordless (ALTERNATIVE)
             requests.post(f"{auth_api}/flows/global-sso-browser/executions/execution", headers=headers, json={"provider": "webauthn-authenticator-passwordless"}, timeout=6)
 
-            # 设置 requirement
             for ex in requests.get(f"{auth_api}/flows/global-sso-browser/executions", headers=headers, timeout=6).json():
                 ex["requirement"] = "ALTERNATIVE"
                 requests.put(f"{auth_api}/flows/global-sso-browser/executions", headers=headers, json=ex, timeout=6)
@@ -1175,21 +1176,23 @@ def setup_keycloak_adaptive_sso_flow():
                 ex["requirement"] = "REQUIRED"
                 requests.put(f"{auth_api}/flows/global-sso-forms/executions", headers=headers, json=ex, timeout=6)
 
-
         flows = requests.get(f"{auth_api}/flows", headers=headers, timeout=6).json()
-        target_flow = next((f for f in flows if f.get("alias") == "global-sso-browser"), None)
-        if target_flow:
-            return target_flow["id"]
+        hybrid_f = next((f for f in flows if f.get("alias") == "global-sso-browser"), None)
+        pk_f = next((f for f in flows if f.get("alias") == "passkey-only-browser"), None)
 
-        return None
+        return {
+            "hybrid": hybrid_f["id"] if hybrid_f else None,
+            "passkey_only": pk_f["id"] if pk_f else None
+        }
     except Exception as e:
         log(f"配置 Keycloak 自适应认证流异常: {e}")
-        return None
+        return {}
 
 
 def setup_keycloak_passkey_flow():
-    """兼容旧函数名别名"""
-    return setup_keycloak_adaptive_sso_flow()
+    """兼容旧函数名别名，返回字典或混合流 ID"""
+    flow_map = setup_keycloak_adaptive_sso_flow()
+    return flow_map.get("hybrid") if isinstance(flow_map, dict) else flow_map
 
 
 def sync_site_policy_to_keycloak_theme():
@@ -1222,21 +1225,12 @@ def sync_site_policy_to_keycloak_theme():
         except Exception:
             pass
             
-        # 3. 写入部署目录（主题文件目录）
-        deploy_policy_file = "/opt/keycloak-auth-manager/themes/apple/login/resources/site-policy.json"
-        try:
-            if os.path.exists(os.path.dirname(deploy_policy_file)):
-                with open(deploy_policy_file, "w", encoding="utf-8") as f:
-                    f.write(policy_json)
-        except Exception:
-            pass
-                
-        # 4. 复制到运行中的 keycloak 容器内
-        run_cmd_args(["docker", "exec", KEYCLOAK_CONTAINER, "mkdir", "-p", "/opt/keycloak/themes/apple/login/resources"])
-        src_file = deploy_policy_file if os.path.exists(deploy_policy_file) else nginx_policy_file
-        if os.path.exists(src_file):
-            run_cmd_args(["docker", "cp", src_file, f"{KEYCLOAK_CONTAINER}:/opt/keycloak/themes/apple/login/resources/site-policy.json"])
-        
+        # 3. 实时复制进运行中的 Keycloak 容器主题静态资源目录
+        run_cmd_args([
+            "docker", "cp",
+            nginx_policy_file,
+            f"{KEYCLOAK_CONTAINER}:/opt/keycloak/themes/apple/login/resources/site-policy.json"
+        ])
         log(f"已同步站点登录策略至 Keycloak 主题: {list(policy.keys())}")
         return True
     except Exception as e:
@@ -1244,9 +1238,23 @@ def sync_site_policy_to_keycloak_theme():
         return False
 
 
+# ─── 路径 B：分类聚合双 SSO 代理服务常量 ───
 GLOBAL_SSO_PORT = 4180
 GLOBAL_SSO_CLIENT_ID = "global-sso"
 GLOBAL_SSO_CONTAINER = "oauth2-proxy-sso"
+
+GLOBAL_PASSKEY_SSO_PORT = 4181
+GLOBAL_PASSKEY_SSO_CLIENT_ID = "global-sso-passkey"
+GLOBAL_PASSKEY_SSO_CONTAINER = "oauth2-proxy-passkey-sso"
+
+def get_domain_sso_port(site_data):
+    """根据站点的认证策略，自动分流到对应的 SSO 代理端口 (4181: 纯Passkey, 4180: 混合/密码)"""
+    if isinstance(site_data, dict):
+        allow_pk = site_data.get('allow_passkey', True) is not False
+        allow_pwd = site_data.get('allow_password', True) is not False
+        if allow_pk and not allow_pwd:
+            return GLOBAL_PASSKEY_SSO_PORT  # 4181 纯免密真·Passkey 代理池
+    return GLOBAL_SSO_PORT  # 4180 混合/密码代理池
 
 def get_root_domain(domain):
     """从域名中提取用于 SSO Cookie 共享的根域 (如 ips.abab.pw -> .abab.pw)"""
@@ -1293,7 +1301,7 @@ def get_all_cookie_and_whitelist_domains(data=None, extra_domain=None):
     except Exception:
         pass
 
-    # 默认兜底：若暂未配置任何站点，从 Keycloak 域名中提取根域，不再硬编码特定域名（修复A6）
+    # 默认兜底：若暂未配置任何站点，从 Keycloak 域名中提取根域，不再硬编码特定域名
     if not cookie_domains:
         try:
             _, _, kc_url = get_keycloak_admin_credentials()
@@ -1310,9 +1318,9 @@ def get_all_cookie_and_whitelist_domains(data=None, extra_domain=None):
     return ",".join(sorted(list(cookie_domains))), ",".join(sorted(list(whitelist_domains)))
 
 
-def ensure_global_sso_client(client_secret=None, extra_domain=None):
-    """确保 Keycloak 中存在精确匹配且绑定 Passkey 认证流的全局 global-sso 客户端（修复S3：移除裸 *）"""
-    admin_user, admin_pass, kc_issuer_base = get_keycloak_admin_credentials()
+def _ensure_specific_sso_client(client_id, flow_id, secret_cfg_key, target_domains, extra_domain=None):
+    """通用同步 Keycloak 客户端 (支持 global-sso 与 global-sso-passkey)"""
+    admin_user, admin_pass, _ = get_keycloak_admin_credentials()
     if not admin_pass:
         return False, "未获取到 Keycloak 管理员密码", ""
 
@@ -1324,31 +1332,26 @@ def ensure_global_sso_client(client_secret=None, extra_domain=None):
         except Exception:
             pass
 
-    if not client_secret:
-        raw_sec = cfg.get("global_sso_client_secret", "")
-        if raw_sec:
-            client_secret = decrypt_val(raw_sec)
+    client_secret = ""
+    raw_sec = cfg.get(secret_cfg_key, "")
+    if raw_sec:
+        client_secret = decrypt_val(raw_sec)
 
     if not client_secret:
         client_secret = generate_secret(32)
-        cfg["global_sso_client_secret"] = encrypt_val(client_secret)
+        cfg[secret_cfg_key] = encrypt_val(client_secret)
         try:
             with open(CONFIG_FILE, 'w') as f:
                 json.dump(cfg, f, indent=2)
         except Exception:
             pass
 
-    # 确保 Passkey 自定义认证流就绪
-    passkey_flow_id = setup_keycloak_passkey_flow()
-
-    # 构建所有站点的 Redirect URIs 精确列表（修复S3：彻底去除裸 * 通配符，严格执行精确回调白名单）
-    data = load_data()
-    all_domains = list(data.keys())
-    if extra_domain and extra_domain not in all_domains:
-        all_domains.append(extra_domain)
+    domains = list(target_domains)
+    if extra_domain and extra_domain not in domains:
+        domains.append(extra_domain)
 
     r_uris = []
-    for d in all_domains:
+    for d in domains:
         d = d.strip().lower()
         if d:
             r_uris.append(f"https://{d}/oauth2/callback")
@@ -1356,6 +1359,7 @@ def ensure_global_sso_client(client_secret=None, extra_domain=None):
             r_uris.append(f"https://{d}/*")
             r_uris.append(f"http://{d}/*")
 
+    data = load_data()
     cookie_domains_str, _ = get_all_cookie_and_whitelist_domains(data, extra_domain=extra_domain)
     for rd in cookie_domains_str.split(','):
         rd = rd.strip().lstrip('.')
@@ -1366,13 +1370,12 @@ def ensure_global_sso_client(client_secret=None, extra_domain=None):
             r_uris.append(f"http://{rd}/*")
 
     unique_r_uris = sorted(list(set(filter(None, r_uris))))
-    redirect_uris_json = json.dumps(unique_r_uris)
 
     # 优先通过 Keycloak Admin REST API 查找并更新/创建客户端
     try:
-        clients_res, code, _ = call_keycloak_api("clients", "GET", params={"clientId": GLOBAL_SSO_CLIENT_ID})
+        clients_res, code, _ = call_keycloak_api("clients", "GET", params={"clientId": client_id})
         client_payload = {
-            "clientId": GLOBAL_SSO_CLIENT_ID,
+            "clientId": client_id,
             "secret": client_secret,
             "enabled": True,
             "publicClient": False,
@@ -1382,42 +1385,25 @@ def ensure_global_sso_client(client_secret=None, extra_domain=None):
             "redirectUris": unique_r_uris,
             "webOrigins": ["+"]
         }
-        if passkey_flow_id:
-            client_payload["authenticationFlowBindingOverrides"] = {"browser": passkey_flow_id}
+        if flow_id:
+            client_payload["authenticationFlowBindingOverrides"] = {"browser": flow_id}
 
         if code == 200 and isinstance(clients_res, list) and clients_res:
             cid = clients_res[0].get("id")
             if cid:
-                u_data, u_code, u_err = call_keycloak_api(f"clients/{cid}", "PUT", json_data=client_payload)
+                u_data, u_code, _ = call_keycloak_api(f"clients/{cid}", "PUT", json_data=client_payload)
                 if u_code in (200, 204):
-                    scopes_list, _, _ = call_keycloak_api("client-scopes", "GET")
-                    if isinstance(scopes_list, list):
-                        for sc_name in ("scope-passkey-only", "scope-password-only"):
-                            sc_obj = next((s for s in scopes_list if s.get("name") == sc_name), None)
-                            if sc_obj:
-                                call_keycloak_api(f"clients/{cid}/optional-client-scopes/{sc_obj['id']}", "PUT")
-                    log("Keycloak 全局 SSO 自适应客户端已通过 REST API 成功同步更新")
+                    log(f"Keycloak 客户端 {client_id} (流: {flow_id}) 已通过 REST API 成功同步更新")
                     return True, "", client_secret
         elif code == 200 and isinstance(clients_res, list) and not clients_res:
-            c_data, c_code, c_err = call_keycloak_api("clients", "POST", json_data=client_payload)
+            c_data, c_code, _ = call_keycloak_api("clients", "POST", json_data=client_payload)
             if c_code in (200, 201, 204):
-                # 获取新建客户端 ID 并绑定 optional scopes
-                new_c_res, _, _ = call_keycloak_api("clients", "GET", params={"clientId": GLOBAL_SSO_CLIENT_ID})
-                if isinstance(new_c_res, list) and new_c_res:
-                    new_cid = new_c_res[0].get("id")
-                    scopes_list, _, _ = call_keycloak_api("client-scopes", "GET")
-                    if isinstance(scopes_list, list) and new_cid:
-                        for sc_name in ("scope-passkey-only", "scope-password-only"):
-                            sc_obj = next((s for s in scopes_list if s.get("name") == sc_name), None)
-                            if sc_obj:
-                                call_keycloak_api(f"clients/{new_cid}/optional-client-scopes/{sc_obj['id']}", "PUT")
-                log("Keycloak 全局 SSO 自适应客户端已通过 REST API 成功创建")
+                log(f"Keycloak 客户端 {client_id} (流: {flow_id}) 已通过 REST API 成功创建")
                 return True, "", client_secret
-
     except Exception as e:
-        log(f"通过 REST API 同步 Keycloak 客户端异常: {e}")
+        log(f"通过 REST API 同步 Keycloak 客户端 {client_id} 异常: {e}")
 
-    # Fallback: 使用 docker exec kcadm.sh 登录并配置
+    # Fallback: 使用 docker exec kcadm.sh
     run_cmd_args([
         "docker", "exec", KEYCLOAK_CONTAINER,
         "/opt/keycloak/bin/kcadm.sh", "config", "credentials",
@@ -1426,19 +1412,18 @@ def ensure_global_sso_client(client_secret=None, extra_domain=None):
         "--user", admin_user,
         "--password", admin_pass
     ])
-    
-    # 检查 global-sso 客户端是否存在
     uuid_rc, uuid_out, _ = run_cmd_args([
         "docker", "exec", KEYCLOAK_CONTAINER,
         "/opt/keycloak/bin/kcadm.sh", "get", "clients",
         "-r", "master",
-        "-q", f"clientId={GLOBAL_SSO_CLIENT_ID}",
+        "-q", f"clientId={client_id}",
         "--fields", "id",
         "--format", "csv",
         "--noquotes"
     ])
     uuid = uuid_out.strip().splitlines()[0].strip() if uuid_out.strip() else ""
 
+    redirect_uris_json = json.dumps(unique_r_uris)
     if uuid:
         up_args = [
             "docker", "exec", KEYCLOAK_CONTAINER,
@@ -1453,16 +1438,16 @@ def ensure_global_sso_client(client_secret=None, extra_domain=None):
             "-s", f"redirectUris={redirect_uris_json}",
             "-s", "webOrigins=[\"+\"]"
         ]
-        if passkey_flow_id:
-            up_args.extend(["-s", f"authenticationFlowBindingOverrides={{\"browser\":\"{passkey_flow_id}\"}}"])
+        if flow_id:
+            up_args.extend(["-s", f"authenticationFlowBindingOverrides={{\"browser\":\"{flow_id}\"}}"])
         run_cmd_args(up_args)
-        log("Keycloak 全局 SSO Passkey 客户端已同步更新")
+        log(f"Keycloak 客户端 {client_id} (Fallback) 已同步更新")
     else:
         create_args = [
             "docker", "exec", KEYCLOAK_CONTAINER,
             "/opt/keycloak/bin/kcadm.sh", "create", "clients",
             "-r", "master",
-            "-s", f"clientId={GLOBAL_SSO_CLIENT_ID}",
+            "-s", f"clientId={client_id}",
             "-s", f"secret={client_secret}",
             "-s", "enabled=true",
             "-s", "publicClient=false",
@@ -1472,26 +1457,108 @@ def ensure_global_sso_client(client_secret=None, extra_domain=None):
             "-s", f"redirectUris={redirect_uris_json}",
             "-s", "webOrigins=[\"+\"]"
         ]
-        if passkey_flow_id:
-            create_args.extend(["-s", f"authenticationFlowBindingOverrides={{\"browser\":\"{passkey_flow_id}\"}}"])
+        if flow_id:
+            create_args.extend(["-s", f"authenticationFlowBindingOverrides={{\"browser\":\"{flow_id}\"}}"])
         rc_c, _, err_c = run_cmd_args(create_args)
         if rc_c != 0:
-            log(f"创建 Keycloak 全局 SSO 客户端异常: {err_c}")
+            log(f"创建 Keycloak 客户端 {client_id} 异常: {err_c}")
             return False, f"创建 Keycloak 客户端失败: {err_c}", client_secret
-        log("Keycloak 全局 SSO Passkey 客户端创建成功")
+        log(f"Keycloak 客户端 {client_id} (Fallback) 创建成功")
         
     return True, "", client_secret
 
 
-def ensure_global_sso_container(extra_domain=None):
-    """启动或更新全局单一 oauth2-proxy 容器服务 (监听 127.0.0.1:4180)"""
-    ok, err, client_secret = ensure_global_sso_client(extra_domain=extra_domain)
-    if not ok:
-        log(f"初始化全局 SSO 客户端失败: {err}")
-        return False, err
-        
+def _ensure_single_sso_container(container_name, client_id, client_secret, port, cookie_secret, cookie_domains_str, safe_whitelist):
+    """启动或重载指定的 oauth2-proxy 常驻代理容器服务"""
     _, _, kc_issuer_base = get_keycloak_admin_credentials()
+    run_cmd_args(["docker", "rm", "-f", container_name])
     
+    run_args = [
+        "docker", "run", "-d",
+        "--name", container_name,
+        "--restart", "always",
+        "--network", "host",
+        "-e", "OAUTH2_PROXY_PROVIDER=oidc",
+        "-e", f"OAUTH2_PROXY_OIDC_ISSUER_URL={kc_issuer_base}/realms/master",
+        "-e", f"OAUTH2_PROXY_CLIENT_ID={client_id}",
+        "-e", f"OAUTH2_PROXY_CLIENT_SECRET={client_secret}",
+        "-e", "OAUTH2_PROXY_COOKIE_NAME=_auth_sso",
+        "-e", f"OAUTH2_PROXY_COOKIE_SECRET={cookie_secret}",
+        "-e", "OAUTH2_PROXY_COOKIE_SECURE=true",
+        "-e", f"OAUTH2_PROXY_COOKIE_DOMAINS={cookie_domains_str}",
+        "-e", "OAUTH2_PROXY_COOKIE_SAMESITE=lax",
+        "-e", "OAUTH2_PROXY_COOKIE_CSRF_PER_REQUEST=true",
+        "-e", "OAUTH2_PROXY_APPROVAL_PROMPT=",
+        "-e", f"OAUTH2_PROXY_WHITELIST_DOMAINS={safe_whitelist}",
+        "-e", "OAUTH2_PROXY_SKIP_PROVIDER_BUTTON=true",
+        "-e", "OAUTH2_PROXY_CODE_CHALLENGE_METHOD=S256",
+        "-e", "OAUTH2_PROXY_EMAIL_DOMAINS=*",
+        "-e", "OAUTH2_PROXY_INSECURE_OIDC_ALLOW_UNVERIFIED_EMAIL=true",
+        "-e", "OAUTH2_PROXY_USER_ID_CLAIM=preferred_username",
+        "-e", "OAUTH2_PROXY_SET_XAUTHREQUEST=true",
+        "-e", "OAUTH2_PROXY_PASS_ACCESS_TOKEN=true",
+        "-e", "OAUTH2_PROXY_PASS_AUTHORIZATION_HEADER=true",
+        "-e", "OAUTH2_PROXY_REVERSE_PROXY=true",
+        "-e", f"OAUTH2_PROXY_HTTP_ADDRESS=127.0.0.1:{port}",
+        "quay.io/oauth2-proxy/oauth2-proxy:v7.6.0"
+    ]
+
+    rc, out, err_out = run_cmd_args(run_args)
+    if rc != 0:
+        safe_err = re.sub(r'(secret|password|key|token)=[^\s,\]]+', r'\1=***', err_out.strip(), flags=re.IGNORECASE)
+        log(f"代理容器 {container_name} 启动失败: {safe_err}")
+        return False, f"代理容器 {container_name} 启动失败: {safe_err}"
+
+    log(f"代理容器 {container_name} (127.0.0.1:{port}, 客户端: {client_id}) 已成功就绪")
+    return True, ""
+
+
+def ensure_global_sso_container(extra_domain=None):
+    """【路径B 架构核心】启动并维护双代理池服务 (4180混合池 + 4181真·纯Passkey池)，实现全站SSO共享与按站点物理隔离"""
+    flows_map = setup_keycloak_adaptive_sso_flow()
+    hybrid_flow_id = flows_map.get("hybrid")
+    passkey_flow_id = flows_map.get("passkey_only")
+
+    data = load_data()
+    hybrid_domains = []
+    passkey_domains = []
+
+    for d, auth in data.items():
+        if not isinstance(auth, dict):
+            continue
+        allow_pk = auth.get('allow_passkey', True) is not False
+        allow_pwd = auth.get('allow_password', True) is not False
+        if allow_pk and not allow_pwd:
+            passkey_domains.append(d)
+        else:
+            hybrid_domains.append(d)
+
+    if extra_domain and extra_domain not in hybrid_domains and extra_domain not in passkey_domains:
+        hybrid_domains.append(extra_domain)
+
+    # 1. 同步混合 SSO 客户端 (global-sso -> global-sso-browser 流)
+    ok1, err1, sec_hybrid = _ensure_specific_sso_client(
+        client_id=GLOBAL_SSO_CLIENT_ID,
+        flow_id=hybrid_flow_id,
+        secret_cfg_key="global_sso_client_secret",
+        target_domains=hybrid_domains,
+        extra_domain=extra_domain
+    )
+    if not ok1:
+        return False, f"混合 SSO 客户端同步失败: {err1}"
+
+    # 2. 同步真·纯 Passkey 客户端 (global-sso-passkey -> passkey-only-browser 流，物理拔除密码)
+    ok2, err2, sec_passkey = _ensure_specific_sso_client(
+        client_id=GLOBAL_PASSKEY_SSO_CLIENT_ID,
+        flow_id=passkey_flow_id,
+        secret_cfg_key="global_passkey_sso_client_secret",
+        target_domains=passkey_domains,
+        extra_domain=extra_domain
+    )
+    if not ok2:
+        return False, f"纯 Passkey 客户端同步失败: {err2}"
+
+    # 3. 准备共享 Cookie Secret 与域名列表
     cfg = {}
     if os.path.exists(CONFIG_FILE):
         try:
@@ -1511,61 +1578,40 @@ def ensure_global_sso_container(extra_domain=None):
                 json.dump(cfg, f, indent=2)
         except Exception:
             pass
-            
+
     cookie_domains_str, whitelist_domains_str = get_all_cookie_and_whitelist_domains(extra_domain=extra_domain)
-    
-    # 漏洞#4 修复：构建精确的白名单域名列表，不使用裸 * 通配，防止 OIDC Open Redirect
-    # whitelist_domains_str 已由 get_all_cookie_and_whitelist_domains() 生成精确子域名列表（如 *.example.com,example.com）
-    # 确保不包含裸 "*"
     safe_whitelist = ",".join(
         d.strip() for d in whitelist_domains_str.split(',')
         if d.strip() and d.strip() != '*'
     )
-    
-    log(f"正在配置全局单一 SSO 代理服务 (Cookie域: {cookie_domains_str})...")
-    
-    run_cmd_args(["docker", "rm", "-f", GLOBAL_SSO_CONTAINER])
-    
-    run_args = [
-        "docker", "run", "-d",
-        "--name", GLOBAL_SSO_CONTAINER,
-        "--restart", "always",
-        "--network", "host",
-        "-e", "OAUTH2_PROXY_PROVIDER=oidc",
-        "-e", f"OAUTH2_PROXY_OIDC_ISSUER_URL={kc_issuer_base}/realms/master",
-        "-e", f"OAUTH2_PROXY_CLIENT_ID={GLOBAL_SSO_CLIENT_ID}",
-        "-e", f"OAUTH2_PROXY_CLIENT_SECRET={client_secret}",
-        "-e", "OAUTH2_PROXY_COOKIE_NAME=_auth_sso",
-        "-e", f"OAUTH2_PROXY_COOKIE_SECRET={cookie_secret}",
-        "-e", "OAUTH2_PROXY_COOKIE_SECURE=true",
 
-        "-e", f"OAUTH2_PROXY_COOKIE_DOMAINS={cookie_domains_str}",
-        "-e", "OAUTH2_PROXY_COOKIE_SAMESITE=lax",
-        "-e", "OAUTH2_PROXY_COOKIE_CSRF_PER_REQUEST=true",
-        "-e", "OAUTH2_PROXY_APPROVAL_PROMPT=",
-        "-e", f"OAUTH2_PROXY_WHITELIST_DOMAINS={safe_whitelist}",
-        "-e", "OAUTH2_PROXY_SKIP_PROVIDER_BUTTON=true",
-        "-e", "OAUTH2_PROXY_CODE_CHALLENGE_METHOD=S256",
-        "-e", "OAUTH2_PROXY_EMAIL_DOMAINS=*",
-        "-e", "OAUTH2_PROXY_INSECURE_OIDC_ALLOW_UNVERIFIED_EMAIL=true",
-        "-e", "OAUTH2_PROXY_USER_ID_CLAIM=preferred_username",
-        "-e", "OAUTH2_PROXY_SET_XAUTHREQUEST=true",
-        "-e", "OAUTH2_PROXY_PASS_ACCESS_TOKEN=true",
-        "-e", "OAUTH2_PROXY_PASS_AUTHORIZATION_HEADER=true",
-        "-e", "OAUTH2_PROXY_REVERSE_PROXY=true",
-        "-e", f"OAUTH2_PROXY_HTTP_ADDRESS=127.0.0.1:{GLOBAL_SSO_PORT}",
-        "quay.io/oauth2-proxy/oauth2-proxy:v7.6.0"
-    ]
+    # 4. 启动/维护混合 SSO 代理容器 (127.0.0.1:4180)
+    c_ok1, c_err1 = _ensure_single_sso_container(
+        container_name=GLOBAL_SSO_CONTAINER,
+        client_id=GLOBAL_SSO_CLIENT_ID,
+        client_secret=sec_hybrid,
+        port=GLOBAL_SSO_PORT,
+        cookie_secret=cookie_secret,
+        cookie_domains_str=cookie_domains_str,
+        safe_whitelist=safe_whitelist
+    )
+    if not c_ok1:
+        return False, c_err1
 
-    
-    rc, out, err_out = run_cmd_args(run_args)
-    if rc != 0:
-        # 漏洞#12 修复：日志脱敏，不直接打印可能含有 secret 的 err_out
-        safe_err = re.sub(r'(secret|password|key|token)=[^\s,\]]+', r'\1=***', err_out.strip(), flags=re.IGNORECASE)
-        log(f"全局 SSO 容器启动失败: {safe_err}")
-        return False, "SSO 容器启动失败，请查看系统日志"
-        
-    log(f"全局单一 SSO 代理服务已成功启动并就绪 (127.0.0.1:{GLOBAL_SSO_PORT})")
+    # 5. 启动/维护真·纯 Passkey 代理容器 (127.0.0.1:4181)
+    c_ok2, c_err2 = _ensure_single_sso_container(
+        container_name=GLOBAL_PASSKEY_SSO_CONTAINER,
+        client_id=GLOBAL_PASSKEY_SSO_CLIENT_ID,
+        client_secret=sec_passkey,
+        port=GLOBAL_PASSKEY_SSO_PORT,
+        cookie_secret=cookie_secret,
+        cookie_domains_str=cookie_domains_str,
+        safe_whitelist=safe_whitelist
+    )
+    if not c_ok2:
+        return False, c_err2
+
+    log("🎉 路径 B 双 SSO 代理池已全部就绪 (4180 混合池 + 4181 真·纯 Passkey 池)")
     return True, ""
 
 
@@ -1753,7 +1799,18 @@ def update_nginx_config(domain, oauth_port, target_host, target_port, auth_enabl
     
     target_host = target_host.strip() if target_host else "127.0.0.1"
     target_upstream = f"{target_host}:{target_port}"
-    sso_port = oauth_port or GLOBAL_SSO_PORT
+
+    all_data_for_site = load_data()
+    site_info = all_data_for_site.get(domain, {}) if isinstance(all_data_for_site, dict) else {}
+    allow_passkey = site_info.get('allow_passkey', True) is not False
+    allow_password = site_info.get('allow_password', True) is not False
+
+    if allow_passkey and not allow_password:
+        sso_port = GLOBAL_PASSKEY_SSO_PORT  # 4181 真·纯 Passkey 物理无密码代理池
+        client_for_logout = GLOBAL_PASSKEY_SSO_CLIENT_ID
+    else:
+        sso_port = oauth_port or GLOBAL_SSO_PORT  # 4180 混合/密码代理池
+        client_for_logout = GLOBAL_SSO_CLIENT_ID
         
     if not proxy_enabled:
         # 如果反代被关闭，返回 503 状态码
@@ -1805,7 +1862,7 @@ location ^~ / {
             ngx.header.content_type = "text/html; charset=utf-8"
             local host = ngx.var.host or ""
             local post_redir = "https://" .. host .. "/"
-            local kc_logout_target = "{kc_public_url}/realms/master/protocol/openid-connect/logout?client_id=global-sso&post_logout_redirect_uri=" .. ngx.escape_uri(post_redir)
+            local kc_logout_target = "{kc_public_url}/realms/master/protocol/openid-connect/logout?client_id={client_for_logout}&post_logout_redirect_uri=" .. ngx.escape_uri(post_redir)
             local sign_out_url = "/oauth2/sign_out?rd=" .. ngx.escape_uri(kc_logout_target)
             ngx.say([[<!DOCTYPE html>
 <html><head><meta charset="utf-8"><title>403 访问受限</title><meta name="viewport" content="width=device-width,initial-scale=1">
@@ -2526,13 +2583,18 @@ def api_create():
     if not allow_passkey and not allow_password:
         return json.dumps({"success": False, "error": "必须至少启用一种登录认证方式（Passkey 或密码）"})
 
+    is_pure_pk = allow_passkey and not allow_password
+    oauth_port = GLOBAL_PASSKEY_SSO_PORT if is_pure_pk else GLOBAL_SSO_PORT
+    client_id = GLOBAL_PASSKEY_SSO_CLIENT_ID if is_pure_pk else GLOBAL_SSO_CLIENT_ID
+    container_name = GLOBAL_PASSKEY_SSO_CONTAINER if is_pure_pk else GLOBAL_SSO_CONTAINER
+
     fresh_data = load_data()
     fresh_data[domain] = {
-        'client_id': GLOBAL_SSO_CLIENT_ID, 
-        'oauth_port': GLOBAL_SSO_PORT,
+        'client_id': client_id, 
+        'oauth_port': oauth_port,
         'target_host': target_host,
         'target_port': port,
-        'container_name': GLOBAL_SSO_CONTAINER, 
+        'container_name': container_name, 
         'created_at': datetime.now().isoformat(),
         'proxy_enabled': True,
         'ssl_enabled': check_domain_ssl_enabled(domain),
@@ -2543,8 +2605,8 @@ def api_create():
     save_data(fresh_data)
     sync_site_policy_to_keycloak_theme()
 
-    # 3. 极速生成 Nginx / OpenResty 反代配置（统一接入 127.0.0.1:4180）
-    conf = create_nginx_auth(domain, GLOBAL_SSO_PORT, target_host, port)
+    # 3. 极速生成 Nginx / OpenResty 反代配置（根据纯 Passkey 还是混合模式精准连接对应代理池端口）
+    conf = create_nginx_auth(domain, oauth_port, target_host, port)
     if conf:
         fresh_data[domain]['nginx_config'] = conf
         save_data(fresh_data)
@@ -2786,23 +2848,35 @@ def api_update_domain_auth_methods(domain):
     auth['allow_passkey'] = allow_passkey
     auth['allow_password'] = allow_password
 
+    is_pure_pk = allow_passkey and not allow_password
+    oauth_port = GLOBAL_PASSKEY_SSO_PORT if is_pure_pk else GLOBAL_SSO_PORT
+    client_id = GLOBAL_PASSKEY_SSO_CLIENT_ID if is_pure_pk else GLOBAL_SSO_CLIENT_ID
+    container_name = GLOBAL_PASSKEY_SSO_CONTAINER if is_pure_pk else GLOBAL_SSO_CONTAINER
+
+    auth['oauth_port'] = oauth_port
+    auth['client_id'] = client_id
+    auth['container_name'] = container_name
+
     target_host = auth.get('target_host', '127.0.0.1')
     target_port = auth.get('target_port', 80)
-    oauth_port = auth.get('oauth_port', GLOBAL_SSO_PORT)
     auth_enabled = auth.get('auth_enabled', True)
     proxy_enabled = auth.get('proxy_enabled', True)
 
     save_data(data)
     sync_site_policy_to_keycloak_theme()
+    # 动态同步双 SSO 代理池白名单与容器
+    ensure_global_sso_container()
+
     new_conf = update_nginx_config(domain, oauth_port, target_host, target_port, auth_enabled, proxy_enabled)
     if new_conf:
         auth['nginx_config'] = new_conf
         save_data(data)
-        log(f"域名 {domain} 登录方式策略已更新 (Passkey: {allow_passkey}, Password: {allow_password})")
+        log(f"域名 {domain} 登录方式策略已更新 (Passkey: {allow_passkey}, Password: {allow_password}, Port: {oauth_port})")
         return jsonify({
             "success": True,
             "allow_passkey": allow_passkey,
             "allow_password": allow_password,
+            "oauth_port": oauth_port,
             "nginx_config": new_conf
         })
 
