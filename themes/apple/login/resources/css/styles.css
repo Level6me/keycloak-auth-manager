@@ -313,6 +313,36 @@ a#try-another-way {
     cursor: pointer !important;
 }
 
+/* 混合模式分隔线 */
+.passkey-divider {
+    display: flex;
+    align-items: center;
+    text-align: center;
+    margin: 20px 0 16px 0;
+    color: #86868b;
+    font-size: 13px;
+    font-weight: 500;
+}
+.passkey-divider::before,
+.passkey-divider::after {
+    content: '';
+    flex: 1;
+    border-bottom: 1px solid rgba(0, 0, 0, 0.12);
+}
+.passkey-divider span {
+    padding: 0 12px;
+}
+[data-theme="dark"] .passkey-divider::before,
+[data-theme="dark"] .passkey-divider::after {
+    border-bottom-color: rgba(255, 255, 255, 0.18);
+}
+
+.passkey-hero-button:hover {
+    background-color: rgba(0, 113, 227, 0.15) !important;
+    border-color: #0071e3 !important;
+    box-shadow: 0 4px 12px rgba(0, 113, 227, 0.15) !important;
+}
+
 #kc-select-try-another-way-form a:hover,
 a#try-another-way:hover {
     background-color: rgba(0, 113, 227, 0.08) !important;

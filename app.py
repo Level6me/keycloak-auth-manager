@@ -2430,6 +2430,7 @@ def api_create():
         'allow_password': allow_password
     }
     save_data(fresh_data)
+    sync_site_policy_to_keycloak_theme()
 
     # 3. 极速生成 Nginx / OpenResty 反代配置（统一接入 127.0.0.1:4180）
     conf = create_nginx_auth(domain, GLOBAL_SSO_PORT, target_host, port)
@@ -2547,6 +2548,7 @@ def delete(domain):
     # 1. 优先立即从持久化数据中移除并保存，确保状态即刻生效
     del data[domain]
     save_data(data)
+    sync_site_policy_to_keycloak_theme()
     log(f"域名 {domain} 已立即从配置文件中移除保存")
     
     # 2. 清理 Nginx 反代配置
@@ -3051,6 +3053,7 @@ def init_background_startup_checks():
             # 1. 确保 Keycloak Passkey 认证流与 User Profile allowed_sites 属性支持
             setup_keycloak_passkey_flow()
             ensure_keycloak_user_profile_allowed_sites()
+            sync_site_policy_to_keycloak_theme()
             
             # 2. 如果存在已配置的站点，确保全局 SSO 代理服务与 OpenResty 站点配置保持最新
             data = load_data()
