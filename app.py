@@ -949,6 +949,27 @@ def setup_keycloak_adaptive_sso_flow():
         api_base = f"{active_base}/admin/realms/master"
         auth_api = f"{api_base}/authentication"
 
+        # 1.1 自动优化 Realm 级别的 WebAuthn Passwordless 跨子域名单点登录策略
+        try:
+            kc_host = KEYCLOAK_URL.split("://")[-1].split("/")[0].split(":")[0]
+            parts = kc_host.split(".")
+            root_domain = ".".join(parts[-2:]) if len(parts) >= 2 else kc_host
+            realm_update = {
+                "webAuthnPolicyPasswordlessRpEntityName": "ABAB Auth Manager",
+                "webAuthnPolicyPasswordlessRpId": root_domain,
+                "webAuthnPolicyPasswordlessRequireResidentKey": "Yes",
+                "webAuthnPolicyPasswordlessUserVerificationRequirement": "preferred",
+                "webAuthnPolicyPasswordlessSignatureAlgorithms": ["ES256", "RS256", "EdDSA"],
+                "webAuthnPolicyRpEntityName": "ABAB Auth Manager",
+                "webAuthnPolicyRpId": root_domain,
+                "webAuthnPolicyRequireResidentKey": "Yes",
+                "webAuthnPolicyUserVerificationRequirement": "preferred",
+                "webAuthnPolicySignatureAlgorithms": ["ES256", "RS256", "EdDSA"],
+            }
+            requests.put(api_base, headers=headers, json=realm_update, timeout=6)
+        except Exception as ex:
+            log(f"自动配置 WebAuthn 策略警告: {ex}")
+
         # 2. 强制注册时绑定 Passkey Required Action
         req_actions_url = f"{auth_api}/required-actions"
         actions_res = requests.get(req_actions_url, headers=headers, timeout=6)
