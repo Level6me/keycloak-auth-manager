@@ -430,7 +430,23 @@
         }
     }
 
+    function fixPageBrandTitle() {
+        try {
+            if (document.title && document.title.includes("Keycloak")) {
+                document.title = document.title.replace(/Keycloak/g, "Auth").replace(/登录到 Auth/g, "Auth 登录");
+            }
+            const headerWrapper = document.getElementById("kc-header-wrapper");
+            if (headerWrapper) {
+                const txt = headerWrapper.innerText.trim().toLowerCase();
+                if (txt === "keycloak" || txt === "master" || txt === "") {
+                    headerWrapper.innerText = "Auth";
+                }
+            }
+        } catch (e) {}
+    }
+
     function onInit() {
+        fixPageBrandTitle();
         fixPasswordEyeStyle();
         initPolicyAndPasskey();
     }
