@@ -72,23 +72,62 @@
 
     async function initPolicyAndPasskey() {
         const domain = getTargetDomain();
-        const policy = await fetchSitePolicy();
-        const domainPolicy = policy[domain] || { allow_passkey: true, allow_password: true };
-        const allowPasskey = domainPolicy.allow_passkey !== false;
-        const allowPassword = domainPolicy.allow_password !== false;
-
         const tryAnotherLink = document.getElementById("try-another-way");
         const tryAnotherForm = document.getElementById("kc-select-try-another-way-form");
         const isPasswordPage = !!document.getElementById("kc-form-login");
         const isWebAuthnPage = !!document.getElementById("kc-form-webauthn");
 
+        // 1. 优先立即同步将 Passkey 按钮就绪（默认混合模式），杜绝异步 fetch 导致的页面视觉迟滞与跳动
+        if (isPasswordPage && tryAnotherLink && tryAnotherForm) {
+            const usernameInput = document.getElementById("username");
+            if (usernameInput) {
+                usernameInput.setAttribute("autocomplete", "username webauthn");
+            }
+            const loginForm = document.getElementById("kc-form-login");
+            if (loginForm && !document.getElementById("passkey-mixed-divider")) {
+                const divider = document.createElement("div");
+                divider.id = "passkey-mixed-divider";
+                divider.className = "passkey-divider";
+                divider.innerHTML = "<span>或</span>";
+                loginForm.parentNode.insertBefore(divider, loginForm.nextSibling);
+                divider.parentNode.insertBefore(tryAnotherForm, divider.nextSibling);
+            }
+            tryAnotherForm.style.display = "block";
+            tryAnotherForm.style.marginTop = "0";
+            tryAnotherForm.style.marginBottom = "16px";
+            tryAnotherForm.style.width = "100%";
+
+            tryAnotherLink.innerHTML = "🔑 使用 Passkey 一键免密登录";
+            tryAnotherLink.className = "passkey-hero-button";
+            tryAnotherLink.style.display = "flex";
+            tryAnotherLink.style.alignItems = "center";
+            tryAnotherLink.style.justifyContent = "center";
+            tryAnotherLink.style.width = "100%";
+            tryAnotherLink.style.height = "50px";
+            tryAnotherLink.style.boxSizing = "border-box";
+            tryAnotherLink.style.borderRadius = "14px";
+            tryAnotherLink.style.background = "rgba(0, 113, 227, 0.08)";
+            tryAnotherLink.style.border = "1.5px solid rgba(0, 113, 227, 0.35)";
+            tryAnotherLink.style.color = "#0071e3";
+            tryAnotherLink.style.fontSize = "15px";
+            tryAnotherLink.style.fontWeight = "600";
+            tryAnotherLink.style.textDecoration = "none";
+            tryAnotherLink.style.cursor = "pointer";
+            tryAnotherLink.style.transition = "all 0.2s ease";
+        }
+
+        // 2. 异步获取站点专属策略（纯密码 / 纯 Passkey 场景精确处理）
+        const policy = await fetchSitePolicy();
+        const domainPolicy = policy[domain] || { allow_passkey: true, allow_password: true };
+        const allowPasskey = domainPolicy.allow_passkey !== false;
+        const allowPassword = domainPolicy.allow_password !== false;
+
         // 场景 1: 该站点禁用了 Passkey 认证（纯密码登录模式）
         if (!allowPasskey && allowPassword) {
-            // 隐藏「换一种方式」入口，防止用户绕过限制切换到 Passkey
+            const divider = document.getElementById("passkey-mixed-divider");
+            if (divider) divider.style.display = "none";
             if (tryAnotherForm) tryAnotherForm.style.display = "none";
             if (tryAnotherLink) tryAnotherLink.style.display = "none";
-            // 若因异常直接落在 WebAuthn 页面，需要将密码输入框显示出来
-            // （这种情况极少，但保险起见隐藏 WebAuthn 相关 UI）
             if (isWebAuthnPage) {
                 const webauthnForm = document.getElementById("kc-form-webauthn");
                 if (webauthnForm) webauthnForm.style.display = "none";
@@ -167,46 +206,6 @@
 
         // 场景 3: 两种方式均开启 (混合免密自适应模式)
         if (isPasswordPage && tryAnotherLink && tryAnotherForm) {
-            // 1. 为用户名输入框启用 WebAuthn Conditional Autofill
-            const usernameInput = document.getElementById("username");
-            if (usernameInput) {
-                usernameInput.setAttribute("autocomplete", "username webauthn");
-            }
-
-            // 2. 插入分割线并将 Passkey 登录渲染为醒目的大按钮
-            const loginForm = document.getElementById("kc-form-login");
-            if (loginForm && !document.getElementById("passkey-mixed-divider")) {
-                const divider = document.createElement("div");
-                divider.id = "passkey-mixed-divider";
-                divider.className = "passkey-divider";
-                divider.innerHTML = "<span>或</span>";
-                loginForm.parentNode.insertBefore(divider, loginForm.nextSibling);
-                divider.parentNode.insertBefore(tryAnotherForm, divider.nextSibling);
-            }
-
-            tryAnotherForm.style.display = "block";
-            tryAnotherForm.style.marginTop = "0";
-            tryAnotherForm.style.marginBottom = "16px";
-            tryAnotherForm.style.width = "100%";
-
-            tryAnotherLink.innerHTML = "🔑 使用 Passkey 一键免密登录";
-            tryAnotherLink.className = "passkey-hero-button";
-            tryAnotherLink.style.display = "flex";
-            tryAnotherLink.style.alignItems = "center";
-            tryAnotherLink.style.justifyContent = "center";
-            tryAnotherLink.style.width = "100%";
-            tryAnotherLink.style.height = "50px";
-            tryAnotherLink.style.boxSizing = "border-box";
-            tryAnotherLink.style.borderRadius = "14px";
-            tryAnotherLink.style.background = "rgba(0, 113, 227, 0.08)";
-            tryAnotherLink.style.border = "1.5px solid rgba(0, 113, 227, 0.35)";
-            tryAnotherLink.style.color = "#0071e3";
-            tryAnotherLink.style.fontSize = "15px";
-            tryAnotherLink.style.fontWeight = "600";
-            tryAnotherLink.style.textDecoration = "none";
-            tryAnotherLink.style.cursor = "pointer";
-            tryAnotherLink.style.transition = "all 0.2s ease";
-
             tryAnotherLink.onclick = async function(e) {
                 e.preventDefault();
                 e.stopPropagation();
