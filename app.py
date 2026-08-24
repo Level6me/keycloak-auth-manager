@@ -282,18 +282,25 @@ try:
         app.secret_key = f.read().strip()
 except Exception as e:
     print(f"警告: 无法读取持久化 secret_key，使用随机密钥 ({e})")
-    app.secret_key = secrets.token_hex(32)
+# Session Cookie 安全配置（HttpOnly + SameSite 防劫持）
+app.config['SESSION_COOKIE_HTTPONLY'] = True
+app.config['SESSION_COOKIE_SAMESITE'] = 'Lax'
+
+def _is_request_https():
+    """判断当前请求是否运行在 HTTPS / TLS 之下（支持直接 TLS 或反代 X-Forwarded-Proto 协议头）"""
+    return request.is_secure or request.headers.get('X-Forwarded-Proto', '').lower() == 'https'
 
 @app.after_request
 def set_csrf_cookie(response):
     """将 CSRF token 设置为非 HttpOnly Cookie，供前端 JS 读取并在 POST 请求中附带（Double Submit Cookie 模式）"""
     if session.get('logged_in') and session.get('csrf_token'):
+        is_https = _is_request_https()
         response.set_cookie(
             'csrf_token',
             session['csrf_token'],
             samesite='Strict',
-            httponly=False,   # 必须允许 JS 读取才能实现 Double Submit Cookie
-            secure=False      # 生产环境建议改为 True（需要 HTTPS）
+            httponly=False,   # 允许前端 JS 读取
+            secure=is_https   # 自适应：HTTPS 环境下强制启用 Secure 属性（修复B4）
         )
     return response
 

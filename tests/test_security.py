@@ -149,5 +149,11 @@ class SecurityRegressionTestSuite(unittest.TestCase):
                 os.remove(tmp_path3)
             app.CONFIG_FILE = original_config_file
 
+    def test_root_domain_extraction(self):
+        """验证 A6: 根域名自适应提取"""
+        self.assertEqual(get_root_domain("ips.abab.pw"), ".abab.pw")
+        self.assertEqual(get_root_domain("app.service.example.org"), ".example.org")
+        self.assertEqual(get_root_domain("example.com"), ".example.com")
+
 if __name__ == "__main__":
     unittest.main()
