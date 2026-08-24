@@ -155,5 +155,28 @@ class SecurityRegressionTestSuite(unittest.TestCase):
         self.assertEqual(get_root_domain("app.service.example.org"), ".example.org")
         self.assertEqual(get_root_domain("example.com"), ".example.com")
 
+    def test_path_b_sso_port_routing(self):
+        """验证路径 B: 纯 Passkey 站点分流至 4181，混合/密码站点分流至 4180"""
+        from app import get_domain_sso_port, GLOBAL_SSO_PORT, GLOBAL_PASSKEY_SSO_PORT
+
+        # 纯 Passkey 站点 (仅 Passkey，无密码)
+        pure_passkey_site = {"allow_passkey": True, "allow_password": False}
+        self.assertEqual(get_domain_sso_port(pure_passkey_site), GLOBAL_PASSKEY_SSO_PORT)
+        self.assertEqual(get_domain_sso_port(pure_passkey_site), 4181)
+
+        # 混合站点 (同时允许 Passkey 和密码)
+        hybrid_site = {"allow_passkey": True, "allow_password": True}
+        self.assertEqual(get_domain_sso_port(hybrid_site), GLOBAL_SSO_PORT)
+        self.assertEqual(get_domain_sso_port(hybrid_site), 4180)
+
+        # 纯密码站点 (仅密码)
+        password_only_site = {"allow_passkey": False, "allow_password": True}
+        self.assertEqual(get_domain_sso_port(password_only_site), GLOBAL_SSO_PORT)
+        self.assertEqual(get_domain_sso_port(password_only_site), 4180)
+
+        # 默认缺省值
+        default_site = {}
+        self.assertEqual(get_domain_sso_port(default_site), GLOBAL_SSO_PORT)
+
 if __name__ == "__main__":
     unittest.main()
