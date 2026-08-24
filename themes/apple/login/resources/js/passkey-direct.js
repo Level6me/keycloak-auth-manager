@@ -197,9 +197,11 @@
                     console.warn("纯 Passkey 模式：当前页面未找到 tryAnotherForm，无法自动跳转");
                 }
             } else if (isWebAuthnPage) {
-                // 在 Passkey 界面：彻底隐藏「切换至密码」入口，保持纯净 Passkey 页面
-                if (tryAnotherForm) tryAnotherForm.style.display = "none";
-                if (tryAnotherLink) tryAnotherLink.style.display = "none";
+                // 在单一 Passkey 认证界面：彻底移除「尝试其他方法 / 切换至密码」入口，保持纯净 Passkey 页面
+                const tryForm = document.getElementById("kc-select-try-another-way-form");
+                const tryLink = document.getElementById("try-another-way");
+                if (tryForm) tryForm.remove ? tryForm.remove() : (tryForm.style.display = "none");
+                if (tryLink) tryLink.remove ? tryLink.remove() : (tryLink.style.display = "none");
             }
             return;
         }
@@ -323,7 +325,7 @@
                     tryAnotherLink.style.opacity = "1";
                 }
             };
-        } else if (isWebAuthnPage && tryAnotherLink && tryAnotherForm) {
+        } else if (isWebAuthnPage && allowPassword && tryAnotherLink && tryAnotherForm) {
             tryAnotherLink.innerHTML = "🔒 切换为账号密码登录";
             tryAnotherLink.className = "passkey-switch-button";
             tryAnotherLink.style.display = "flex";
