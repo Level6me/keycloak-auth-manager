@@ -955,6 +955,8 @@ def setup_keycloak_adaptive_sso_flow():
             parts = kc_host.split(".")
             root_domain = ".".join(parts[-2:]) if len(parts) >= 2 else kc_host
             realm_update = {
+                "displayName": "Auth",
+                "displayNameHtml": "Auth",
                 "webAuthnPolicyPasswordlessRpEntityName": "ABAB Auth Manager",
                 "webAuthnPolicyPasswordlessRpId": root_domain,
                 "webAuthnPolicyPasswordlessRequireResidentKey": "Yes",
