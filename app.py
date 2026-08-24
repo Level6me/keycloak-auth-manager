@@ -78,18 +78,33 @@ CLOUDFLARE_PROXIED = False
 _CACHED_PUBLIC_IP = None
 _CACHED_PUBLIC_IP_TIME = 0
 
-# ─── 漏洞#10 修复：登录速率限制（防暴力破解）───
+# ─── 数据与并发线程安全锁 ───
+_data_lock = threading.RLock()
 _login_fail_lock = threading.Lock()
 _login_fail_records = defaultdict(list)   # {ip: [timestamp, ...]}
 LOGIN_RATE_WINDOW = 300   # 5 分钟滑动窗口
 LOGIN_RATE_MAX_FAIL = 10  # 窗口内最多失败 10 次
 
 def _get_client_ip():
-    """获取真实客户端 IP（兼容反代场景）"""
-    xff = request.headers.get('X-Forwarded-For', '')
-    if xff:
-        return xff.split(',')[0].strip()
-    return request.remote_addr or '0.0.0.0'
+    """安全获取真实客户端 IP：仅在来自受信任反代网段时才采信 X-Forwarded-For，直连时强制读取 remote_addr（修复S6）"""
+    remote = (request.remote_addr or '0.0.0.0').strip()
+    trusted_proxies = ('127.0.0.1', '::1', 'localhost')
+    is_trusted = (
+        remote in trusted_proxies or
+        remote.startswith('10.') or
+        remote.startswith('192.168.') or
+        (remote.startswith('172.') and len(remote.split('.')) >= 2 and remote.split('.')[1].isdigit() and 16 <= int(remote.split('.')[1]) <= 31)
+    )
+    if is_trusted:
+        xff = request.headers.get('X-Forwarded-For', '')
+        if xff:
+            client_ip = xff.split(',')[0].strip()
+            if client_ip:
+                return client_ip
+        x_real = request.headers.get('X-Real-IP', '')
+        if x_real:
+            return x_real.strip()
+    return remote
 
 def _is_rate_limited(ip):
     now = time.time()
@@ -108,14 +123,26 @@ def _reset_fail(ip):
     with _login_fail_lock:
         _login_fail_records.pop(ip, None)
 
-# ─── 漏洞#11 修复：域名格式白名单正则（防路径遍历 → 任意文件写入）───
+# ─── 域名与目标主机格式白名单校验（防路径遍历、任意文件写与 Nginx 注入，修复S7/S8）───
 DOMAIN_RE = re.compile(r'^[a-z0-9]([a-z0-9\-\.]{0,253}[a-z0-9])?$')
 
 def is_valid_domain(domain):
     """严格校验域名格式，防止路径遍历攻击"""
     if not domain or '..' in domain or '/' in domain or '\\' in domain:
         return False
-    return bool(DOMAIN_RE.match(domain))
+    return bool(DOMAIN_RE.match(str(domain).strip().lower()))
+
+def is_valid_target_host(host):
+    """严格校验后端目标主机格式，严禁注入换行、分号、括号等 Nginx 指令（修复S8）"""
+    if not host:
+        return False
+    h = str(host).strip()
+    if any(c in h for c in ['\n', '\r', ';', '{', '}', ' ', '\t', '"', "'", '\\', '$']):
+        return False
+    # 支持 127.0.0.1, localhost, 合法 IPv4/IPv6, 合法域名
+    if h == "localhost" or re.match(r'^\d{1,3}(\.\d{1,3}){3}$', h) or DOMAIN_RE.match(h):
+        return True
+    return False
 
 
 def get_server_public_ip():
@@ -253,20 +280,29 @@ def set_csrf_cookie(response):
 
 @app.before_request
 def check_auth():
-    # 静态资源与认证白名单
-    allowed_paths = ['/login', '/static', '/favicon.ico', '/favicon.svg']
-    if any(request.path == p or request.path.startswith(p + '/') or request.path.startswith('/static/') for p in allowed_paths):
+    # 静态资源放行
+    if request.path.startswith('/static/') or request.path in ('/favicon.ico', '/favicon.svg'):
         return None
 
-    # ─── 漏洞#1 修复：无密码时禁止所有写操作（POST/PUT/DELETE），GET 只读允许 ───
+    # ─── 漏洞 S1 彻底封堵：系统未初始化管理密码时，强制阻断所有数据接口与页面，仅允许访问初始化向导 ───
     if not ADMIN_PASSWORD:
-        if request.method in ('POST', 'PUT', 'DELETE', 'PATCH'):
-            if request.path.startswith('/api/'):
-                return Response(json.dumps({"success": False, "error": "控制台尚未设置密码，写操作已禁用，请先前往 /settings 设置控制台密码", "code": 403}),
-                                status=403, mimetype="application/json")
-            flash("⚠️ 安全警告：控制台尚未设置管理密码，所有写操作已禁用。请立即前往「系统设置」页面设置密码。", "danger")
-            return redirect(url_for('settings'))
-        # 未设密码时 GET 只读请求仍然放行（便于首次配置）
+        if request.path in ('/init_password', '/api/init_password'):
+            return None
+        if request.path.startswith('/api/'):
+            return Response(json.dumps({
+                "success": False,
+                "error": "控制台尚未初始化管理密码，所有数据接口已安全锁定。请先访问控制台完成首次密码初始化。",
+                "code": 403,
+                "need_init": True
+            }), status=403, mimetype="application/json")
+        return redirect(url_for('init_password_page'))
+
+    # 已设密码但访问初始化页面，自动跳转登录
+    if request.path in ('/init_password', '/api/init_password'):
+        return redirect(url_for('login_page'))
+
+    # 登录页放行
+    if request.path == '/login':
         return None
 
     # 检查 session 登录态
@@ -285,9 +321,9 @@ def check_auth():
                 return redirect(url_for('index'))
         return None
 
-    # 检查 HTTP Basic Auth（支持自动化脚本，同样受速率限制保护）
+    # 检查 HTTP Basic Auth（必须在 ADMIN_PASSWORD 存在且非空时才允许匹配）
     auth_header = request.headers.get("Authorization", "")
-    if auth_header.startswith("Basic "):
+    if auth_header.startswith("Basic ") and ADMIN_PASSWORD:
         client_ip = _get_client_ip()
         if _is_rate_limited(client_ip):
             return Response(json.dumps({"success": False, "error": "登录尝试过于频繁，请 5 分钟后再试", "code": 429}),
@@ -295,7 +331,7 @@ def check_auth():
         try:
             auth_decoded = base64.b64decode(auth_header[6:]).decode("utf-8")
             u, p = auth_decoded.split(":", 1)
-            if u == ADMIN_USERNAME and p == ADMIN_PASSWORD:
+            if u == ADMIN_USERNAME and p == ADMIN_PASSWORD and len(p) > 0:
                 _reset_fail(client_ip)
                 session['logged_in'] = True
                 session['user'] = ADMIN_USERNAME
@@ -326,8 +362,83 @@ def _safe_redirect_url(next_url):
         return '/'
     return next_url
 
+@app.route('/init_password', methods=['GET', 'POST'])
+def init_password_page():
+    global ADMIN_PASSWORD
+    if ADMIN_PASSWORD:
+        return redirect(url_for('login_page'))
+
+    if request.method == 'POST':
+        pwd = request.form.get('password', '').strip()
+        pwd_confirm = request.form.get('password_confirm', '').strip()
+        if not pwd or len(pwd) < 6:
+            flash("管理员密码长度至少需要 6 个字符", "danger")
+            return render_template('init_password.html')
+        if pwd != pwd_confirm:
+            flash("两次输入的密码不一致", "danger")
+            return render_template('init_password.html')
+
+        with _data_lock:
+            cfg = {}
+            if os.path.exists(CONFIG_FILE):
+                try:
+                    with open(CONFIG_FILE, 'r') as f:
+                        cfg = json.load(f)
+                except Exception:
+                    pass
+            cfg['admin_password'] = encrypt_val(pwd)
+            with open(CONFIG_FILE, 'w') as f:
+                json.dump(cfg, f, indent=2)
+            os.chmod(CONFIG_FILE, 0o600)
+            load_config()
+
+        session['logged_in'] = True
+        session['user'] = ADMIN_USERNAME
+        session['csrf_token'] = secrets.token_hex(32)
+        flash("管理员密码初始化成功！欢迎使用 Keycloak Auth Manager", "success")
+        return redirect('/')
+
+    return render_template('init_password.html')
+
+@app.route('/api/init_password', methods=['POST'])
+def api_init_password():
+    global ADMIN_PASSWORD
+    if ADMIN_PASSWORD:
+        return json.dumps({"success": False, "error": "系统已初始化管理密码，禁止重复初始化"})
+
+    req_data = request.get_json(silent=True) or request.form
+    pwd = (req_data.get('password') or '').strip()
+    pwd_confirm = (req_data.get('password_confirm') or '').strip()
+
+    if not pwd or len(pwd) < 6:
+        return json.dumps({"success": False, "error": "密码长度至少需 6 个字符"})
+    if pwd != pwd_confirm:
+        return json.dumps({"success": False, "error": "两次输入的密码不一致"})
+
+    with _data_lock:
+        cfg = {}
+        if os.path.exists(CONFIG_FILE):
+            try:
+                with open(CONFIG_FILE, 'r') as f:
+                    cfg = json.load(f)
+            except Exception:
+                pass
+        cfg['admin_password'] = encrypt_val(pwd)
+        with open(CONFIG_FILE, 'w') as f:
+            json.dump(cfg, f, indent=2)
+        os.chmod(CONFIG_FILE, 0o600)
+        load_config()
+
+    session['logged_in'] = True
+    session['user'] = ADMIN_USERNAME
+    session['csrf_token'] = secrets.token_hex(32)
+    return json.dumps({"success": True, "message": "管理员密码初始化成功"})
+
 @app.route('/login', methods=['GET', 'POST'])
 def login_page():
+    if not ADMIN_PASSWORD:
+        return redirect(url_for('init_password_page'))
+
     if request.method == 'POST':
         client_ip = _get_client_ip()
         # ─── 漏洞#10 修复：速率限制检查 ───
@@ -339,7 +450,7 @@ def login_page():
         pwd = request.form.get('password', '').strip()
         next_url = _safe_redirect_url(request.args.get('next', '/'))
 
-        if not ADMIN_PASSWORD or (user == ADMIN_USERNAME and pwd == ADMIN_PASSWORD):
+        if ADMIN_PASSWORD and user == ADMIN_USERNAME and pwd == ADMIN_PASSWORD:
             _reset_fail(client_ip)
             session['logged_in'] = True
             session['user'] = ADMIN_USERNAME
@@ -418,75 +529,50 @@ def check_domain_ssl_enabled(domain):
     return False
 
 def load_data():
-    if os.path.exists(DATA_FILE):
-        try:
-            with open(DATA_FILE, 'r') as f:
-                data = json.load(f)
-            changed = False
-            for domain, auth in data.items():
-                if isinstance(auth, dict):
-                    if 'client_secret' in auth:
-                        auth['client_secret'] = decrypt_val(auth['client_secret'])
-                    if 'cookie_secret' in auth:
-                        auth['cookie_secret'] = decrypt_val(auth['cookie_secret'])
-                    
-                    # 默认状态注入与向前兼容
-                    if 'target_host' not in auth:
-                        auth['target_host'] = '127.0.0.1'
-                    if 'target_port' not in auth:
-                        t_port = auth.get('port')
-                        if not t_port:
-                            proxy_conf = get_proxy_conf_path(domain)
-                            if proxy_conf and os.path.exists(proxy_conf):
-                                try:
-                                    with open(proxy_conf, 'r') as pf:
-                                        content = pf.read()
-                                    oauth_port = str(auth.get('oauth_port', 4180))
-                                    matches = re.findall(r'proxy_pass http://([^:/;\s]+):([0-9]+);', content)
-                                    for h, p in matches:
-                                        if p != oauth_port:
-                                            auth['target_host'] = h
-                                            t_port = int(p)
-                                            break
-                                except Exception:
-                                    pass
-                        auth['target_port'] = t_port or 80
-                        changed = True
-
-                    if 'proxy_enabled' not in auth:
-                        auth['proxy_enabled'] = True
-                    if 'auth_enabled' not in auth:
-                        auth['auth_enabled'] = True
-                        
-                    # 动态精确校准 SSL 开启状态
-                    real_ssl = check_domain_ssl_enabled(domain)
-                    if auth.get('ssl_enabled') != real_ssl:
-                        auth['ssl_enabled'] = real_ssl
-                        changed = True
-            if changed:
-                save_data(data)
-            return data
-        except Exception as e:
-            print("加载数据失败:", str(e))
-    return {}
+    """线程安全、纯净无副作用的数据读取函数（修复A2/A3）"""
+    with _data_lock:
+        if os.path.exists(DATA_FILE):
+            try:
+                with open(DATA_FILE, 'r', encoding='utf-8') as f:
+                    data = json.load(f)
+                for domain, auth in data.items():
+                    if isinstance(auth, dict):
+                        if 'client_secret' in auth:
+                            auth['client_secret'] = decrypt_val(auth['client_secret'])
+                        if 'cookie_secret' in auth:
+                            auth['cookie_secret'] = decrypt_val(auth['cookie_secret'])
+                        if 'target_host' not in auth:
+                            auth['target_host'] = '127.0.0.1'
+                        if 'target_port' not in auth:
+                            auth['target_port'] = auth.get('port') or 80
+                        if 'proxy_enabled' not in auth:
+                            auth['proxy_enabled'] = True
+                        if 'auth_enabled' not in auth:
+                            auth['auth_enabled'] = True
+                return data
+            except Exception as e:
+                print("加载数据失败:", str(e))
+        return {}
 
 def save_data(data):
-    write_data = copy.deepcopy(data)
-    for domain, auth in write_data.items():
-        if isinstance(auth, dict):
-            if 'client_secret' in auth:
-                auth['client_secret'] = encrypt_val(auth['client_secret'])
-            if 'cookie_secret' in auth:
-                auth['cookie_secret'] = encrypt_val(auth['cookie_secret'])
-    try:
-        with open(DATA_FILE, 'w') as f:
-            json.dump(write_data, f, indent=2)
+    """线程安全、原子写入并设置 600 权限的数据保存函数（修复A2）"""
+    with _data_lock:
+        write_data = copy.deepcopy(data)
+        for domain, auth in write_data.items():
+            if isinstance(auth, dict):
+                if 'client_secret' in auth:
+                    auth['client_secret'] = encrypt_val(auth['client_secret'])
+                if 'cookie_secret' in auth:
+                    auth['cookie_secret'] = encrypt_val(auth['cookie_secret'])
         try:
-            os.chmod(DATA_FILE, 0o600)
-        except Exception:
-            pass
-    except Exception as e:
-        print("保存数据失败:", str(e))
+            with open(DATA_FILE, 'w', encoding='utf-8') as f:
+                json.dump(write_data, f, indent=2)
+            try:
+                os.chmod(DATA_FILE, 0o600)
+            except Exception:
+                pass
+        except Exception as e:
+            print("保存数据失败:", str(e))
 
 def generate_secret(length=32):
     return ''.join(secrets.choice(string.ascii_letters + string.digits) for _ in range(length))
@@ -1177,21 +1263,29 @@ def get_all_cookie_and_whitelist_domains(data=None, extra_domain=None):
     except Exception:
         pass
 
-    # 默认兜底
+    # 默认兜底：若暂未配置任何站点，从 Keycloak 域名中提取根域，不再硬编码特定域名（修复A6）
     if not cookie_domains:
-        cookie_domains.add(".abab.pw")
-        whitelist_domains.add("*.abab.pw")
-        whitelist_domains.add("abab.pw")
-        
+        try:
+            _, _, kc_url = get_keycloak_admin_credentials()
+            if kc_url and "://" in kc_url:
+                kc_host = kc_url.split("://", 1)[1].split("/")[0].split(":")[0].strip().lower()
+                kc_rd = get_root_domain(kc_host)
+                if kc_rd:
+                    cookie_domains.add(kc_rd)
+                    whitelist_domains.add(f"*{kc_rd}")
+                    whitelist_domains.add(kc_rd.lstrip('.'))
+        except Exception:
+            pass
+
     return ",".join(sorted(list(cookie_domains))), ",".join(sorted(list(whitelist_domains)))
 
 
 def ensure_global_sso_client(client_secret=None, extra_domain=None):
-    """确保 Keycloak 中存在通配且绑定 Passkey 认证流的全局 global-sso 客户端"""
+    """确保 Keycloak 中存在精确匹配且绑定 Passkey 认证流的全局 global-sso 客户端（修复S3：移除裸 *）"""
     admin_user, admin_pass, kc_issuer_base = get_keycloak_admin_credentials()
     if not admin_pass:
         return False, "未获取到 Keycloak 管理员密码", ""
-        
+
     cfg = {}
     if os.path.exists(CONFIG_FILE):
         try:
@@ -1199,12 +1293,12 @@ def ensure_global_sso_client(client_secret=None, extra_domain=None):
                 cfg = json.load(f)
         except Exception:
             pass
-            
+
     if not client_secret:
         raw_sec = cfg.get("global_sso_client_secret", "")
         if raw_sec:
             client_secret = decrypt_val(raw_sec)
-            
+
     if not client_secret:
         client_secret = generate_secret(32)
         cfg["global_sso_client_secret"] = encrypt_val(client_secret)
@@ -1213,17 +1307,17 @@ def ensure_global_sso_client(client_secret=None, extra_domain=None):
                 json.dump(cfg, f, indent=2)
         except Exception:
             pass
-            
+
     # 确保 Passkey 自定义认证流就绪
     passkey_flow_id = setup_keycloak_passkey_flow()
-    
-    # 构建所有站点的 Redirect URIs 列表（必须包含 * 通配与具体站点 callback 路径，保证 Keycloak 严格匹配）
+
+    # 构建所有站点的 Redirect URIs 精确列表（修复S3：彻底去除裸 * 通配符，严格执行精确回调白名单）
     data = load_data()
     all_domains = list(data.keys())
     if extra_domain and extra_domain not in all_domains:
         all_domains.append(extra_domain)
-        
-    r_uris = ["*"]
+
+    r_uris = []
     for d in all_domains:
         d = d.strip().lower()
         if d:
@@ -1231,7 +1325,7 @@ def ensure_global_sso_client(client_secret=None, extra_domain=None):
             r_uris.append(f"http://{d}/oauth2/callback")
             r_uris.append(f"https://{d}/*")
             r_uris.append(f"http://{d}/*")
-            
+
     cookie_domains_str, _ = get_all_cookie_and_whitelist_domains(data, extra_domain=extra_domain)
     for rd in cookie_domains_str.split(','):
         rd = rd.strip().lstrip('.')
@@ -1240,8 +1334,8 @@ def ensure_global_sso_client(client_secret=None, extra_domain=None):
             r_uris.append(f"http://{rd}/oauth2/callback")
             r_uris.append(f"https://{rd}/*")
             r_uris.append(f"http://{rd}/*")
-            
-    unique_r_uris = list(set(r_uris))
+
+    unique_r_uris = sorted(list(set(filter(None, r_uris))))
     redirect_uris_json = json.dumps(unique_r_uris)
 
     # 优先通过 Keycloak Admin REST API 查找并更新/创建客户端
@@ -1256,7 +1350,7 @@ def ensure_global_sso_client(client_secret=None, extra_domain=None):
             "standardFlowEnabled": True,
             "directAccessGrantsEnabled": False,
             "redirectUris": unique_r_uris,
-            "webOrigins": ["+", "*"]
+            "webOrigins": ["+"]
         }
         if passkey_flow_id:
             client_payload["authenticationFlowBindingOverrides"] = {"browser": passkey_flow_id}
@@ -1658,7 +1752,13 @@ location ^~ / {
 
         access_check_lua = ""
         if not is_all_allowed and allowed_users:
-            lua_entries = ", ".join([f'["{u}"] = true' for u in allowed_users])
+            # 漏洞 S9 修复：对拼入 Lua 的用户名进行严格字符过滤与转义，杜绝引号/换行语法逃逸
+            clean_lua_entries = []
+            for u in allowed_users:
+                clean_u = re.sub(r'[^a-zA-Z0-9_\-@.]', '', str(u).strip())
+                if clean_u:
+                    clean_lua_entries.append(f'["{clean_u}"] = true')
+            lua_entries = ", ".join(clean_lua_entries)
             access_check_lua = f"""
     # 细粒度用户站点访问权限校验 (Access Control)
     access_by_lua_block {{
@@ -1778,9 +1878,6 @@ location ^~ / {
         return new_content
     except Exception as e:
         log(f"写入 OpenResty 反代配置失败: {e}")
-        return None
-
-        log(f"更新 Nginx 配置文件失败: {str(e)}")
         return None
 
 def ensure_openresty_site_conf(domain):
@@ -2393,9 +2490,11 @@ def api_create():
     
     if not domain or not port:
         return json.dumps({"success": False, "error": "域名和端口必填"})
-    # 漏洞#11 修复：严格校验 domain 格式，防止路径遍历 → 任意文件写入 RCE
+    # 漏洞 S7/S8 修复：严格校验 domain 与 target_host 格式
     if not is_valid_domain(domain):
         return json.dumps({"success": False, "error": "域名格式非法，仅允许合法的 DNS 域名（小写字母、数字、连字符和点）"})
+    if not is_valid_target_host(target_host):
+        return json.dumps({"success": False, "error": "目标主机格式非法，仅允许合法的 IP 地址或主机名，禁止包含分号、换行或特殊字符"})
     try:
         port = int(port)
         if not (1 <= port <= 65535):
@@ -2486,6 +2585,8 @@ def api_create():
 def api_apply_ssl():
     clear_logs()
     domain = request.form.get('domain', '').strip().lower()
+    if not is_valid_domain(domain):
+        return json.dumps({"success": False, "error": "域名格式非法"})
     acme_id = request.form.get('acme_id')
     dns_id = request.form.get('dns_id')
     
@@ -2499,6 +2600,9 @@ def api_apply_ssl():
 @app.route('/detail/<domain>')
 def detail(domain):
     domain = domain.strip().lower()
+    if not is_valid_domain(domain):
+        flash("域名格式非法", "danger")
+        return redirect(url_for('index'))
     data = load_data()
     if domain not in data:
         return redirect(url_for('index'))
@@ -2549,14 +2653,19 @@ def async_cleanup_domain_resources(client_id, container_name, domain):
 @app.route('/delete/<domain>', methods=['POST'])
 def delete(domain):
     domain = domain.strip().lower()
-    log(f"收到删除请求，domain: '{domain}'")
-    data = load_data()
-    
     is_ajax = (
         request.headers.get('X-Requested-With') == 'XMLHttpRequest' or
         'application/json' in request.headers.get('Accept', '') or
         request.is_json
     )
+    if not is_valid_domain(domain):
+        if is_ajax:
+            return jsonify({"success": False, "error": "域名格式非法"}), 400
+        flash("域名格式非法", "danger")
+        return redirect(url_for('index'))
+
+    log(f"收到删除请求，domain: '{domain}'")
+    data = load_data()
     
     if domain not in data: 
         log(f"域名 {domain} 不在数据中，直接返回成功")
@@ -2600,6 +2709,9 @@ def delete(domain):
 @app.route('/api/toggle/<domain>/<feature>', methods=['POST'])
 def api_toggle(domain, feature):
     domain = domain.strip().lower()
+    if not is_valid_domain(domain):
+        return json.dumps({"success": False, "error": "域名格式非法"}), 400
+
     enabled_str = request.form.get('enabled', 'false')
     enabled = enabled_str.lower() == 'true'
     
@@ -2668,6 +2780,9 @@ def api_toggle(domain, feature):
 @app.route('/api/domain/<domain>/auth_methods', methods=['POST'])
 def api_update_domain_auth_methods(domain):
     domain = domain.strip().lower()
+    if not is_valid_domain(domain):
+        return jsonify({"success": False, "error": "域名格式非法"}), 400
+
     data = load_data()
     if domain not in data:
         return jsonify({"success": False, "error": "域名配置不存在"})
