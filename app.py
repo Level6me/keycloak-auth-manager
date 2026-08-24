@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-import os, json, subprocess, secrets, string, time, re, hashlib, requests, threading, base64
+import os, json, subprocess, secrets, string, time, re, hashlib, requests, threading, base64, ipaddress
 import concurrent.futures
 from flask import Flask, render_template, request, redirect, url_for, flash, Response, stream_with_context, send_from_directory, session, jsonify
 from datetime import datetime
@@ -24,18 +24,19 @@ ENCRYPTION_KEY_FILE = "/opt/keycloak-auth-manager/encryption.key"
 CIPHER_AVAILABLE = False
 try:
     from cryptography.fernet import Fernet
-    if not os.path.exists(ENCRYPTION_KEY_FILE):
-        os.makedirs('/opt/keycloak-auth-manager', exist_ok=True)
+    _key_file = ENCRYPTION_KEY_FILE if os.access('/opt/keycloak-auth-manager', os.W_OK) or os.path.exists(ENCRYPTION_KEY_FILE) else '/tmp/test_encryption.key'
+    if not os.path.exists(_key_file):
+        os.makedirs(os.path.dirname(_key_file), exist_ok=True)
         key = Fernet.generate_key()
-        with open(ENCRYPTION_KEY_FILE, 'wb') as f:
+        with open(_key_file, 'wb') as f:
             f.write(key)
         try:
-            os.chmod(ENCRYPTION_KEY_FILE, 0o600)
+            os.chmod(_key_file, 0o600)
         except Exception:
             pass
 
-    if os.path.exists(ENCRYPTION_KEY_FILE):
-        with open(ENCRYPTION_KEY_FILE, 'rb') as f:
+    if os.path.exists(_key_file):
+        with open(_key_file, 'rb') as f:
             fernet_key = f.read().strip()
         cipher = Fernet(fernet_key)
         CIPHER_AVAILABLE = True
@@ -85,17 +86,22 @@ _login_fail_records = defaultdict(list)   # {ip: [timestamp, ...]}
 LOGIN_RATE_WINDOW = 300   # 5 分钟滑动窗口
 LOGIN_RATE_MAX_FAIL = 10  # 窗口内最多失败 10 次
 
+def _is_trusted_proxy_ip(ip_str):
+    """判定是否为受信任的反向代理来源（本地回环或内网私有网段）"""
+    if not ip_str or ip_str == '0.0.0.0':
+        return False
+    if ip_str in ('127.0.0.1', '::1', 'localhost'):
+        return True
+    try:
+        ip_obj = ipaddress.ip_address(ip_str)
+        return ip_obj.is_loopback or ip_obj.is_private
+    except Exception:
+        return False
+
 def _get_client_ip():
-    """安全获取真实客户端 IP：仅在来自受信任反代网段时才采信 X-Forwarded-For，直连时强制读取 remote_addr（修复S6）"""
+    """安全获取真实客户端 IP：仅在来自受信任反代网段时才采信 X-Forwarded-For，直连时强制读取 remote_addr（修复S6/N2）"""
     remote = (request.remote_addr or '0.0.0.0').strip()
-    trusted_proxies = ('127.0.0.1', '::1', 'localhost')
-    is_trusted = (
-        remote in trusted_proxies or
-        remote.startswith('10.') or
-        remote.startswith('192.168.') or
-        (remote.startswith('172.') and len(remote.split('.')) >= 2 and remote.split('.')[1].isdigit() and 16 <= int(remote.split('.')[1]) <= 31)
-    )
-    if is_trusted:
+    if _is_trusted_proxy_ip(remote):
         xff = request.headers.get('X-Forwarded-For', '')
         if xff:
             client_ip = xff.split(',')[0].strip()
@@ -123,26 +129,33 @@ def _reset_fail(ip):
     with _login_fail_lock:
         _login_fail_records.pop(ip, None)
 
-# ─── 域名与目标主机格式白名单校验（防路径遍历、任意文件写与 Nginx 注入，修复S7/S8）───
+# ─── 域名与目标主机格式白名单校验（防路径遍历、任意文件写与 Nginx 注入，修复S7/S8/N3）───
 DOMAIN_RE = re.compile(r'^[a-z0-9]([a-z0-9\-\.]{0,253}[a-z0-9])?$')
 
 def is_valid_domain(domain):
-    """严格校验域名格式，防止路径遍历攻击"""
-    if not domain or '..' in domain or '/' in domain or '\\' in domain:
+    """严格校验域名格式，防止路径遍历攻击与换行注入"""
+    if not domain or not isinstance(domain, str):
         return False
-    return bool(DOMAIN_RE.match(str(domain).strip().lower()))
+    if any(c in domain for c in ['\n', '\r', ' ', '\t', '/', '\\', '..', ';', '$', '`', '{', '}']):
+        return False
+    d = domain.strip().lower()
+    return bool(DOMAIN_RE.match(d))
 
 def is_valid_target_host(host):
-    """严格校验后端目标主机格式，严禁注入换行、分号、括号等 Nginx 指令（修复S8）"""
-    if not host:
+    """严格校验后端目标主机格式，支持合法域名、IPv4 及 IPv6，严禁注入换行或分号（修复S8/N3）"""
+    if not host or not isinstance(host, str):
         return False
-    h = str(host).strip()
-    if any(c in h for c in ['\n', '\r', ';', '{', '}', ' ', '\t', '"', "'", '\\', '$']):
+    # 优先在原始字符串上校验恶意字符（防止 strip 吞噬结尾换行/回车）
+    if any(c in host for c in ['\n', '\r', ';', '{', '}', ' ', '\t', '"', "'", '\\', '$', '`', '<', '>']):
         return False
-    # 支持 127.0.0.1, localhost, 合法 IPv4/IPv6, 合法域名
-    if h == "localhost" or re.match(r'^\d{1,3}(\.\d{1,3}){3}$', h) or DOMAIN_RE.match(h):
+    h = host.strip().strip("[]").lower()
+    if h == "localhost" or DOMAIN_RE.match(h):
         return True
-    return False
+    try:
+        ipaddress.ip_address(h)
+        return True
+    except ValueError:
+        return False
 
 
 def get_server_public_ip():
@@ -188,7 +201,8 @@ def load_config():
             
             raw_password = cfg.get("keycloak_password", "")
             raw_console_user = cfg.get("console_username", "admin").strip()
-            raw_console_pwd = cfg.get("console_password", "")
+            # 修复 N1：同时兼容读取 console_password 与 admin_password
+            raw_console_pwd = cfg.get("console_password", "") or cfg.get("admin_password", "")
             raw_api_key = cfg.get("onepanel_api_key", "")
             raw_cf_token = cfg.get("cloudflare_api_token", "")
             
@@ -221,6 +235,7 @@ def load_config():
                 need_rewrite = True
             if raw_console_pwd and not raw_console_pwd.startswith("gAAAA"):
                 cfg["console_password"] = encrypt_val(raw_console_pwd)
+                cfg["admin_password"] = encrypt_val(raw_console_pwd)
                 need_rewrite = True
             if raw_api_key and not raw_api_key.startswith("gAAAA"):
                 cfg["onepanel_api_key"] = encrypt_val(raw_api_key)
@@ -386,7 +401,9 @@ def init_password_page():
                         cfg = json.load(f)
                 except Exception:
                     pass
-            cfg['admin_password'] = encrypt_val(pwd)
+            enc_pwd = encrypt_val(pwd)
+            cfg['console_password'] = enc_pwd
+            cfg['admin_password'] = enc_pwd
             with open(CONFIG_FILE, 'w') as f:
                 json.dump(cfg, f, indent=2)
             os.chmod(CONFIG_FILE, 0o600)
@@ -423,7 +440,9 @@ def api_init_password():
                     cfg = json.load(f)
             except Exception:
                 pass
-        cfg['admin_password'] = encrypt_val(pwd)
+        enc_pwd = encrypt_val(pwd)
+        cfg['console_password'] = enc_pwd
+        cfg['admin_password'] = enc_pwd
         with open(CONFIG_FILE, 'w') as f:
             json.dump(cfg, f, indent=2)
         os.chmod(CONFIG_FILE, 0o600)
