@@ -3418,17 +3418,35 @@ def api_create_oidc_client():
     if code == 200 and isinstance(existing, list) and len(existing) > 0:
         return jsonify({"success": False, "error": f"Client ID '{client_id}' 已存在，请更换"}), 400
 
-    # 解析 Redirect URIs
-    r_uris = []
+    # 解析与智能扩展 Redirect URIs
+    r_uris = set()
     for line in re.split(r'[\r\n,]+', redirect_uris_raw):
         uri = line.strip()
         if uri:
             if not (uri.startswith("http://") or uri.startswith("https://")):
                 return jsonify({"success": False, "error": f"回调地址格式非法: '{uri}'（必须以 http:// 或 https:// 开头）"}), 400
-            r_uris.append(uri)
+            r_uris.add(uri)
+            # 智能补全通配符与根路径变体，防止漏写 /* 导致 Keycloak 抛出 invalid_redirect_uri
+            if uri.endswith('/'):
+                r_uris.add(uri + "*")
+                r_uris.add(uri.rstrip('/'))
+            elif not uri.endswith('*'):
+                r_uris.add(uri + "/*")
+                r_uris.add(uri + "/")
+            # 自动补全 http / https 互转
+            if uri.startswith("https://"):
+                r_uris.add("http://" + uri[8:])
+                if not uri.endswith('*'):
+                    r_uris.add("http://" + uri[8:].rstrip('/') + "/*")
+            elif uri.startswith("http://"):
+                r_uris.add("https://" + uri[7:])
+                if not uri.endswith('*'):
+                    r_uris.add("https://" + uri[7:].rstrip('/') + "/*")
 
     if not r_uris:
         return jsonify({"success": False, "error": "请至少填写一个合法的回调地址 (Redirect URI)"}), 400
+
+    unique_r_uris = sorted(list(r_uris))
 
     # 确定 Browser Flow 绑定
     flow_id = ""
@@ -3453,7 +3471,7 @@ def api_create_oidc_client():
         "protocol": "openid-connect",
         "standardFlowEnabled": True,
         "directAccessGrantsEnabled": True,
-        "redirectUris": r_uris,
+        "redirectUris": unique_r_uris,
         "webOrigins": ["+"]
     }
     if flow_id:
