@@ -1634,9 +1634,13 @@ function renderOidcClients(filterKeyword = '') {
                 </div>
             </div>
 
-            <div class="domain-actions" style="margin-top: auto; padding-top: 10px; border-top: 1px solid var(--border-subtle); display: flex; justify-content: space-between; align-items: center;">
-                <button class="btn secondary sm" onclick="openOidcGuideModal('${escapeHtml(c.client_id)}')" style="font-size: 12px; padding: 5px 12px;">📋 查看对接参数</button>
-                ${!isSys ? `<button class="btn danger sm" onclick="deleteOidcClientAjax('${escapeHtml(c.client_id)}', '${escapeHtml(c.name)}')" style="font-size: 12px; padding: 5px 10px;">🗑️ 删除</button>` : '<span style="font-size: 11px; color: var(--text-sec);">系统内置</span>'}
+            <div class="domain-actions" style="margin-top: auto; padding-top: 10px; border-top: 1px solid var(--border-subtle); display: flex; justify-content: space-between; align-items: center; gap: 6px;">
+                <button class="btn secondary sm" onclick="openOidcGuideModal('${escapeHtml(c.client_id)}')" style="font-size: 12px; padding: 5px 10px;">📋 参数</button>
+                ${!isSys ? `
+                <div style="display: inline-flex; gap: 6px;">
+                    <button class="btn sm" onclick="openEditOidcClientModal('${escapeHtml(c.client_id)}')" style="font-size: 12px; padding: 5px 10px;">✏️ 编辑</button>
+                    <button class="btn danger sm" onclick="deleteOidcClientAjax('${escapeHtml(c.client_id)}', '${escapeHtml(c.name)}')" style="font-size: 12px; padding: 5px 10px;">🗑️ 删除</button>
+                </div>` : '<span style="font-size: 11px; color: var(--text-sec);">系统内置</span>'}
             </div>
         </div>`;
     }).join('');
@@ -1659,6 +1663,98 @@ function openAddOidcClientModal() {
 function closeAddOidcClientModal() {
     const modal = document.getElementById('addOidcClientModal');
     if (modal) modal.classList.remove('active');
+}
+
+function openEditOidcClientModal(clientId) {
+    const client = cachedOidcClientsData.find(c => c.client_id === clientId);
+    if (!client) {
+        showToast('未找到该客户端信息', 'error');
+        return;
+    }
+    document.getElementById('edit_oidc_client_id_hidden').value = client.client_id;
+    document.getElementById('edit_oidc_client_id').value = client.client_id;
+    document.getElementById('edit_oidc_app_name').value = client.name || client.client_id;
+    document.getElementById('edit_oidc_auth_method').value = client.auth_method || 'hybrid';
+    document.getElementById('edit_oidc_redirect_uris').value = (client.redirect_uris || []).join('\n');
+    document.getElementById('edit_oidc_post_logout_uris').value = client.post_logout_redirect_uris || '+';
+    document.getElementById('edit_oidc_app_desc').value = client.description || '';
+
+    const modal = document.getElementById('editOidcClientModal');
+    if (modal) modal.classList.add('active');
+}
+
+function closeEditOidcClientModal() {
+    const modal = document.getElementById('editOidcClientModal');
+    if (modal) modal.classList.remove('active');
+}
+
+function autoFixClientRedirectUris() {
+    const textarea = document.getElementById('edit_oidc_redirect_uris');
+    if (!textarea) return;
+    const lines = textarea.value.split(/[\r\n]+/).map(s => s.trim()).filter(Boolean);
+    const added = new Set(lines);
+    for (const uri of lines) {
+        try {
+            const url = new URL(uri);
+            const origin = `${url.protocol}//${url.host}`;
+            added.add(`${origin}/*`);
+            added.add(`${origin}/`);
+        } catch (e) {}
+    }
+    textarea.value = Array.from(added).join('\n');
+    document.getElementById('edit_oidc_post_logout_uris').value = '+';
+    showToast('已自动补充根域通配符与注销白名单 (+)', 'success');
+}
+
+async function submitEditOidcClientForm(event) {
+    event.preventDefault();
+    const clientId = document.getElementById('edit_oidc_client_id_hidden').value.trim();
+    const name = document.getElementById('edit_oidc_app_name').value.trim();
+    const authMethod = document.getElementById('edit_oidc_auth_method').value;
+    const redirectUris = document.getElementById('edit_oidc_redirect_uris').value.trim();
+    const postLogoutUris = document.getElementById('edit_oidc_post_logout_uris').value.trim();
+    const description = document.getElementById('edit_oidc_app_desc').value.trim();
+
+    if (!name) {
+        showToast('请输入应用名称', 'error');
+        return;
+    }
+    if (!redirectUris) {
+        showToast('请至少填写一个回调地址', 'error');
+        return;
+    }
+
+    const btn = document.getElementById('btnSubmitEditOidcClient');
+    btn.disabled = true;
+    btn.innerHTML = '<span class="spinner-small"></span> 正在保存...';
+
+    const formData = new FormData();
+    formData.append('_csrf_token', getCsrfToken());
+    formData.append('name', name);
+    formData.append('auth_method', authMethod);
+    formData.append('redirect_uris', redirectUris);
+    formData.append('post_logout_redirect_uris', postLogoutUris || '+');
+    formData.append('description', description);
+
+    try {
+        const res = await fetch(`/api/oidc/clients/${encodeURIComponent(clientId)}`, {
+            method: 'PUT',
+            body: formData
+        });
+        const result = await res.json();
+        if (result.success) {
+            showToast(result.msg || '客户端配置已更新！', 'success');
+            closeEditOidcClientModal();
+            await loadOidcClientsAjax(true);
+        } else {
+            showToast(result.error || '保存失败', 'error');
+        }
+    } catch (e) {
+        showToast('网络通信异常', 'error');
+    } finally {
+        btn.disabled = false;
+        btn.innerHTML = '💾 保存配置';
+    }
 }
 
 async function submitAddOidcClientForm(e) {
@@ -1785,15 +1881,28 @@ function openOidcGuideModal(clientId) {
     document.getElementById('guide_token_url').textContent = endpoints.token_endpoint;
     document.getElementById('guide_userinfo_url').textContent = endpoints.userinfo_endpoint;
 
-    // 生成 Git YAML 示例
-    const gitYaml = `# GitLab / Gitea OIDC 配置示例
-oauth2_client:
-  name: "Keycloak"
-  client_id: "${client.client_id}"
-  client_secret: "${client.client_secret || 'YOUR_CLIENT_SECRET'}"
-  open_id_connect_url: "${endpoints.discovery_url}"
-  scopes: ["openid", "profile", "email"]
-  auto_register: true`;
+    // 填充 Gitea 专用 1 对 1 字段
+    const giteaClientIdEl = document.getElementById('gitea_guide_client_id');
+    if (giteaClientIdEl) giteaClientIdEl.textContent = client.client_id;
+    const giteaSecretEl = document.getElementById('gitea_guide_client_secret');
+    if (giteaSecretEl) giteaSecretEl.textContent = client.client_secret || '（未获取到或已隐藏）';
+    const giteaDiscEl = document.getElementById('gitea_guide_discovery_url');
+    if (giteaDiscEl) giteaDiscEl.textContent = endpoints.discovery_url;
+
+    // 生成 Gitea app.ini / GitLab 配置示例
+    const gitYaml = `; Gitea app.ini 配置文件 [oauth2_client] 段落示例:
+[oauth2_client]
+ENABLE = true
+NAME = "keycloak"
+PROVIDER = "openidConnect"
+CLIENT_ID = "${client.client_id}"
+CLIENT_SECRET = "${client.client_secret || 'YOUR_CLIENT_SECRET'}"
+OPENID_CONNECT_SCOPES = "openid email profile"
+AUTO_DISCOVERY_URL = "${endpoints.discovery_url}"
+USERNAME = "preferred_username"
+EMAIL = "email"
+UPDATE_EXISTING_USER_DATA = true
+AUTO_REGISTRATION = true`;
     const gitEl = document.getElementById('guide_git_yaml');
     if (gitEl) gitEl.textContent = gitYaml;
 
@@ -1824,7 +1933,11 @@ window.loadOidcClientsAjax = loadOidcClientsAjax;
 window.filterOidcApps = filterOidcApps;
 window.openAddOidcClientModal = openAddOidcClientModal;
 window.closeAddOidcClientModal = closeAddOidcClientModal;
+window.openEditOidcClientModal = openEditOidcClientModal;
+window.closeEditOidcClientModal = closeEditOidcClientModal;
 window.submitAddOidcClientForm = submitAddOidcClientForm;
+window.submitEditOidcClientForm = submitEditOidcClientForm;
+window.autoFixClientRedirectUris = autoFixClientRedirectUris;
 window.regenerateOidcSecret = regenerateOidcSecret;
 window.deleteOidcClientAjax = deleteOidcClientAjax;
 window.openGlobalOidcEndpointsModal = openGlobalOidcEndpointsModal;
