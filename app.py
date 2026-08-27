@@ -3380,6 +3380,7 @@ def api_list_oidc_clients():
             "enabled": c.get("enabled", True),
             "public_client": is_public,
             "redirect_uris": c.get("redirectUris", []),
+            "post_logout_redirect_uris": c.get("attributes", {}).get("post.logout.redirect.uris", "+") if isinstance(c.get("attributes"), dict) else "+",
             "web_origins": c.get("webOrigins", []),
             "client_secret": secret,
             "auth_method": auth_method,
@@ -3398,6 +3399,7 @@ def api_create_oidc_client():
     name = request.form.get("name", "").strip()
     client_id = request.form.get("client_id", "").strip().lower()
     redirect_uris_raw = request.form.get("redirect_uris", "").strip()
+    post_logout_raw = request.form.get("post_logout_redirect_uris", "+").strip()
     auth_method = request.form.get("auth_method", "hybrid").strip().lower()
     description = request.form.get("description", "").strip()
 
@@ -3426,14 +3428,24 @@ def api_create_oidc_client():
             if not (uri.startswith("http://") or uri.startswith("https://")):
                 return jsonify({"success": False, "error": f"回调地址格式非法: '{uri}'（必须以 http:// 或 https:// 开头）"}), 400
             r_uris.add(uri)
-            # 智能补全通配符与根路径变体，防止漏写 /* 导致 Keycloak 抛出 invalid_redirect_uri
             if uri.endswith('/'):
                 r_uris.add(uri + "*")
                 r_uris.add(uri.rstrip('/'))
             elif not uri.endswith('*'):
                 r_uris.add(uri + "/*")
                 r_uris.add(uri + "/")
-            # 自动补全 http / https 互转
+            try:
+                parsed = urlparse(uri)
+                if parsed.scheme and parsed.netloc:
+                    origin = f"{parsed.scheme}://{parsed.netloc}"
+                    r_uris.add(f"{origin}/*")
+                    r_uris.add(f"{origin}/")
+                    r_uris.add(origin)
+                    alt_scheme = "http" if parsed.scheme == "https" else "https"
+                    r_uris.add(f"{alt_scheme}://{parsed.netloc}/*")
+                    r_uris.add(f"{alt_scheme}://{parsed.netloc}/")
+            except Exception:
+                pass
             if uri.startswith("https://"):
                 r_uris.add("http://" + uri[8:])
                 if not uri.endswith('*'):
@@ -3448,7 +3460,6 @@ def api_create_oidc_client():
 
     unique_r_uris = sorted(list(r_uris))
 
-    # 确定 Browser Flow 绑定
     flow_id = ""
     flows_res, f_code, _ = call_keycloak_api("authentication/flows", "GET")
     if f_code == 200 and isinstance(flows_res, list):
@@ -3458,7 +3469,6 @@ def api_create_oidc_client():
                 flow_id = f.get("id")
                 break
 
-    # 生成 32 位安全强随机 Secret
     secret_val = generate_secret(32)
 
     payload = {
@@ -3472,7 +3482,10 @@ def api_create_oidc_client():
         "standardFlowEnabled": True,
         "directAccessGrantsEnabled": True,
         "redirectUris": unique_r_uris,
-        "webOrigins": ["+"]
+        "webOrigins": ["+"],
+        "attributes": {
+            "post.logout.redirect.uris": post_logout_raw or "+"
+        }
     }
     if flow_id:
         payload["authenticationFlowBindingOverrides"] = {"browser": flow_id}
@@ -3481,7 +3494,6 @@ def api_create_oidc_client():
     if c_code not in (200, 201, 204):
         return jsonify({"success": False, "error": c_err or "Keycloak 创建客户端失败"}), 500
 
-    # 保存本地元数据
     local_meta = load_oidc_clients()
     now_iso = datetime.now().isoformat()
     local_meta[client_id] = {
@@ -3500,6 +3512,97 @@ def api_create_oidc_client():
         "name": name,
         "msg": f"OIDC 客户端应用 '{name}' 已成功创建！"
     })
+
+@app.route('/api/oidc/clients/<client_id>', methods=['PUT', 'POST'])
+def api_update_oidc_client(client_id):
+    """更新指定 OIDC 客户端应用配置（重定向地址、注销白名单、认证流等）"""
+    client_id = client_id.strip().lower()
+    if client_id in SYSTEM_RESERVED_CLIENT_IDS or client_id in (GLOBAL_SSO_CLIENT_ID, GLOBAL_PASSKEY_SSO_CLIENT_ID):
+        return jsonify({"success": False, "error": "系统核心客户端禁止在此修改"}), 400
+
+    clients_res, code, _ = call_keycloak_api("clients", "GET", params={"clientId": client_id})
+    if code != 200 or not isinstance(clients_res, list) or not clients_res:
+        return jsonify({"success": False, "error": "未找到该客户端"}), 404
+
+    client_obj = clients_res[0]
+    c_uuid = client_obj.get("id")
+
+    name = request.form.get("name", "").strip() or client_obj.get("name", client_id)
+    redirect_uris_raw = request.form.get("redirect_uris", "").strip()
+    post_logout_raw = request.form.get("post_logout_redirect_uris", "+").strip()
+    auth_method = request.form.get("auth_method", "hybrid").strip().lower()
+    description = request.form.get("description", "").strip()
+
+    r_uris = set()
+    for line in re.split(r'[\r\n,]+', redirect_uris_raw):
+        uri = line.strip()
+        if uri:
+            if not (uri.startswith("http://") or uri.startswith("https://")):
+                return jsonify({"success": False, "error": f"回调地址格式非法: '{uri}'（必须以 http:// 或 https:// 开头）"}), 400
+            r_uris.add(uri)
+            if uri.endswith('/'):
+                r_uris.add(uri + "*")
+                r_uris.add(uri.rstrip('/'))
+            elif not uri.endswith('*'):
+                r_uris.add(uri + "/*")
+                r_uris.add(uri + "/")
+            try:
+                parsed = urlparse(uri)
+                if parsed.scheme and parsed.netloc:
+                    origin = f"{parsed.scheme}://{parsed.netloc}"
+                    r_uris.add(f"{origin}/*")
+                    r_uris.add(f"{origin}/")
+                    r_uris.add(origin)
+                    alt_scheme = "http" if parsed.scheme == "https" else "https"
+                    r_uris.add(f"{alt_scheme}://{parsed.netloc}/*")
+                    r_uris.add(f"{alt_scheme}://{parsed.netloc}/")
+            except Exception:
+                pass
+            if uri.startswith("https://"):
+                r_uris.add("http://" + uri[8:])
+                if not uri.endswith('*'):
+                    r_uris.add("http://" + uri[8:].rstrip('/') + "/*")
+            elif uri.startswith("http://"):
+                r_uris.add("https://" + uri[7:])
+                if not uri.endswith('*'):
+                    r_uris.add("https://" + uri[7:].rstrip('/') + "/*")
+
+    if not r_uris:
+        return jsonify({"success": False, "error": "请至少填写一个合法的回调地址 (Redirect URI)"}), 400
+
+    flow_id = ""
+    flows_res, f_code, _ = call_keycloak_api("authentication/flows", "GET")
+    if f_code == 200 and isinstance(flows_res, list):
+        target_alias = "passkey-only-browser" if auth_method == "passkey_only" else "global-sso-browser"
+        for f in flows_res:
+            if f.get("alias") == target_alias:
+                flow_id = f.get("id")
+                break
+
+    client_obj["name"] = name
+    client_obj["description"] = description
+    client_obj["redirectUris"] = sorted(list(r_uris))
+    client_obj["webOrigins"] = ["+"]
+    attrs = client_obj.get("attributes", {}) or {}
+    attrs["post.logout.redirect.uris"] = post_logout_raw or "+"
+    client_obj["attributes"] = attrs
+    if flow_id:
+        client_obj["authenticationFlowBindingOverrides"] = {"browser": flow_id}
+
+    u_res, u_code, u_err = call_keycloak_api(f"clients/{c_uuid}", "PUT", json_data=client_obj)
+    if u_code not in (200, 204):
+        return jsonify({"success": False, "error": u_err or "更新 Keycloak 客户端失败"}), 500
+
+    local_meta = load_oidc_clients()
+    if client_id not in local_meta:
+        local_meta[client_id] = {}
+    local_meta[client_id]["name"] = name
+    local_meta[client_id]["auth_method"] = auth_method
+    local_meta[client_id]["description"] = description
+    save_oidc_clients(local_meta)
+
+    log(f"已成功更新 OIDC 客户端应用: {name} ({client_id})")
+    return jsonify({"success": True, "msg": f"客户端应用 '{name}' 已成功更新！"})
 
 @app.route('/api/oidc/clients/<client_id>/secret/regenerate', methods=['POST'])
 def api_regenerate_oidc_client_secret(client_id):

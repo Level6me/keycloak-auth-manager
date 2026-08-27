@@ -759,6 +759,59 @@
     </div>
 </div>
 
+<!-- ==================== MODAL: EDIT OIDC CLIENT ==================== -->
+<div id="editOidcClientModal" class="modal-overlay">
+    <div class="modal-dialog" style="max-width: 520px;">
+        <div class="modal-header">
+            <div style="display: flex; align-items: center; gap: 8px;">
+                <span style="font-size: 20px;">✏️</span>
+                <span class="modal-title">编辑 OIDC 客户端应用</span>
+            </div>
+            <button class="icon-btn" onclick="closeEditOidcClientModal()" style="width: 32px; height: 32px; font-size: 14px; cursor: pointer;">✕</button>
+        </div>
+        <form id="editOidcClientForm" onsubmit="submitEditOidcClientForm(event)">
+            <input type="hidden" id="edit_oidc_client_id_hidden">
+            <div class="form-group">
+                <label class="form-label">Client ID (客户端唯一标识)</label>
+                <input type="text" id="edit_oidc_client_id" class="input-box" readonly disabled style="font-family: monospace; opacity: 0.7;">
+            </div>
+            <div class="form-group">
+                <label class="form-label">应用友好名称</label>
+                <input type="text" id="edit_oidc_app_name" class="input-box" required autocomplete="off">
+            </div>
+            <div class="form-group">
+                <label class="form-label">认证登录策略 (Browser Flow)</label>
+                <select id="edit_oidc_auth_method" class="select-custom">
+                    <option value="hybrid">✨ 混合免密自适应 (推荐: 支持 Passkey + 密码)</option>
+                    <option value="passkey_only">🔑 真·纯 Passkey 物理隔离 (仅允许硬件免密/无密码)</option>
+                    <option value="password_only">🔒 传统账号密码模式</option>
+                </select>
+            </div>
+            <div class="form-group">
+                <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 4px;">
+                    <label class="form-label" style="margin-bottom: 0;">合法回调地址 (Valid Redirect URIs)</label>
+                    <button type="button" class="pill-btn" onclick="autoFixClientRedirectUris()" style="font-size: 11px; padding: 2px 7px;">⚡ 自动补充根域通配符</button>
+                </div>
+                <textarea id="edit_oidc_redirect_uris" class="input-box" rows="3" required style="font-family: monospace; font-size: 12px; line-height: 1.5;"></textarea>
+                <div class="form-hint">支持多行输入与通配符 *</div>
+            </div>
+            <div class="form-group">
+                <label class="form-label">有效注销后重定向 (Valid Post Logout Redirect URIs)</label>
+                <input type="text" id="edit_oidc_post_logout_uris" class="input-box" value="+" style="font-family: monospace; font-size: 12px;">
+                <div class="form-hint">填 <code>+</code> 代表继承全部回调白名单（彻底解决退出登录时提示无效跳转）</div>
+            </div>
+            <div class="form-group">
+                <label class="form-label">应用描述 (可选)</label>
+                <input type="text" id="edit_oidc_app_desc" class="input-box">
+            </div>
+            <div style="display: flex; gap: 10px; margin-top: 20px;">
+                <button type="button" class="btn secondary w-full" onclick="closeEditOidcClientModal()" style="padding: 11px;">取消</button>
+                <button type="submit" id="btnSubmitEditOidcClient" class="btn accent w-full" style="padding: 11px;">💾 保存配置</button>
+            </div>
+        </form>
+    </div>
+</div>
+
 <!-- ==================== MODAL: OIDC GUIDE & ENDPOINTS ==================== -->
 <div id="oidcGuideModal" class="modal-overlay">
     <div class="modal-dialog" style="max-width: 680px;">
@@ -856,8 +909,92 @@
         <!-- Tab 3: Git Guide -->
         <div id="guideTabContentGit" style="display: none;">
             <div class="card" style="padding: 16px; background: var(--card-sec); font-size: 13px; line-height: 1.6;">
-                <div style="font-weight: 700; color: var(--text); margin-bottom: 8px;">GitLab / Gitea 配置文件示例：</div>
-                <pre id="guide_git_yaml" style="background: #0f172a; color: #38bdf8; padding: 12px; border-radius: 8px; font-size: 11px; overflow-x: auto;"></pre>
+                <div style="font-weight: 700; color: var(--text); margin-bottom: 10px; display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 6px;">
+                    <span>🐙 Gitea 后台 ➔「认证源」1 对 1 填报对照表：</span>
+                    <span class="badge accent" style="font-size: 11px;">管理面板 ➔ 认证源 ➔ 添加认证源</span>
+                </div>
+                
+                <div class="card" style="padding: 10px 14px; background: var(--card); font-size: 12px; margin-bottom: 12px;">
+                    <div class="setting-row" style="padding: 6px 0; border-bottom: 1px solid var(--border-subtle);">
+                        <div class="setting-info">
+                            <span class="setting-label" style="font-size: 12px; font-weight: 700;">认证类型 (Authentication Type)</span>
+                            <code style="font-size: 11px;">OAuth2</code>
+                        </div>
+                    </div>
+                    <div class="setting-row" style="padding: 6px 0; border-bottom: 1px solid var(--border-subtle);">
+                        <div class="setting-info">
+                            <span class="setting-label" style="font-size: 12px; font-weight: 700;">认证源名称 (Authentication Name)</span>
+                            <code id="gitea_guide_auth_name" style="font-size: 11px; font-weight: 700; color: var(--accent);">keycloak</code>
+                        </div>
+                        <button class="pill-btn" onclick="copyToClipboard('keycloak', '认证名称')" style="padding: 2px 8px; font-size: 11px;">📋 复制</button>
+                    </div>
+                    <div class="setting-row" style="padding: 6px 0; border-bottom: 1px solid var(--border-subtle);">
+                        <div class="setting-info">
+                            <span class="setting-label" style="font-size: 12px; font-weight: 700;">OAuth2 提供商 (OAuth2 Provider)</span>
+                            <code style="font-size: 11px;">OpenID Connect</code>
+                        </div>
+                    </div>
+                    <div class="setting-row" style="padding: 6px 0; border-bottom: 1px solid var(--border-subtle);">
+                        <div class="setting-info">
+                            <span class="setting-label" style="font-size: 12px; font-weight: 700;">客户端 ID (Client ID)</span>
+                            <code id="gitea_guide_client_id" style="font-size: 11px; font-weight: 700; color: var(--accent);"></code>
+                        </div>
+                        <button class="pill-btn" onclick="copyToClipboard(document.getElementById('gitea_guide_client_id').textContent, 'Client ID')" style="padding: 2px 8px; font-size: 11px;">📋 复制</button>
+                    </div>
+                    <div class="setting-row" style="padding: 6px 0; border-bottom: 1px solid var(--border-subtle);">
+                        <div class="setting-info">
+                            <span class="setting-label" style="font-size: 12px; font-weight: 700;">客户端密钥 (Client Secret)</span>
+                            <code id="gitea_guide_client_secret" style="font-size: 11px; word-break: break-all;"></code>
+                        </div>
+                        <button class="pill-btn" onclick="copyToClipboard(document.getElementById('gitea_guide_client_secret').textContent, 'Client Secret')" style="padding: 2px 8px; font-size: 11px;">📋 复制</button>
+                    </div>
+                    <div class="setting-row" style="padding: 6px 0; border-bottom: 1px solid var(--border-subtle);">
+                        <div class="setting-info">
+                            <span class="setting-label" style="font-size: 12px; font-weight: 700;">OpenID Connect 自动发现 URL (Discovery URL)</span>
+                            <code id="gitea_guide_discovery_url" style="font-size: 11px; word-break: break-all;"></code>
+                        </div>
+                        <button class="pill-btn" onclick="copyToClipboard(document.getElementById('gitea_guide_discovery_url').textContent, 'Discovery URL')" style="padding: 2px 8px; font-size: 11px;">📋 复制</button>
+                    </div>
+                    <div class="setting-row" style="padding: 6px 0; border-bottom: 1px solid var(--border-subtle);">
+                        <div class="setting-info">
+                            <span class="setting-label" style="font-size: 12px; font-weight: 700;">自定义用户名声明 (Custom User Name Claim)</span>
+                            <code style="font-size: 11px; color: var(--accent);">preferred_username</code>
+                        </div>
+                        <button class="pill-btn" onclick="copyToClipboard('preferred_username', '用户名声明')" style="padding: 2px 8px; font-size: 11px;">📋 复制</button>
+                    </div>
+                    <div class="setting-row" style="padding: 6px 0; border-bottom: 1px solid var(--border-subtle);">
+                        <div class="setting-info">
+                            <span class="setting-label" style="font-size: 12px; font-weight: 700;">自定义邮箱声明 (Custom Email Claim)</span>
+                            <code style="font-size: 11px; color: var(--accent);">email</code>
+                        </div>
+                        <button class="pill-btn" onclick="copyToClipboard('email', '邮箱声明')" style="padding: 2px 8px; font-size: 11px;">📋 复制</button>
+                    </div>
+                    <div class="setting-row" style="padding: 6px 0; border-bottom: 1px solid var(--border-subtle);">
+                        <div class="setting-info">
+                            <span class="setting-label" style="font-size: 12px; font-weight: 700;">自定义姓名声明 (Custom Name Claim)</span>
+                            <code style="font-size: 11px; color: var(--accent);">name</code>
+                        </div>
+                        <button class="pill-btn" onclick="copyToClipboard('name', '姓名声明')" style="padding: 2px 8px; font-size: 11px;">📋 复制</button>
+                    </div>
+                    <div class="setting-row" style="padding: 6px 0;">
+                        <div class="setting-info">
+                            <span class="setting-label" style="font-size: 12px; font-weight: 700;">组声明名称 (Group Claim Name, 可选)</span>
+                            <code style="font-size: 11px;">groups</code>
+                        </div>
+                        <button class="pill-btn" onclick="copyToClipboard('groups', '组声明')" style="padding: 2px 8px; font-size: 11px;">📋 复制</button>
+                    </div>
+                </div>
+
+                <div style="background: rgba(59, 130, 246, 0.08); border: 1px solid rgba(59, 130, 246, 0.2); border-radius: 8px; padding: 10px 12px; margin-bottom: 12px; font-size: 12px;">
+                    <div style="font-weight: 700; color: var(--accent); margin-bottom: 4px;">🔗 Gitea 对应的 OAuth2 回调地址规则：</div>
+                    <div style="color: var(--text-sec); font-size: 11px; line-height: 1.5;">
+                        Gitea 的回调路径格式为 <code>https://&lt;你的Gitea域名&gt;/user/oauth2/keycloak/callback</code><br>
+                        <em>（请确保在新建/编辑本客户端应用时，已将该地址填入「合法回调地址」中）</em>
+                    </div>
+                </div>
+
+                <div style="font-weight: 700; color: var(--text); margin-bottom: 6px; font-size: 12px;">⚙️ Gitea app.ini 配置文件参数示例 (可选)：</div>
+                <pre id="guide_git_yaml" style="background: #0f172a; color: #38bdf8; padding: 12px; border-radius: 8px; font-size: 11px; overflow-x: auto; margin-bottom: 0;"></pre>
             </div>
         </div>
 

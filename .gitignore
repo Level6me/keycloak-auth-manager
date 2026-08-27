@@ -1,6 +1,9 @@
 # 敏感配置文件
 data.json
+config.json
+encryption.key
 app.log
+backup_frps/
 
 # Python
 __pycache__/
