@@ -338,6 +338,9 @@ def check_auth():
             session_token = session.get('csrf_token', '')
             form_token = (request.form.get('_csrf_token', '') or
                           request.headers.get('X-CSRF-Token', '') or
+                          request.headers.get('X-CSRFToken', '') or
+                          request.headers.get('X-Csrf-Token', '') or
+                          request.args.get('_csrf_token', '') or
                           request.get_json(silent=True, force=True) and request.get_json(silent=True, force=True).get('_csrf_token', '') or '')
             if not session_token or session_token != form_token:
                 if request.path.startswith('/api/'):
@@ -3625,6 +3628,7 @@ def api_regenerate_oidc_client_secret(client_id):
     return jsonify({"success": False, "error": reg_err or "重置密钥失败"}), 500
 
 @app.route('/api/oidc/clients/<client_id>', methods=['DELETE'])
+@app.route('/api/oidc/clients/<client_id>/delete', methods=['POST'])
 def api_delete_oidc_client(client_id):
     """删除指定的 OIDC 客户端应用"""
     client_id = client_id.strip().lower()
@@ -3632,20 +3636,26 @@ def api_delete_oidc_client(client_id):
         return jsonify({"success": False, "error": "系统核心客户端禁止删除"}), 400
 
     clients_res, code, _ = call_keycloak_api("clients", "GET", params={"clientId": client_id})
+    local_meta = load_oidc_clients()
+
+    # 如果 Keycloak 中已不存在该客户端（例如已手动删除），直接清理本地元数据并返回成功
     if code != 200 or not isinstance(clients_res, list) or not clients_res:
-        return jsonify({"success": False, "error": "未找到该客户端"}), 404
+        if client_id in local_meta:
+            del local_meta[client_id]
+            save_oidc_clients(local_meta)
+        log(f"已清理本地 OIDC 客户端应用元数据: {client_id}")
+        return jsonify({"success": True, "msg": f"客户端应用 '{client_id}' 已成功删除！"})
 
     c_uuid = clients_res[0].get("id")
     del_res, del_code, del_err = call_keycloak_api(f"clients/{c_uuid}", "DELETE")
-    if del_code in (200, 204):
-        local_meta = load_oidc_clients()
+    if del_code in (200, 204, 404):
         if client_id in local_meta:
             del local_meta[client_id]
             save_oidc_clients(local_meta)
         log(f"已成功删除 OIDC 客户端应用: {client_id}")
         return jsonify({"success": True, "msg": f"客户端应用 '{client_id}' 已成功删除！"})
 
-    return jsonify({"success": False, "error": del_err or "删除客户端失败"}), 500
+    return jsonify({"success": False, "error": del_err or f"Keycloak 删除客户端失败 (HTTP {del_code})"}), 500
 
 
 def init_background_startup_checks():

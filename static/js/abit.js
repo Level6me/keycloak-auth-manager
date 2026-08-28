@@ -1832,12 +1832,18 @@ async function deleteOidcClientAjax(clientId, appName) {
         return;
     }
 
+    const token = typeof getCsrfToken === 'function' ? getCsrfToken() : '';
+    const formData = new FormData();
+    formData.append('_csrf_token', token);
+
     try {
-        const res = await fetch(`/api/oidc/clients/${encodeURIComponent(clientId)}`, {
+        const res = await fetch(`/api/oidc/clients/${encodeURIComponent(clientId)}?_csrf_token=${encodeURIComponent(token)}`, {
             method: 'DELETE',
             headers: {
-                'X-CSRFToken': getCsrfToken()
-            }
+                'X-CSRF-Token': token,
+                'X-CSRFToken': token
+            },
+            body: formData
         });
         const result = await res.json();
         if (result.success) {
