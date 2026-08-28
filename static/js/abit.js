@@ -1596,51 +1596,50 @@ function renderOidcClients(filterKeyword = '') {
             (c.auth_method === 'password_only' ? `<span class="badge secondary">🔒 传统密码</span>` : `<span class="badge accent">✨ 混合免密</span>`);
 
         const sysBadge = isSys ? `<span class="badge warning" style="font-size: 10px;">系统核心</span>` : '';
-        const uris = (c.redirect_uris || []).slice(0, 2).map(u => `<div style="font-family: monospace; font-size: 11px; color: var(--text-sec); overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">🔗 ${escapeHtml(u)}</div>`).join('');
+        const uris = (c.redirect_uris || []).slice(0, 2).map(u => `<div style="font-family: monospace; font-size: 11px; color: var(--text-sec); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 100%; min-width: 0;">🔗 ${escapeHtml(u)}</div>`).join('');
 
         const secretId = `secret_${c.client_id.replace(/[^a-zA-Z0-9]/g, '_')}`;
 
         return `
-        <div class="domain-card" style="display: flex; flex-direction: column;">
-            <div class="domain-header" style="align-items: flex-start;">
-                <div>
-                    <div style="display: flex; align-items: center; gap: 6px; margin-bottom: 4px;">
-                        <span style="font-size: 18px;">${isSys ? '🛡️' : '📱'}</span>
-                        <span style="font-size: 16px; font-weight: 700; color: var(--text);">${escapeHtml(c.name)}</span>
+        <div class="domain-card" style="display: flex; flex-direction: column; min-width: 0; max-width: 100%; box-sizing: border-box; overflow: hidden;">
+            <div class="domain-header" style="align-items: flex-start; min-width: 0; max-width: 100%; display: flex; justify-content: space-between; gap: 8px;">
+                <div style="min-width: 0; flex: 1; overflow: hidden;">
+                    <div style="display: flex; align-items: center; gap: 6px; margin-bottom: 4px; min-width: 0; max-width: 100%;">
+                        <span style="font-size: 18px; flex-shrink: 0;">${isSys ? '🛡️' : '📱'}</span>
+                        <span style="font-size: 16px; font-weight: 700; color: var(--text); overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">${escapeHtml(c.name)}</span>
                         ${sysBadge}
                     </div>
-                    <div style="font-size: 12px; font-family: monospace; color: var(--accent);">${escapeHtml(c.client_id)}</div>
+                    <div style="font-size: 12px; font-family: monospace; color: var(--accent); overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">${escapeHtml(c.client_id)}</div>
                 </div>
-                <div>${authBadge}</div>
+                <div style="flex-shrink: 0;">${authBadge}</div>
             </div>
 
-            <div style="margin: 10px 0; display: flex; flex-direction: column; gap: 4px; min-height: 48px;">
-                ${c.description ? `<div style="font-size: 12px; color: var(--text-sec); margin-bottom: 2px;">${escapeHtml(c.description)}</div>` : ''}
+            <div style="margin: 8px 0; display: flex; flex-direction: column; gap: 4px; min-height: 44px; min-width: 0; max-width: 100%; overflow: hidden;">
+                ${c.description ? `<div style="font-size: 12px; color: var(--text-sec); margin-bottom: 2px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">${escapeHtml(c.description)}</div>` : ''}
                 ${uris || '<div style="font-size: 11px; color: var(--text-sec);">暂无回调地址</div>'}
             </div>
 
             <!-- Client Secret Box -->
-            <div style="background: var(--card-sec); border-radius: 8px; padding: 8px 10px; margin-bottom: 12px; display: flex; justify-content: space-between; align-items: center; gap: 8px; min-width: 0;">
-                <div style="display: flex; flex-direction: column; min-width: 0; flex: 1;">
+            <div style="background: var(--card-sec); border-radius: 8px; padding: 8px 10px; margin-bottom: 12px; display: flex; justify-content: space-between; align-items: center; gap: 8px; min-width: 0; max-width: 100%; box-sizing: border-box;">
+                <div style="display: flex; flex-direction: column; min-width: 0; flex: 1; overflow: hidden;">
                     <span style="font-size: 10px; color: var(--text-sec); font-weight: 700;">CLIENT SECRET</span>
-                    <div style="display: flex; align-items: center; gap: 6px; min-width: 0;">
-                        <input type="password" id="${secretId}" value="${escapeHtml(c.client_secret || '')}" readonly style="background: transparent; border: none; font-family: monospace; font-size: 11px; color: var(--text); outline: none; width: 100%; min-width: 0; text-overflow: ellipsis;">
+                    <div style="display: flex; align-items: center; gap: 6px; min-width: 0; max-width: 100%;">
+                        <input type="password" id="${secretId}" value="${escapeHtml(c.client_secret || '')}" readonly style="background: transparent; border: none; font-family: monospace; font-size: 11px; color: var(--text); outline: none; width: 100%; min-width: 0; text-overflow: ellipsis; flex: 1;">
                         <button type="button" onclick="toggleSecretInputVisibility('${secretId}')" class="pill-btn" style="padding: 2px 6px; font-size: 10px; flex-shrink: 0;">👁️</button>
                     </div>
                 </div>
                 <div style="display: flex; gap: 4px; flex-shrink: 0;">
-                    <button class="pill-btn" onclick="copyToClipboard('${escapeHtml(c.client_secret || '')}', 'Client Secret')" style="padding: 4px 8px; font-size: 11px;">📋 复制</button>
-                    ${!isSys ? `<button class="pill-btn" onclick="regenerateOidcSecret('${escapeHtml(c.client_id)}')" title="重置密钥" style="padding: 4px 8px; font-size: 11px;">🔄</button>` : ''}
+                    <button class="pill-btn" onclick="copyToClipboard('${escapeHtml(c.client_secret || '')}', 'Client Secret')" style="padding: 4px 8px; font-size: 11px; white-space: nowrap;">📋 复制</button>
+                    ${!isSys ? `<button class="pill-btn" onclick="regenerateOidcSecret('${escapeHtml(c.client_id)}')" title="重置密钥" style="padding: 4px 8px; font-size: 11px; flex-shrink: 0;">🔄</button>` : ''}
                 </div>
             </div>
 
-            <div class="domain-actions" style="margin-top: auto; padding-top: 10px; border-top: 1px solid var(--border-subtle); display: flex; justify-content: space-between; align-items: center; gap: 6px; flex-wrap: wrap;">
-                <button class="btn secondary sm" onclick="openOidcGuideModal('${escapeHtml(c.client_id)}')" style="font-size: 12px; padding: 6px 10px; flex: 1; min-width: 70px;">📋 参数</button>
+            <div class="domain-actions" style="margin-top: auto; padding-top: 10px; border-top: 1px solid var(--border-subtle); display: flex; justify-content: space-between; align-items: center; gap: 6px; width: 100%; box-sizing: border-box; min-width: 0;">
+                <button class="btn secondary sm" onclick="openOidcGuideModal('${escapeHtml(c.client_id)}')" style="font-size: 12px; padding: 6px 8px; flex: 1; text-align: center; justify-content: center; min-width: 0; white-space: nowrap;">📋 参数</button>
                 ${!isSys ? `
-                <div style="display: inline-flex; gap: 6px; flex: 1.4; justify-content: flex-end; min-width: 140px;">
-                    <button class="btn sm" onclick="openEditOidcClientModal('${escapeHtml(c.client_id)}')" style="font-size: 12px; padding: 6px 10px; flex: 1;">✏️ 编辑</button>
-                    <button class="btn danger sm" onclick="deleteOidcClientAjax('${escapeHtml(c.client_id)}', '${escapeHtml(c.name)}')" style="font-size: 12px; padding: 6px 10px; flex: 1;">🗑️ 删除</button>
-                </div>` : '<span style="font-size: 11px; color: var(--text-sec); padding: 4px 8px;">系统内置</span>'}
+                <button class="btn sm" onclick="openEditOidcClientModal('${escapeHtml(c.client_id)}')" style="font-size: 12px; padding: 6px 8px; flex: 1; text-align: center; justify-content: center; min-width: 0; white-space: nowrap;">✏️ 编辑</button>
+                <button class="btn danger sm" onclick="deleteOidcClientAjax('${escapeHtml(c.client_id)}', '${escapeHtml(c.name)}')" style="font-size: 12px; padding: 6px 8px; flex: 1; text-align: center; justify-content: center; min-width: 0; white-space: nowrap;">🗑️ 删除</button>
+                ` : '<span style="font-size: 11px; color: var(--text-sec); padding: 4px 8px; flex: 1; text-align: right;">系统内置</span>'}
             </div>
         </div>`;
     }).join('');

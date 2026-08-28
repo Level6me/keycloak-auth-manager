@@ -305,9 +305,13 @@ body {
 /* Domain Card Grid */
 .domain-grid {
     display: grid;
-    grid-template-columns: repeat(auto-fill, minmax(320px, 1fr));
+    grid-template-columns: repeat(auto-fill, minmax(min(100%, 320px), 1fr));
     gap: 14px;
     margin-bottom: 20px;
+    width: 100%;
+    max-width: 100%;
+    min-width: 0;
+    box-sizing: border-box;
 }
 @media (max-width: 480px) {
     .domain-grid {
@@ -326,6 +330,10 @@ body {
     transition: transform 0.15s, box-shadow 0.15s, border-color 0.15s;
     position: relative;
     gap: 12px;
+    min-width: 0;
+    max-width: 100%;
+    overflow: hidden;
+    box-sizing: border-box;
 }
 .domain-card:hover {
     transform: translateY(-2px);
