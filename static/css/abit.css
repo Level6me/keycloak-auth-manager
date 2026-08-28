@@ -903,3 +903,201 @@ input:checked + .slider:before { transform: translateX(20px); }
     color: var(--text);
 }
 
+/* ==========================================================================
+   Comprehensive Mobile & Tablet Responsive Optimizations (移动端深度适配与缩放修复)
+   ========================================================================== */
+
+@media (max-width: 680px) {
+    /* 容器与页面全局防横向溢出与软键盘适配 */
+    html, body {
+        overflow-x: hidden;
+        width: 100%;
+    }
+    
+    .container {
+        width: 100%;
+        padding: 10px 12px;
+        padding-bottom: calc(96px + env(safe-area-inset-bottom));
+        box-sizing: border-box;
+    }
+
+    /* 统计卡片网格自适应 */
+    .stat-grid {
+        grid-template-columns: repeat(2, 1fr) !important;
+        gap: 8px !important;
+        margin-bottom: 14px !important;
+    }
+    .stat-card {
+        padding: 10px 12px !important;
+        border-radius: 14px !important;
+        gap: 8px !important;
+        min-width: 0 !important;
+    }
+    .stat-icon {
+        width: 32px !important;
+        height: 32px !important;
+        font-size: 15px !important;
+        border-radius: 9px !important;
+    }
+    .stat-value {
+        font-size: 17px !important;
+    }
+    .stat-label {
+        font-size: 10px !important;
+        white-space: nowrap;
+        text-overflow: ellipsis;
+        overflow: hidden;
+    }
+
+    /* 顶部工具栏适配 (应用页 & 域名页) */
+    .apps-toolbar, .toolbar-row {
+        flex-direction: column !important;
+        align-items: stretch !important;
+        gap: 8px !important;
+    }
+    .apps-search-wrap, .search-wrap-full {
+        max-width: 100% !important;
+        width: 100% !important;
+    }
+    .apps-action-btns {
+        width: 100% !important;
+        display: flex !important;
+        justify-content: space-between !important;
+        gap: 6px !important;
+    }
+    .apps-action-btns .pill-btn,
+    .apps-action-btns .btn {
+        flex: 1 !important;
+        padding: 7px 6px !important;
+        font-size: 12px !important;
+        justify-content: center !important;
+        text-align: center !important;
+        white-space: nowrap !important;
+    }
+    .btn-add-app-text-long {
+        display: none !important;
+    }
+    .btn-add-app-text-short {
+        display: inline !important;
+    }
+
+    /* 卡片网格单列自适应 */
+    .domain-grid {
+        grid-template-columns: 1fr !important;
+        gap: 12px !important;
+    }
+    .domain-card {
+        padding: 14px !important;
+        border-radius: 16px !important;
+        min-width: 0 !important;
+    }
+    
+    /* 弹窗在手机上的抽屉/全宽适配 */
+    .modal-overlay {
+        padding: 8px !important;
+        align-items: center !important;
+    }
+    .modal-dialog {
+        padding: 18px 14px !important;
+        border-radius: 18px !important;
+        max-height: 90vh !important;
+        width: 100% !important;
+        box-sizing: border-box !important;
+        -webkit-overflow-scrolling: touch !important;
+    }
+    .modal-header {
+        margin-bottom: 14px !important;
+        padding-bottom: 10px !important;
+    }
+    .modal-title {
+        font-size: 15px !important;
+    }
+
+    /* OIDC 指南弹窗选项卡在窄屏下自适应换行 */
+    .segmented-control {
+        height: auto !important;
+        flex-wrap: wrap !important;
+        gap: 4px !important;
+    }
+    .segment-btn {
+        padding: 6px 6px !important;
+        font-size: 11px !important;
+        flex: 1 1 auto !important;
+        min-width: 80px !important;
+        white-space: nowrap !important;
+    }
+
+    /* 设置行与键值对在移动端防溢出 */
+    .setting-row {
+        padding: 8px 0 !important;
+        gap: 8px !important;
+        align-items: center !important;
+    }
+    .setting-info {
+        min-width: 0 !important;
+        flex: 1 !important;
+        overflow: hidden !important;
+    }
+    .setting-label {
+        font-size: 12px !important;
+    }
+    .setting-info code {
+        display: block !important;
+        font-size: 11px !important;
+        word-break: break-all !important;
+        overflow-wrap: anywhere !important;
+        white-space: normal !important;
+        line-height: 1.4 !important;
+    }
+    .setting-row .pill-btn,
+    .setting-row .btn {
+        flex-shrink: 0 !important;
+    }
+
+    /* 代码块在移动端适配 */
+    pre {
+        max-width: 100% !important;
+        box-sizing: border-box !important;
+        overflow-x: auto !important;
+        white-space: pre-wrap !important;
+        word-break: break-all !important;
+        font-size: 11px !important;
+        padding: 10px !important;
+    }
+
+    /* 底部悬浮 Dock 在窄屏下的防挤压 */
+    .dock {
+        width: 94% !important;
+        max-width: 440px !important;
+        height: 58px !important;
+        padding: 0 4px !important;
+        bottom: calc(10px + env(safe-area-inset-bottom)) !important;
+    }
+    .dock-btn {
+        min-width: 42px !important;
+        height: 44px !important;
+        border-radius: 12px !important;
+        padding: 2px 2px !important;
+    }
+    .dock-btn svg {
+        width: 18px !important;
+        height: 18px !important;
+    }
+    .dock-btn span {
+        font-size: 9px !important;
+    }
+}
+
+@media (max-width: 380px) {
+    .dock-btn span {
+        display: none !important;
+    }
+    .dock-btn svg {
+        width: 22px !important;
+        height: 22px !important;
+    }
+    .dock {
+        height: 52px !important;
+    }
+}
+

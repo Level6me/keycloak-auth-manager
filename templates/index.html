@@ -673,11 +673,11 @@
         </div>
 
         <!-- Apps Toolbar -->
-        <div style="display: flex; justify-content: space-between; align-items: center; gap: 10px; margin-bottom: 16px; flex-wrap: wrap;">
-            <div style="flex: 1; min-width: 220px; max-width: 420px; position: relative;">
+        <div class="apps-toolbar" style="display: flex; justify-content: space-between; align-items: center; gap: 10px; margin-bottom: 16px; flex-wrap: wrap;">
+            <div class="apps-search-wrap" style="flex: 1; min-width: 200px; max-width: 420px; position: relative;">
                 <input type="text" id="appSearchInput" class="input-box" placeholder="🔍 快速搜索应用名称或 Client ID..." oninput="filterOidcApps(this.value)">
             </div>
-            <div style="display: flex; align-items: center; gap: 8px;">
+            <div class="apps-action-btns" style="display: flex; align-items: center; gap: 8px;">
                 <button class="pill-btn" onclick="loadOidcClientsAjax(false); showToast('正在刷新应用列表...', 'info');" title="刷新列表">
                     <span>🔄</span>
                     <span class="pill-text">刷新</span>
@@ -688,7 +688,8 @@
                 </button>
                 <button class="btn accent" onclick="openAddOidcClientModal()" style="padding: 7px 14px; font-size: 13px; border-radius: 12px; display: inline-flex; align-items: center; gap: 6px;">
                     <span>➕</span>
-                    <span>新建客户端应用</span>
+                    <span class="btn-add-app-text-long">新建客户端应用</span>
+                    <span class="btn-add-app-text-short" style="display: none;">新建应用</span>
                 </button>
             </div>
         </div>
