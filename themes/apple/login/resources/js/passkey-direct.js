@@ -97,7 +97,7 @@
             tryAnotherForm.style.marginBottom = "16px";
             tryAnotherForm.style.width = "100%";
 
-            tryAnotherLink.innerHTML = "🔑 使用 Passkey 一键免密登录";
+            tryAnotherLink.innerHTML = "🔑 使用 Passkey 登录";
             tryAnotherLink.className = "passkey-hero-button";
             tryAnotherLink.style.display = "flex";
             tryAnotherLink.style.alignItems = "center";
