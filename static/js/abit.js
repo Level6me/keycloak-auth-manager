@@ -238,11 +238,11 @@ function renderDomainsUI(auths) {
             let loginPolicyBadge = '';
             if (auth.auth_enabled) {
                 if (auth.allow_passkey === false && auth.allow_password !== false) {
-                    loginPolicyBadge = '<span class="badge secondary" title="该站点仅允许用户名+密码登录">🔒 仅密码</span>';
+                    loginPolicyBadge = '<span class="badge secondary" title="该站点仅允许用户名与密码登录">🔒 仅密码</span>';
                 } else if (auth.allow_password === false && auth.allow_passkey !== false) {
-                    loginPolicyBadge = '<span class="badge accent" title="该站点仅允许 Passkey 免密登录">🔑 仅 Passkey</span>';
+                    loginPolicyBadge = '<span class="badge accent" title="该站点仅允许 Passkey 认证">🔑 仅 Passkey</span>';
                 } else {
-                    loginPolicyBadge = '<span class="badge success" title="该站点允许 Passkey 免密或密码登录">🔑 Passkey+密码</span>';
+                    loginPolicyBadge = '<span class="badge success" title="该站点支持 Passkey 与密码登录">🔑 Passkey+密码</span>';
                 }
             }
 
@@ -295,11 +295,11 @@ function renderDomainsUI(auths) {
             let loginPolicyBadge = '';
             if (auth.auth_enabled) {
                 if (auth.allow_passkey === false && auth.allow_password !== false) {
-                    loginPolicyBadge = '<span class="badge secondary" title="该站点仅允许用户名+密码登录">🔒 仅密码</span>';
+                    loginPolicyBadge = '<span class="badge secondary" title="该站点仅允许用户名与密码登录">🔒 仅密码</span>';
                 } else if (auth.allow_password === false && auth.allow_passkey !== false) {
-                    loginPolicyBadge = '<span class="badge accent" title="该站点仅允许 Passkey 免密登录">🔑 仅 Passkey</span>';
+                    loginPolicyBadge = '<span class="badge accent" title="该站点仅允许 Passkey 认证">🔑 仅 Passkey</span>';
                 } else {
-                    loginPolicyBadge = '<span class="badge success" title="该站点允许 Passkey 免密或密码登录">🔑 Passkey+密码</span>';
+                    loginPolicyBadge = '<span class="badge success" title="该站点支持 Passkey 与密码登录">🔑 Passkey+密码</span>';
                 }
             }
 
@@ -482,9 +482,9 @@ async function handleAuthMethodsToggle() {
                 }
             }
             renderDomainsUI(cachedDomainsData);
-            let modeDesc = 'Passkey + 密码混合模式';
-            if (allowPasskey && !allowPassword) modeDesc = '仅限 Passkey 免密登录';
-            if (allowPassword && !allowPasskey) modeDesc = '仅限账号密码登录';
+            let modeDesc = 'Passkey 与密码混合模式';
+            if (allowPasskey && !allowPassword) modeDesc = '仅限 Passkey (WebAuthn) 认证';
+            if (allowPassword && !allowPasskey) modeDesc = '仅限账号密码认证';
             showToast(`站点 ${domain} 登录策略已成功更新为：${modeDesc}`, 'success');
         } else {
             showToast('更新失败: ' + (data.error || '未知错误'), 'error');
@@ -498,7 +498,7 @@ async function handleAuthMethodsToggle() {
 
 
 async function deleteDomainAjax(domain) {
-    if (!confirm(`确定要彻底删除域名 ${domain} 的认证配置吗？\n此操作将同时销毁 OAuth2 容器与 Nginx 配置，不可撤销！`)) {
+    if (!confirm(`确定要删除域名 ${domain} 的认证配置吗？\n该操作将同时清理相关代理容器与反代配置。`)) {
         return;
     }
     
@@ -513,7 +513,7 @@ async function deleteDomainAjax(domain) {
         renderDomainsUI(cachedDomainsData);
     }
     
-    showToast(`正在彻底删除域名 ${domain}...`, 'info');
+    showToast(`正在删除域名 ${domain}...`, 'info');
     
     try {
         const res = await fetch(`/delete/${domain}`, {
@@ -768,24 +768,24 @@ function renderUsersUI(users) {
 
             let passkeyBadge = '';
             if (u.has_passkey) {
-                passkeyBadge = `<span class="badge success" title="已注册 ${u.passkey_count} 个 Passkey 硬件/生物凭据">🔑 Passkey (${u.passkey_count})</span>`;
+                passkeyBadge = `<span class="badge success" title="已注册 ${u.passkey_count} 个 Passkey 凭据">Passkey (${u.passkey_count})</span>`;
             } else if (u.required_actions && u.required_actions.includes('webauthn-register-passwordless')) {
-                passkeyBadge = `<span class="badge warning" title="下次登录将引导绑定 Passkey">⏳ 待绑定 Passkey</span>`;
+                passkeyBadge = `<span class="badge warning" title="下次登录需注册 Passkey 凭据">待绑定 Passkey</span>`;
             } else if (u.has_password) {
-                passkeyBadge = `<span class="badge secondary" title="仅配置密码登录">🔒 密码登录</span>`;
+                passkeyBadge = `<span class="badge secondary" title="已配置密码凭据">密码</span>`;
             } else {
                 passkeyBadge = `<span class="badge secondary">未设凭据</span>`;
             }
 
             let siteBadge = '';
             if (u.all_sites_access) {
-                siteBadge = `<span class="badge success" title="可访问系统全部受保护站点">🌐 全部站点</span>`;
+                siteBadge = `<span class="badge success" title="具备全部受保护站点访问权限">全局访问</span>`;
             } else {
                 const sCount = (u.allowed_sites || []).length;
-                siteBadge = `<span class="badge warning" title="仅允许访问指定的 ${sCount} 个站点">🔒 授权站点 (${sCount})</span>`;
+                siteBadge = `<span class="badge warning" title="仅限访问指定的 ${sCount} 个站点">指定站点 (${sCount})</span>`;
             }
 
-            const adminBadge = u.is_admin ? `<span class="badge accent">👑 管理员</span>` : `<span class="badge secondary">👤 普通用户</span>`;
+            const adminBadge = u.is_admin ? `<span class="badge accent">管理员</span>` : `<span class="badge secondary">普通用户</span>`;
             const statusDot = u.enabled ? `<span class="status-dot"></span>` : `<span class="status-dot offline"></span>`;
 
             card.innerHTML = `
@@ -801,7 +801,7 @@ function renderUsersUI(users) {
                                 <span style="color: var(--text); font-weight: 500;">${u.email || '<span style="color:var(--text-sec); font-style:italic;">未绑定邮箱</span>'}</span>
                             </div>
                         </div>
-                        <label class="switch" title="一键切换启用/停用">
+                        <label class="switch" title="切换账户启用状态">
                             <input type="checkbox" ${u.enabled ? 'checked' : ''} onchange="toggleUserStatus('${u.id}', this.checked, this)">
                             <span class="slider"></span>
                         </label>
@@ -815,9 +815,9 @@ function renderUsersUI(users) {
                         </div>
 
                         <div style="display: inline-flex; align-items: center; gap: 5px; margin-left: auto;">
-                            <button type="button" class="btn secondary sm btn-user-action" data-action="reset" data-user-id="${escapeHtml(u.id)}" data-username="${escapeHtml(u.username)}" data-has-passkey="${u.has_passkey ? 'true' : 'false'}" onclick="openResetUserModal('${u.id}', '${escapeHtml(u.username)}', ${Boolean(u.has_passkey)})" style="padding: 4px 7px; font-size: 11px;" title="重置密码或重新绑定 Passkey">🔐 凭据</button>
-                            <button type="button" class="btn secondary sm btn-user-action" data-action="sites" data-user-id="${escapeHtml(u.id)}" data-username="${escapeHtml(u.username)}" onclick="openUserSitesModal('${u.id}', '${escapeHtml(u.username)}')" style="padding: 4px 7px; font-size: 11px;" title="配置可访问站点权限">🌐 站点</button>
-                            <button type="button" class="btn secondary sm btn-user-action" data-action="roles" data-user-id="${escapeHtml(u.id)}" data-username="${escapeHtml(u.username)}" onclick="openUserRolesModal('${u.id}', '${escapeHtml(u.username)}')" style="padding: 4px 7px; font-size: 11px;" title="分配角色权限">🛡️ 角色</button>
+                            <button type="button" class="btn secondary sm btn-user-action" data-action="reset" data-user-id="${escapeHtml(u.id)}" data-username="${escapeHtml(u.username)}" data-has-passkey="${u.has_passkey ? 'true' : 'false'}" onclick="openResetUserModal('${u.id}', '${escapeHtml(u.username)}', ${Boolean(u.has_passkey)})" style="padding: 4px 7px; font-size: 11px;" title="重置密码或重新绑定 Passkey">凭据</button>
+                            <button type="button" class="btn secondary sm btn-user-action" data-action="sites" data-user-id="${escapeHtml(u.id)}" data-username="${escapeHtml(u.username)}" onclick="openUserSitesModal('${u.id}', '${escapeHtml(u.username)}')" style="padding: 4px 7px; font-size: 11px;" title="配置可访问站点权限">站点</button>
+                            <button type="button" class="btn secondary sm btn-user-action" data-action="roles" data-user-id="${escapeHtml(u.id)}" data-username="${escapeHtml(u.username)}" onclick="openUserRolesModal('${u.id}', '${escapeHtml(u.username)}')" style="padding: 4px 7px; font-size: 11px;" title="分配角色权限">角色</button>
                             <button type="button" class="btn danger sm btn-user-action" data-action="delete" data-user-id="${escapeHtml(u.id)}" data-username="${escapeHtml(u.username)}" onclick="deleteUserAjax('${u.id}', '${escapeHtml(u.username)}')" style="padding: 4px 7px; font-size: 11px;" title="删除用户">🗑️</button>
                         </div>
                     </div>
@@ -842,24 +842,24 @@ function renderUsersUI(users) {
 
             let passkeyBadge = '';
             if (u.has_passkey) {
-                passkeyBadge = `<span class="badge success">🔑 Passkey (${u.passkey_count})</span>`;
+                passkeyBadge = `<span class="badge success">Passkey (${u.passkey_count})</span>`;
             } else if (u.required_actions && u.required_actions.includes('webauthn-register-passwordless')) {
-                passkeyBadge = `<span class="badge warning">⏳ 待绑定 Passkey</span>`;
+                passkeyBadge = `<span class="badge warning">待绑定 Passkey</span>`;
             } else if (u.has_password) {
-                passkeyBadge = `<span class="badge secondary">🔒 密码登录</span>`;
+                passkeyBadge = `<span class="badge secondary">密码</span>`;
             } else {
                 passkeyBadge = `<span class="badge secondary">未设凭据</span>`;
             }
 
             let siteBadge = '';
             if (u.all_sites_access) {
-                siteBadge = `<span class="badge success">🌐 全部站点</span>`;
+                siteBadge = `<span class="badge success">全局访问</span>`;
             } else {
                 const sCount = (u.allowed_sites || []).length;
-                siteBadge = `<span class="badge warning">🔒 授权站点 (${sCount})</span>`;
+                siteBadge = `<span class="badge warning">指定站点 (${sCount})</span>`;
             }
 
-            const adminBadge = u.is_admin ? `<span class="badge accent">👑 管理员</span>` : `<span class="badge secondary">👤 普通用户</span>`;
+            const adminBadge = u.is_admin ? `<span class="badge accent">管理员</span>` : `<span class="badge secondary">普通用户</span>`;
             const statusDot = u.enabled ? `<span class="status-dot"></span>` : `<span class="status-dot offline"></span>`;
 
             tr.innerHTML = `
@@ -1063,7 +1063,7 @@ async function toggleUserStatus(userId, enabled, switchEl) {
 
 // --- Delete User Logic (with Optimistic UI & Local Persistence) ---
 async function deleteUserAjax(userId, username) {
-    if (!confirm(`确定要彻底删除用户【${username}】吗？\n删除后该用户绑定的所有 Passkey 凭据与权限将被永久清除，不可撤销！`)) {
+    if (!confirm(`确定要删除用户【${username}】吗？\n删除后该用户绑定的凭据与权限将被清除。`)) {
         return;
     }
 
@@ -1592,10 +1592,10 @@ function renderOidcClients(filterKeyword = '') {
     container.innerHTML = clients.map(c => {
         const isSys = c.is_system;
         const authBadge = c.auth_method === 'passkey_only' ? 
-            `<span class="badge success">🔑 纯 Passkey</span>` : 
-            (c.auth_method === 'password_only' ? `<span class="badge secondary">🔒 传统密码</span>` : `<span class="badge accent">✨ 混合免密</span>`);
+            `<span class="badge success">仅 Passkey</span>` : 
+            (c.auth_method === 'password_only' ? `<span class="badge secondary">仅密码</span>` : `<span class="badge accent">混合认证</span>`);
 
-        const sysBadge = isSys ? `<span class="badge warning" style="font-size: 10px;">系统核心</span>` : '';
+        const sysBadge = isSys ? `<span class="badge warning" style="font-size: 10px;">系统内置</span>` : '';
         const uris = (c.redirect_uris || []).slice(0, 2).map(u => `<div style="font-family: monospace; font-size: 11px; color: var(--text-sec); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 100%; min-width: 0;">🔗 ${escapeHtml(u)}</div>`).join('');
 
         const secretId = `secret_${c.client_id.replace(/[^a-zA-Z0-9]/g, '_')}`;
@@ -1828,7 +1828,7 @@ async function regenerateOidcSecret(clientId) {
 }
 
 async function deleteOidcClientAjax(clientId, appName) {
-    if (!confirm(`⚠️ 危险操作：确定要彻底删除应用 [${appName} (${clientId})] 吗？\n删除后该应用将无法再通过 Keycloak 进行身份认证！`)) {
+    if (!confirm(`确认删除客户端应用 [${appName} (${clientId})]？\n删除后关联系统将无法继续使用 Keycloak 身份认证服务。`)) {
         return;
     }
 

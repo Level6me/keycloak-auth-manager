@@ -3,7 +3,7 @@
 <head>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
-    <title>Auth 认证管理 - 控制台</title>
+    <title>Keycloak 统一身份与访问控制管理平台</title>
     <link rel="icon" type="image/svg+xml" href="/static/favicon.svg">
     <link rel="alternate icon" href="/favicon.ico">
     <link rel="stylesheet" href="/static/css/abit.css">
@@ -53,21 +53,21 @@
                 <div class="stat-icon green">🛡️</div>
                 <div class="stat-content">
                     <span class="stat-value" id="stat-auth-count">{{ auths.values()|selectattr('auth_enabled')|list|length }}</span>
-                    <span class="stat-label">认证拦截中</span>
+                    <span class="stat-label">已启用认证</span>
                 </div>
             </div>
             <div class="stat-card">
                 <div class="stat-icon purple">🔒</div>
                 <div class="stat-content">
                     <span class="stat-value" id="stat-ssl-count">{{ auths.values()|selectattr('ssl_enabled')|list|length }}</span>
-                    <span class="stat-label">HTTPS SSL 开启</span>
+                    <span class="stat-label">已配置 SSL 证书</span>
                 </div>
             </div>
             <div class="stat-card">
                 <div class="stat-icon orange">🔄</div>
                 <div class="stat-content">
                     <span class="stat-value" id="stat-proxy-count">{{ auths.values()|selectattr('proxy_enabled')|list|length }}</span>
-                    <span class="stat-label">反向代理启用</span>
+                    <span class="stat-label">已开启代理转发</span>
                 </div>
             </div>
         </div>
@@ -76,7 +76,7 @@
             <!-- Toolbar: Search & View Mode Switch -->
             <div style="display: flex; justify-content: space-between; align-items: center; gap: 10px; margin-bottom: 16px; flex-wrap: wrap;">
                 <div style="flex: 1; min-width: 220px; max-width: 420px; position: relative;">
-                    <input type="text" id="domainSearch" class="input-box" placeholder="🔍 快速搜索域名或端口..." oninput="filterDomains(this.value)">
+                    <input type="text" id="domainSearch" class="input-box" placeholder="搜索域名或端口..." oninput="filterDomains(this.value)">
                 </div>
                 <div class="segmented-control" style="width: auto; height: 38px; align-items: center;">
                     <!-- 四个小方格 (网格/卡片流视图) -->
@@ -334,8 +334,8 @@
                     </div>
                     <div class="setting-row" style="padding: 4px 0;">
                         <div class="setting-info">
-                            <span class="setting-label" style="font-size: 13px;">🔑 允许 Passkey (WebAuthn) 免密登录</span>
-                            <span class="setting-desc" style="font-size: 11px;">指纹、面容 ID、硬件安全密钥秒级登入</span>
+                            <span class="setting-label" style="font-size: 13px;">🔑 启用 Passkey (WebAuthn) 认证</span>
+                            <span class="setting-desc" style="font-size: 11px;">支持生物识别与硬件安全密钥凭据</span>
                         </div>
                         <label class="switch">
                             <input type="checkbox" id="add_allow_passkey" name="allow_passkey" checked>
@@ -344,8 +344,8 @@
                     </div>
                     <div class="setting-row" style="padding: 4px 0; margin-top: 6px; border-top: 1px solid var(--border-subtle); padding-top: 8px;">
                         <div class="setting-info">
-                            <span class="setting-label" style="font-size: 13px;">🔒 允许 账号 + 密码 登录</span>
-                            <span class="setting-desc" style="font-size: 11px;">传统用户名密码表单输入</span>
+                            <span class="setting-label" style="font-size: 13px;">🔒 启用账号密码认证</span>
+                            <span class="setting-desc" style="font-size: 11px;">支持标准用户名与口令输入</span>
                         </div>
                         <label class="switch">
                             <input type="checkbox" id="add_allow_password" name="allow_password" checked>
@@ -355,7 +355,7 @@
                 </div>
 
                 <button type="submit" id="addSubmitBtn" class="btn w-full" style="padding: 12px; font-size: 14px;">
-                    🚀 创建认证服务
+                    创建域名配置
                 </button>
 
             </form>
@@ -630,7 +630,6 @@
                         <th>创建时间</th>
                         <th>账号状态</th>
                         <th style="text-align: right;">操作管理</th>
-
                     </tr>
                 </thead>
                 <tbody id="userTableBodyContainer"></tbody>
@@ -646,28 +645,28 @@
                 <div class="stat-icon blue">📱</div>
                 <div class="stat-content">
                     <span class="stat-value" id="stat-total-apps">-</span>
-                    <span class="stat-label">已接入应用</span>
+                    <span class="stat-label">已注册客户端</span>
                 </div>
             </div>
             <div class="stat-card">
                 <div class="stat-icon green">🔑</div>
                 <div class="stat-content">
                     <span class="stat-value" id="stat-passkey-apps">-</span>
-                    <span class="stat-label">Passkey 免密应用</span>
+                    <span class="stat-label">仅 Passkey 客户端</span>
                 </div>
             </div>
             <div class="stat-card">
                 <div class="stat-icon purple">⚡</div>
                 <div class="stat-content">
                     <span class="stat-value" id="stat-hybrid-apps">-</span>
-                    <span class="stat-label">自适应混合流</span>
+                    <span class="stat-label">混合认证客户端</span>
                 </div>
             </div>
             <div class="stat-card">
                 <div class="stat-icon orange">🛡️</div>
                 <div class="stat-content">
                     <span class="stat-value" id="stat-system-apps">-</span>
-                    <span class="stat-label">系统核心客户端</span>
+                    <span class="stat-label">系统内置客户端</span>
                 </div>
             </div>
         </div>
@@ -675,10 +674,10 @@
         <!-- Apps Toolbar -->
         <div class="apps-toolbar" style="display: flex; justify-content: space-between; align-items: center; gap: 10px; margin-bottom: 16px; flex-wrap: wrap;">
             <div class="apps-search-wrap" style="flex: 1; min-width: 200px; max-width: 420px; position: relative;">
-                <input type="text" id="appSearchInput" class="input-box" placeholder="🔍 快速搜索应用名称或 Client ID..." oninput="filterOidcApps(this.value)">
+                <input type="text" id="appSearchInput" class="input-box" placeholder="搜索客户端名称或 Client ID..." oninput="filterOidcApps(this.value)">
             </div>
             <div class="apps-action-btns" style="display: flex; align-items: center; gap: 8px;">
-                <button class="pill-btn" onclick="loadOidcClientsAjax(false); showToast('正在刷新应用列表...', 'info');" title="刷新列表">
+                <button class="pill-btn" onclick="loadOidcClientsAjax(false); showToast('正在刷新客户端列表...', 'info');" title="刷新列表">
                     <span>🔄</span>
                     <span class="pill-text">刷新</span>
                 </button>
@@ -688,8 +687,8 @@
                 </button>
                 <button class="btn accent" onclick="openAddOidcClientModal()" style="padding: 7px 14px; font-size: 13px; border-radius: 12px; display: inline-flex; align-items: center; gap: 6px;">
                     <span>➕</span>
-                    <span class="btn-add-app-text-long">新建客户端应用</span>
-                    <span class="btn-add-app-text-short" style="display: none;">新建应用</span>
+                    <span class="btn-add-app-text-long">新建 OIDC 客户端</span>
+                    <span class="btn-add-app-text-short" style="display: none;">新建客户端</span>
                 </button>
             </div>
         </div>
@@ -697,14 +696,14 @@
         <!-- Loading / Empty Tips -->
         <div id="appsLoadingTip" style="display: none; text-align: center; padding: 40px 20px; color: var(--text-sec);">
             <div style="font-size: 28px; margin-bottom: 8px;">⏳</div>
-            <div>正在从 Keycloak 加载应用列表...</div>
+            <div>正在加载客户端列表...</div>
         </div>
 
         <div id="appsEmptyTip" style="display: none; text-align: center; padding: 60px 20px;">
             <div style="font-size: 48px; margin-bottom: 12px;">📱</div>
-            <div style="font-size: 16px; font-weight: 700; color: var(--text); margin-bottom: 6px;">暂无自定义接入应用</div>
-            <div style="font-size: 13px; color: var(--text-sec); margin-bottom: 20px;">点击下方按钮可一键为 WordPress、GitLab 等第三方系统创建 OIDC 客户端</div>
-            <button class="btn accent" onclick="openAddOidcClientModal()" style="padding: 10px 20px; font-size: 14px;">➕ 创建第一个应用</button>
+            <div style="font-size: 16px; font-weight: 700; color: var(--text); margin-bottom: 6px;">暂无已配置的客户端应用</div>
+            <div style="font-size: 13px; color: var(--text-sec); margin-bottom: 20px;">支持为 WordPress、GitLab、Gitea 等支持 OpenID Connect 协议的系统创建客户端</div>
+            <button class="btn accent" onclick="openAddOidcClientModal()" style="padding: 10px 20px; font-size: 14px;">➕ 新建客户端</button>
         </div>
 
         <!-- Apps Card Grid Container -->
@@ -719,15 +718,15 @@
         <div class="modal-header">
             <div style="display: flex; align-items: center; gap: 8px;">
                 <span style="font-size: 20px;">📱</span>
-                <span class="modal-title">新建 OIDC 客户端应用</span>
+                <span class="modal-title">新建 OIDC 客户端</span>
             </div>
             <button class="icon-btn" onclick="closeAddOidcClientModal()" style="width: 32px; height: 32px; font-size: 14px; cursor: pointer;">✕</button>
         </div>
         <form id="addOidcClientForm" onsubmit="submitAddOidcClientForm(event)">
             <div class="form-group">
-                <label class="form-label">应用友好名称</label>
-                <input type="text" id="oidc_app_name" class="input-box" placeholder="例如: 我的 WordPress 博客" required autocomplete="off">
-                <div class="form-hint">仅用于面板识别与展示</div>
+                <label class="form-label">应用名称</label>
+                <input type="text" id="oidc_app_name" class="input-box" placeholder="例如: 内部博客系统" required autocomplete="off">
+                <div class="form-hint">用于控制台识别与展示</div>
             </div>
             <div class="form-group">
                 <label class="form-label">Client ID (客户端唯一标识)</label>
@@ -737,9 +736,9 @@
             <div class="form-group">
                 <label class="form-label">认证登录策略 (Browser Flow)</label>
                 <select id="oidc_auth_method" class="select-custom">
-                    <option value="hybrid">✨ 混合免密自适应 (推荐: 支持 Passkey + 密码)</option>
-                    <option value="passkey_only">🔑 真·纯 Passkey 物理隔离 (仅允许硬件免密/无密码)</option>
-                    <option value="password_only">🔒 传统账号密码模式</option>
+                    <option value="hybrid">混合认证模式 (支持 Passkey 与密码)</option>
+                    <option value="passkey_only">仅 Passkey (WebAuthn) 认证</option>
+                    <option value="password_only">仅密码认证</option>
                 </select>
                 <div class="form-hint">指定该应用在 Keycloak 认证时呈现的登录流程与主题</div>
             </div>
@@ -754,7 +753,7 @@
             </div>
             <div style="display: flex; gap: 10px; margin-top: 20px;">
                 <button type="button" class="btn secondary w-full" onclick="closeAddOidcClientModal()" style="padding: 11px;">取消</button>
-                <button type="submit" id="btnSubmitAddOidcClient" class="btn accent w-full" style="padding: 11px;">🚀 立即在 Keycloak 创建</button>
+                <button type="submit" id="btnSubmitAddOidcClient" class="btn accent w-full" style="padding: 11px;">创 建</button>
             </div>
         </form>
     </div>
@@ -766,7 +765,7 @@
         <div class="modal-header">
             <div style="display: flex; align-items: center; gap: 8px;">
                 <span style="font-size: 20px;">✏️</span>
-                <span class="modal-title">编辑 OIDC 客户端应用</span>
+                <span class="modal-title">编辑 OIDC 客户端</span>
             </div>
             <button class="icon-btn" onclick="closeEditOidcClientModal()" style="width: 32px; height: 32px; font-size: 14px; cursor: pointer;">✕</button>
         </div>
@@ -777,21 +776,21 @@
                 <input type="text" id="edit_oidc_client_id" class="input-box" readonly disabled style="font-family: monospace; opacity: 0.7;">
             </div>
             <div class="form-group">
-                <label class="form-label">应用友好名称</label>
+                <label class="form-label">应用名称</label>
                 <input type="text" id="edit_oidc_app_name" class="input-box" required autocomplete="off">
             </div>
             <div class="form-group">
                 <label class="form-label">认证登录策略 (Browser Flow)</label>
                 <select id="edit_oidc_auth_method" class="select-custom">
-                    <option value="hybrid">✨ 混合免密自适应 (推荐: 支持 Passkey + 密码)</option>
-                    <option value="passkey_only">🔑 真·纯 Passkey 物理隔离 (仅允许硬件免密/无密码)</option>
-                    <option value="password_only">🔒 传统账号密码模式</option>
+                    <option value="hybrid">混合认证模式 (支持 Passkey 与密码)</option>
+                    <option value="passkey_only">仅 Passkey (WebAuthn) 认证</option>
+                    <option value="password_only">仅密码认证</option>
                 </select>
             </div>
             <div class="form-group">
                 <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 4px;">
                     <label class="form-label" style="margin-bottom: 0;">合法回调地址 (Valid Redirect URIs)</label>
-                    <button type="button" class="pill-btn" onclick="autoFixClientRedirectUris()" style="font-size: 11px; padding: 2px 7px;">⚡ 自动补充根域通配符</button>
+                    <button type="button" class="pill-btn" onclick="autoFixClientRedirectUris()" style="font-size: 11px; padding: 2px 7px;">自动补全通配符</button>
                 </div>
                 <textarea id="edit_oidc_redirect_uris" class="input-box" rows="3" required style="font-family: monospace; font-size: 12px; line-height: 1.5;"></textarea>
                 <div class="form-hint">支持多行输入与通配符 *</div>
@@ -799,7 +798,7 @@
             <div class="form-group">
                 <label class="form-label">有效注销后重定向 (Valid Post Logout Redirect URIs)</label>
                 <input type="text" id="edit_oidc_post_logout_uris" class="input-box" value="+" style="font-family: monospace; font-size: 12px;">
-                <div class="form-hint">填 <code>+</code> 代表继承全部回调白名单（彻底解决退出登录时提示无效跳转）</div>
+                <div class="form-hint">填 <code>+</code> 表示继承所有有效回调地址白名单</div>
             </div>
             <div class="form-group">
                 <label class="form-label">应用描述 (可选)</label>
@@ -807,7 +806,7 @@
             </div>
             <div style="display: flex; gap: 10px; margin-top: 20px;">
                 <button type="button" class="btn secondary w-full" onclick="closeEditOidcClientModal()" style="padding: 11px;">取消</button>
-                <button type="submit" id="btnSubmitEditOidcClient" class="btn accent w-full" style="padding: 11px;">💾 保存配置</button>
+                <button type="submit" id="btnSubmitEditOidcClient" class="btn accent w-full" style="padding: 11px;">保 存</button>
             </div>
         </form>
     </div>
@@ -819,16 +818,16 @@
         <div class="modal-header">
             <div style="display: flex; align-items: center; gap: 8px;">
                 <span style="font-size: 20px;">📋</span>
-                <span class="modal-title" id="guideModalTitle">OIDC 对接配置指南</span>
+                <span class="modal-title" id="guideModalTitle">OIDC 协议端点与接入文档</span>
             </div>
             <button class="icon-btn" onclick="closeOidcGuideModal()" style="width: 32px; height: 32px; font-size: 14px; cursor: pointer;">✕</button>
         </div>
 
         <div style="margin-bottom: 16px;">
             <div class="segmented-control" style="width: 100%; height: 38px;">
-                <button class="segment-btn active" id="btnGuideTabStandard" onclick="switchGuideTab('standard')" style="font-size: 12px;">🌐 通用 OIDC 端点参数</button>
-                <button class="segment-btn" id="btnGuideTabWordpress" onclick="switchGuideTab('wordpress')" style="font-size: 12px;">📝 WordPress 填报指引</button>
-                <button class="segment-btn" id="btnGuideTabGit" onclick="switchGuideTab('git')" style="font-size: 12px;">🐙 GitLab / Gitea</button>
+                <button class="segment-btn active" id="btnGuideTabStandard" onclick="switchGuideTab('standard')" style="font-size: 12px;">标准 OIDC 端点</button>
+                <button class="segment-btn" id="btnGuideTabWordpress" onclick="switchGuideTab('wordpress')" style="font-size: 12px;">WordPress 接入配置</button>
+                <button class="segment-btn" id="btnGuideTabGit" onclick="switchGuideTab('git')" style="font-size: 12px;">GitLab / Gitea 接入配置</button>
             </div>
         </div>
 
@@ -837,7 +836,7 @@
             <div class="card" style="padding: 12px 16px; background: var(--card-sec); font-size: 12px;">
                 <div class="setting-row" style="padding: 8px 0; border-bottom: 1px solid var(--border-subtle);">
                     <div class="setting-info">
-                        <span class="setting-label" style="font-size: 12px; font-weight: 700;">Discovery URL (一键发现地址)</span>
+                        <span class="setting-label" style="font-size: 12px; font-weight: 700;">Discovery URL (OIDC 发现端点)</span>
                         <code id="guide_discovery_url" style="font-size: 11px; word-break: break-all;"></code>
                     </div>
                     <button class="pill-btn" onclick="copyToClipboard(document.getElementById('guide_discovery_url').textContent, 'Discovery URL')" style="padding: 3px 8px; font-size: 11px;">📋 复制</button>
@@ -1070,8 +1069,8 @@
             
             <div class="setting-row" style="padding: 6px 0;">
                 <div class="setting-info">
-                    <span class="setting-label" style="font-size: 13px;">🔑 允许 Passkey (WebAuthn) 免密</span>
-                    <span class="setting-desc" style="font-size: 11px;">指纹、面容 ID、硬件安全密钥秒级登入</span>
+                    <span class="setting-label" style="font-size: 13px;">🔑 启用 Passkey (WebAuthn) 认证</span>
+                    <span class="setting-desc" style="font-size: 11px;">支持生物识别与硬件安全密钥凭据</span>
                 </div>
                 <label class="switch">
                     <input type="checkbox" id="modalToggleAllowPasskey" onchange="handleAuthMethodsToggle()">
@@ -1081,8 +1080,8 @@
             
             <div class="setting-row" style="padding: 6px 0; border-top: 1px solid var(--border-subtle); margin-top: 6px; padding-top: 8px;">
                 <div class="setting-info">
-                    <span class="setting-label" style="font-size: 13px;">🔒 允许 账号 + 密码 登录</span>
-                    <span class="setting-desc" style="font-size: 11px;">传统用户名密码登录表单</span>
+                    <span class="setting-label" style="font-size: 13px;">🔒 启用账号密码认证</span>
+                    <span class="setting-desc" style="font-size: 11px;">支持标准用户名与口令输入</span>
                 </div>
                 <label class="switch">
                     <input type="checkbox" id="modalToggleAllowPassword" onchange="handleAuthMethodsToggle()">

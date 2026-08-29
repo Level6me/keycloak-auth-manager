@@ -1,7 +1,7 @@
-# 🔐 Keycloak Auth Manager
+# Keycloak Auth Manager
 
 <p align="center">
-  <strong>现代化 Web 访问控制与全站单点登录 (SSO) 管理控制台</strong>
+  <strong>基于 OpenResty、OAuth2-Proxy 与 Keycloak 的 Web 访问控制与单点登录 (SSO) 管理系统</strong>
 </p>
 
 <p align="center">
@@ -14,86 +14,89 @@
 
 ---
 
-**Keycloak Auth Manager** 是一款专为开发者、站长与运维人员打造的现代化 **统一身份接入与单点登录 (SSO) 管理控制系统**。
+## 📖 项目简介
 
-通过轻量优雅的 Web 控制台，可在数秒内为服务器上的任意现有网站（无论是静态站、反代服务还是容器化应用）一键接入 **Keycloak 统一认证拦截、细粒度站点访问控制、全站 SSO 漫游以及苹果级 Passkey (WebAuthn) 免密直通体验**。
+**Keycloak Auth Manager** 是一款面向现代化 Web 架构的 **统一身份认证与访问控制管理平台**。
+
+系统通过集成 OpenResty 反向代理、OAuth2-Proxy 鉴权网关与 Keycloak 身份服务中心，支持在不修改后端业务代码的前提下，快速为目标服务接入统一身份认证、细粒度站点访问控制、跨子域单点登录（SSO）以及 FIDO2 / WebAuthn (Passkey) 凭据验证。
 
 ---
 
-## 🌟 核心特性概览
+## 🏛️ 系统架构
 
 ```mermaid
 graph TD
-    User["🌐 用户请求"] --> Nginx["⚡ OpenResty / Nginx 反向代理"]
+    User["客户端请求 (Browser / App)"] --> Nginx["OpenResty / Nginx 反向代理层"]
     
-    subgraph SSO_Routing ["智能双代理池 (路径 B 架构)"]
-        Nginx -->|"纯 Passkey 站点"| ProxyPK["oauth2-proxy-passkey (4181)"]
-        Nginx -->|"混合 / 密码站点"| ProxyHybrid["oauth2-proxy-sso (4180)"]
+    subgraph SSO_Routing ["OAuth2-Proxy 代理服务集群"]
+        Nginx -->|"Passkey 专用站点"| ProxyPK["oauth2-proxy (Port: 4181)"]
+        Nginx -->|"混合/密码站点"| ProxyHybrid["oauth2-proxy (Port: 4180)"]
     end
     
-    ProxyPK -->|"Client: global-sso-passkey"| KC_PK["Keycloak: passkey-only-browser (物理切断密码)"]
-    ProxyHybrid -->|"Client: global-sso"| KC_Hybrid["Keycloak: global-sso-browser (混合自适应)"]
+    ProxyPK -->|"Client: global-sso-passkey"| KC_PK["Keycloak: passkey-only-browser 认证流"]
+    ProxyHybrid -->|"Client: global-sso"| KC_Hybrid["Keycloak: global-sso-browser 认证流"]
     
-    ProxyPK -. "共享根域 Cookie (_auth_sso)" .-> Session["全站 SSO 会话共享"]
-    ProxyHybrid -. "共享根域 Cookie (_auth_sso)" .-> Session
+    ProxyPK -. "根域 Cookie 共享 (_auth_sso)" .-> Session["跨子域 SSO 会话"]
+    ProxyHybrid -. "根域 Cookie 共享 (_auth_sso)" .-> Session
     
-    Nginx -->|"Access Control (Lua 细粒度拦截)"| Backend["🚀 目标业务系统 (FRP/Panel/Webapp)"]
+    Nginx -->|"Lua 访问控制鉴权 (allowed_sites 校验)"| Backend["后端业务系统 (Webapp / Panel / API)"]
 ```
-
-### 1. 🔑 真·纯 Passkey 物理隔离架构（行业领先）
-* **协议级物理切断密码**：非前端简单隐藏，而是通过 Keycloak 专属认证流在服务端彻底移除密码校验器，从协议层彻底阻断暴力破解与凭据撞库攻击。
-* **双代理池轻量聚合**：采用常驻双 OAuth2-Proxy 容器架构（4180 混合池 + 4181 纯免密池），常驻内存增量仅约 15MB，同时完美保持全站根域 Cookie（`_auth_sso`）互通共享。
-
-### 2. ⚡ 全站单点登录 (SSO) 无缝漫游
-* 登录旗下任意一个子域名（如 `app1.example.com`），访问同一根域下的其他所有受保护站点（如 `app2.example.com`、`ops.example.com`）自动实现免密直通，无需反复登录。
-
-### 3. 🛡️ 细粒度站点访问权限控制 (Access Control)
-* 控制台内可按用户设定 **可访问站点白名单 (`allowed_sites`)**。
-* 基于 OpenResty Lua 引擎在反代层实现**毫秒级高性能访问鉴权拦截**，未授权用户访问将呈现友好的 403 卡片并提供一键注销/切换账号入口。
-
-### 4. 🎨 苹果级（Apple Design）极简美学主题
-* 内置专为 Keycloak 26 深度定制的现代化登录主题，支持指纹/面容/安全密钥一键拉起、密码双向显隐切换、响应式暗色/亮色自适应以及无跳动平滑过渡。
-
-### 5. ☁️ Cloudflare 域名与 DNS 自动化联动
-* 自动拉取 Cloudflare 托管的主域名列表，新建站点时全自动配置 DNS A 记录，并支持一键开启或关闭 CDN 代理加速。
-
-### 6. 🔒 企业级安全加固规范
-* **凭据强加密**：系统敏感配置（管理员密码、Client Secret 等）均经 AES-GCM / Fernet 加密落地，强制限制 `0600` 文件权限。
-* **XFF 防伪造**：引入标准 `ipaddress` 校验机制，仅信任来自 RFC 1918 私有地址与本地回环的可信反代，彻底杜绝 IP 伪造。
-* **全流程脱敏**：日志与调试输出全面内置敏感信息脱敏过滤器，杜绝 Token/密钥泄露。
 
 ---
 
-## 🛠️ 三种站点认证策略对比
+## ⚡ 核心功能特性
 
-在控制台内，您可以按站点粒度随时切换认证策略：
+### 1. 独立认证流隔离与 Passkey 模式
+* **服务端禁用口令流**：针对高安全性要求的系统，在 Keycloak 服务端认证流中直接配置独立的 Browser Flow，禁用密码校验器，仅允许 WebAuthn 凭据认证。
+* **双代理实例分流**：根据站点设定的认证模式，自动分流至对应的 OAuth2-Proxy 代理实例（4180 混合模式 / 4181 Passkey 模式），同时保持根域 Cookie（`_auth_sso`）会话互通。
 
-| 认证模式 | 适用场景 | 交互体验 | 安全级别 |
+### 2. 跨子域单点登录 (SSO)
+* 用户在任一受保护的子域名（如 `app1.example.com`）完成认证后，访问同一主域名下的其他受保护站点（如 `app2.example.com`）无需重复鉴权，自动共享登录状态。
+
+### 3. 细粒度站点访问权限控制 (Access Control)
+* 支持按用户维度配置 **允许访问站点白名单 (`allowed_sites`)**。
+* 基于 OpenResty Lua 引擎在反向代理层进行访问权限鉴权拦截，未授权用户访问将直接呈现标准 403 页面并支持切换账号。
+
+### 4. OIDC 客户端管理
+* 提供标准化 OIDC 客户端应用配置与管理接口，支持对接 WordPress、GitLab、Gitea 等支持 OpenID Connect 协议的第三方系统。
+* 支持快捷配置重定向 URI 白名单与注销重定向地址。
+
+### 5. 定制化登录主题
+* 内置适配 Keycloak 26 的现代化响应式主题，支持 WebAuthn 硬件凭据唤起、密码显隐切换及深浅色模式自适应。
+
+### 6. 数据安全与配置加固
+* **凭据加密存储**：敏感配置（数据库密码、Client Secret 等）均采用 AES-GCM / Fernet 加密落地，配置文件权限严格限制为 `0600`。
+* **XFF 来源可信校验**：基于标准 `ipaddress` 校验机制，仅信任来自私有网络与本地回环的可信反向代理。
+* **日志脱敏过滤**：内置日志过滤器，自动脱敏 Token、密钥等敏感信息。
+
+---
+
+## 📊 认证模式技术对比
+
+| 认证模式 | 认证流配置说明 | 适用场景 | 安全机制 |
 | :--- | :--- | :--- | :--- |
-| **纯 Passkey 认证** | 极客站点、核心内部系统 | 直接拉起 Touch ID / Face ID / 安全密钥，协议层无密码入口 | ⭐️⭐️⭐️⭐️⭐️ (防钓鱼/防撞库) |
-| **混合自适应认证** | 通用业务站点、多设备场景 | 同时支持账号密码与「一键直通 Passkey 免密登录」 | ⭐️⭐️⭐️⭐️ (兼顾便利与兼容) |
-| **纯密码认证** | 传统设备、无生物识别终端 | 仅保留账号密码输入框，隐藏免密选项 | ⭐️⭐️⭐️ (基础口令保护) |
+| **仅 Passkey 模式** | 服务端仅启用 WebAuthn 校验器，不提供密码输入入口 | 高安全内部管理系统、运维控制台 | 基于 FIDO2/WebAuthn 公私钥签名验证，杜绝弱口令与钓鱼风险 |
+| **混合认证模式** | 认证流同时支持账号密码与 WebAuthn 凭据 | 通用业务站点、多终端混合办公场景 | 支持用户自主选择 Passkey 快捷验证或账号密码登录 |
+| **仅密码模式** | 仅保留标准用户名与密码校验器 | 无生物识别硬件的设备与通用系统 | 基于标准密码哈希凭据验证 |
 
 ---
 
 ## 📦 系统依赖与环境要求
 
-| 依赖程序 | 建议版本 | 作用说明 |
+| 依赖组件 | 建议版本 | 作用说明 |
 | :--- | :--- | :--- |
-| **Docker** | 20.0+ | 用于运行 SSO 代理容器与 Keycloak 身份中心 |
-| **Python 3 / pip3** | 3.8+ | 控制面板后台（Flask）运行环境 |
+| **Docker** | 20.0+ | 用于运行 OAuth2-Proxy 代理容器与 Keycloak 服务 |
+| **Python 3 / pip3** | 3.8+ | 管理控制台后台服务运行环境 |
 | **Keycloak** | 26.x | 核心身份认证服务，提供 OIDC/OAuth2 与 WebAuthn 支持 |
-| **1Panel 面板** | 最新版 | 网站建站与证书管理面板（自动同步反代配置） |
-| **OpenResty** | 最新版 | 高性能 Web 反向代理，通过 `auth_request` 与 Lua 实现流量拦截 |
-| **Cloudflare** *(可选)* | API Token | 用于实现域名 DNS 解析自动绑定与 CDN 代理联动 |
+| **1Panel 面板** | 最新版 | 站点与 SSL 证书管理面板（自动同步反向代理配置） |
+| **OpenResty** | 最新版 | 高性能 Web 反向代理，通过 `auth_request` 与 Lua 实现流量鉴权 |
+| **Cloudflare** *(可选)* | API Token | 用于域名 DNS 解析自动同步与 CDN 状态联动 |
 
 ---
 
-## 🚀 快速开始与部署
+## 🚀 部署指引
 
-### 方式一：远程一键全自动部署（推荐）
-
-在服务器终端执行以下命令，脚本将自动检查依赖并引导完成初次初始化：
+### 方式一：远程脚本部署
 
 ```bash
 curl -sSL https://raw.githubusercontent.com/Level6me/keycloak-auth-manager/main/install.sh | bash
@@ -107,17 +110,17 @@ cd keycloak-auth-manager
 bash install.sh
 ```
 
-### 访问控制台
+### 控制台访问
 
-部署完成后，使用浏览器访问：
-* **控制台入口**：`http://<服务器IP>:8088`
-* **默认凭据**：安装向导中设置的管理员账号与密码
+部署完成后，在浏览器中访问：
+* **控制台地址**：`http://<服务器IP>:8088`
+* **初始凭据**：安装向导中配置的管理员账号与密码
 
 ---
 
-## 🔄 一键平滑热更新
+## 🔄 系统更新
 
-更新脚本会自动保留您的所有站点数据（`data.json`）、系统配置（`config.json`）与主加密密钥（`encryption.key`），实现无损平滑热升级：
+运行更新脚本将自动备份数据文件（`data.json`）、配置文件（`config.json`）与加密密钥（`encryption.key`），并拉取最新代码平滑重启服务：
 
 ```bash
 curl -sSL https://raw.githubusercontent.com/Level6me/keycloak-auth-manager/main/update.sh | bash
@@ -125,20 +128,20 @@ curl -sSL https://raw.githubusercontent.com/Level6me/keycloak-auth-manager/main/
 
 ---
 
-## 🧭 运维与服务管理命令
+## 🧭 服务管理命令
 
 ```bash
 systemctl status keycloak-auth-manager    # 查看管理服务运行状态
 systemctl restart keycloak-auth-manager   # 重启管理服务
 systemctl stop keycloak-auth-manager      # 停止管理服务
-journalctl -u keycloak-auth-manager -f    # 实时查看运行日志
+journalctl -u keycloak-auth-manager -f    # 查看运行日志
 ```
 
 ---
 
 ## 🧪 自动化测试
 
-项目内置了完整的安全基线与回归测试套件（覆盖 XFF 防伪造、域名正则注入防护、IPv6 兼容性、密码兼容加载与路径 B 端口分流）：
+项目内置完整的单元测试与安全基线验证套件：
 
 ```bash
 python3 -m unittest discover -s tests -p "test_*.py" -v
@@ -148,5 +151,5 @@ python3 -m unittest discover -s tests -p "test_*.py" -v
 
 ## 📄 开源许可证
 
-本项目采用 [MIT License](LICENSE) 协议开源。欢迎提交 Issue 与 Pull Request 共同完善！
+本项目采用 [MIT License](LICENSE) 协议开源。
 

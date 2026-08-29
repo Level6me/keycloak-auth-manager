@@ -103,39 +103,39 @@
             <span class="card-title">🔐 登录认证模式</span>
             <span class="badge accent" id="auth-mode-badge">
                 {% if auth.get('allow_passkey', True) and auth.get('allow_password', True) %}混合模式
-                {% elif not auth.get('allow_password', True) %}纯 Passkey
-                {% else %}纯密码{% endif %}
+                {% elif not auth.get('allow_password', True) %}仅 Passkey
+                {% else %}仅密码{% endif %}
             </span>
         </div>
         <div style="padding: 4px 0 12px 0; display: flex; gap: 10px; flex-wrap: wrap;">
 
-            <!-- 纯密码 -->
+            <!-- 仅密码 -->
             <label id="mode-password-label" class="auth-mode-option {% if not auth.get('allow_passkey', True) and auth.get('allow_password', True) %}selected{% endif %}"
-                   onclick="setAuthMode(false, true)" title="只显示账号密码登录，隐藏 Passkey 入口">
+                   onclick="setAuthMode(false, true)" title="只显示账号密码登录，不启用 Passkey 入口">
                 <div class="mode-icon">🔑</div>
-                <div class="mode-name">纯密码</div>
+                <div class="mode-name">仅密码</div>
                 <div class="mode-desc">仅账号密码</div>
             </label>
 
             <!-- 混合模式 -->
             <label id="mode-hybrid-label" class="auth-mode-option {% if auth.get('allow_passkey', True) and auth.get('allow_password', True) %}selected{% endif %}"
-                   onclick="setAuthMode(true, true)" title="同时支持密码 + Passkey 一键免密">
+                   onclick="setAuthMode(true, true)" title="同时支持密码与 Passkey 登录">
                 <div class="mode-icon">🔀</div>
                 <div class="mode-name">混合模式</div>
                 <div class="mode-desc">密码 + Passkey</div>
             </label>
 
-            <!-- 纯 Passkey -->
+            <!-- 仅 Passkey -->
             <label id="mode-passkey-label" class="auth-mode-option {% if auth.get('allow_passkey', True) and not auth.get('allow_password', True) %}selected{% endif %}"
-                   onclick="setAuthMode(true, false)" title="自动直通 Passkey，彻底隐藏密码框，安全性最高">
+                   onclick="setAuthMode(true, false)" title="仅允许 Passkey 认证，禁用密码输入">
                 <div class="mode-icon">🔐</div>
-                <div class="mode-name">纯 Passkey</div>
-                <div class="mode-desc">仅 Passkey 免密</div>
+                <div class="mode-name">仅 Passkey</div>
+                <div class="mode-desc">仅 Passkey 凭据</div>
             </label>
         </div>
 
         <div id="auth-mode-saving" style="display:none; font-size:12px; color: var(--text-sec); padding: 0 4px 8px 4px;">
-            ⏳ 正在保存并同步策略...
+            ⏳ 正在保存配置...
         </div>
     </div>
 

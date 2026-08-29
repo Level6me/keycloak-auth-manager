@@ -1253,7 +1253,7 @@ def get_domain_sso_port(site_data):
         allow_pk = site_data.get('allow_passkey', True) is not False
         allow_pwd = site_data.get('allow_password', True) is not False
         if allow_pk and not allow_pwd:
-            return GLOBAL_PASSKEY_SSO_PORT  # 4181 纯免密真·Passkey 代理池
+            return GLOBAL_PASSKEY_SSO_PORT  # 4181 Passkey 专用代理端口
     return GLOBAL_SSO_PORT  # 4180 混合/密码代理池
 
 def get_root_domain(domain):
@@ -1598,7 +1598,7 @@ def ensure_global_sso_container(extra_domain=None):
     if not c_ok1:
         return False, c_err1
 
-    # 5. 启动/维护真·纯 Passkey 代理容器 (127.0.0.1:4181)
+    # 5. 启动/维护 Passkey 专用代理容器 (127.0.0.1:4181)
     c_ok2, c_err2 = _ensure_single_sso_container(
         container_name=GLOBAL_PASSKEY_SSO_CONTAINER,
         client_id=GLOBAL_PASSKEY_SSO_CLIENT_ID,
@@ -1611,7 +1611,7 @@ def ensure_global_sso_container(extra_domain=None):
     if not c_ok2:
         return False, c_err2
 
-    log("🎉 路径 B 双 SSO 代理池已全部就绪 (4180 混合池 + 4181 真·纯 Passkey 池)")
+    log("双 SSO 代理服务已全部就绪 (4180 混合模式 + 4181 Passkey 专用)")
     return True, ""
 
 
@@ -1806,7 +1806,7 @@ def update_nginx_config(domain, oauth_port, target_host, target_port, auth_enabl
     allow_password = site_info.get('allow_password', True) is not False
 
     if allow_passkey and not allow_password:
-        sso_port = GLOBAL_PASSKEY_SSO_PORT  # 4181 真·纯 Passkey 物理无密码代理池
+        sso_port = GLOBAL_PASSKEY_SSO_PORT  # 4181 Passkey 专用代理端口
         client_for_logout = GLOBAL_PASSKEY_SSO_CLIENT_ID
     else:
         sso_port = oauth_port or GLOBAL_SSO_PORT  # 4180 混合/密码代理池
