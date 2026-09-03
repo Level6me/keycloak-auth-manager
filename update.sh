@@ -120,9 +120,34 @@ echo "[4/6] 校验核心配置与加密密钥完整性..."
 [ -f "$BACKUP_DIR/secret.key" ] && cp -f "$BACKUP_DIR/secret.key" "$INSTALL_DIR/"
 [ -d "$BACKUP_DIR/custom_ssl" ] && cp -rf "$BACKUP_DIR/custom_ssl" "$INSTALL_DIR/" 2>/dev/null || true
 
-# 权限加固
+# 权限加固与 Keycloak 宿主目录权限自愈
 [ -f "$INSTALL_DIR/encryption.key" ] && chmod 600 "$INSTALL_DIR/encryption.key" 2>/dev/null || true
 [ -f "$INSTALL_DIR/config.json" ] && chmod 600 "$INSTALL_DIR/config.json" 2>/dev/null || true
+if [ -d "/opt/keycloak" ]; then
+    mkdir -p /opt/keycloak/data /opt/keycloak/themes 2>/dev/null || true
+    chown -R 1000:1000 /opt/keycloak/data /opt/keycloak/themes 2>/dev/null || true
+    chmod -R 775 /opt/keycloak/data /opt/keycloak/themes 2>/dev/null || true
+    echo "    ✓ Keycloak 挂载目录权限已自愈校验 (UID 1000)"
+fi
+
+# 自动检测并修复云服务器 NAT 回环问题（域名解析至本机公网 IP 导致内网连接超时）
+if [ -f "$INSTALL_DIR/config.json" ]; then
+    kc_url=$(grep -o '"keycloak_url"[[:space:]]*:[[:space:]]*"[^"]*"' "$INSTALL_DIR/config.json" | cut -d'"' -f4 || echo "")
+    if [ -n "$kc_url" ]; then
+        kc_host=$(echo "$kc_url" | awk -F[/:] '{print $4}')
+        if [ -n "$kc_host" ] && [ "$kc_host" != "localhost" ] && [ "$kc_host" != "127.0.0.1" ] && ! [[ "$kc_host" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            resolved_ip=$(getent hosts "$kc_host" 2>/dev/null | awk '{print $1}' | head -n1)
+            pub_ip=$(curl -s --connect-timeout 3 ifconfig.me 2>/dev/null || curl -s --connect-timeout 3 icanhazip.com 2>/dev/null || echo "")
+            if [ -n "$resolved_ip" ] && ([ "$resolved_ip" = "$pub_ip" ] || ip addr show 2>/dev/null | grep -q "inet $resolved_ip/"); then
+                if ! grep -q "[[:space:]]$kc_host" /etc/hosts 2>/dev/null; then
+                    echo "127.0.0.1 $kc_host" >> /etc/hosts 2>/dev/null || true
+                    echo "    ✓ 已自动配置 127.0.0.1 $kc_host 到 /etc/hosts (绕过 NAT 回环)"
+                fi
+            fi
+        fi
+    fi
+fi
+
 echo "    ✓ 所有历史配置与站点数据校验完毕，完整无损"
 
 # 6. 检查并增量更新 Python 依赖

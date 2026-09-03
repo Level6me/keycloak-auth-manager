@@ -254,6 +254,24 @@ def load_config():
                     raw_url = "https://" + raw_url
                 raw_url = raw_url.rstrip("/")
             KEYCLOAK_URL = raw_url
+            # 自动检测并修复云厂商公网 NAT 回环丢包问题
+            if KEYCLOAK_URL:
+                try:
+                    import socket
+                    _host = urlparse(KEYCLOAK_URL).hostname
+                    if _host and _host not in ('localhost', '127.0.0.1') and not re.match(r'^\d{1,3}(\.\d{1,3}){3}$', _host):
+                        _resolved = socket.gethostbyname(_host)
+                        _pub = get_server_public_ip()
+                        if _resolved == _pub or _resolved.startswith('127.'):
+                            if os.path.exists('/etc/hosts') and os.access('/etc/hosts', os.W_OK):
+                                with open('/etc/hosts', 'r') as _hf:
+                                    _hcontent = _hf.read()
+                                if _host not in _hcontent:
+                                    with open('/etc/hosts', 'a') as _hf:
+                                        _hf.write(f"\n127.0.0.1 {_host}\n")
+                                    print(f"已自动补充 /etc/hosts 回环映射: 127.0.0.1 -> {_host}")
+                except Exception:
+                    pass
             KEYCLOAK_ADMIN = cfg.get("keycloak_admin", "")
             KEYCLOAK_CONTAINER = cfg.get("keycloak_container", "keycloak")
             WEB_PORT = cfg.get("web_port", 8088)
