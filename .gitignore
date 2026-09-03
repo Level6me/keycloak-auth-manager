@@ -2,6 +2,9 @@
 data.json
 config.json
 encryption.key
+secret.key
+site-policy.json
+*.key
 app.log
 backup_frps/
 
