@@ -320,6 +320,27 @@ if [[ ! "$KEYCLOAK_URL" =~ ^https?:// ]]; then
     KEYCLOAK_URL="http://$KEYCLOAK_URL"
 fi
 
+# 自动检测并修复云服务器 NAT 回环问题（当域名解析到本机公网 IP 时，内网直连会超时被丢弃）
+kc_domain=$(echo "$KEYCLOAK_URL" | awk -F[/:] '{print $4}')
+if [ -n "$kc_domain" ] && [ "$kc_domain" != "localhost" ] && [ "$kc_domain" != "127.0.0.1" ] && ! [[ "$kc_domain" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+    resolved_ip=$(getent hosts "$kc_domain" 2>/dev/null | awk '{print $1}' | head -n1)
+    if [ -n "$resolved_ip" ]; then
+        is_local=false
+        [ "$resolved_ip" = "$PUBLIC_IP" ] && is_local=true
+        [ "$resolved_ip" = "$local_ip" ] && is_local=true
+        if ip addr show 2>/dev/null | grep -q "inet $resolved_ip/"; then
+            is_local=true
+        fi
+        if [ "$is_local" = true ]; then
+            if ! grep -q "[[:space:]]$kc_domain" /etc/hosts 2>/dev/null; then
+                echo "    检测到 Keycloak 域名 $kc_domain 解析为本机 IP，正在配置 /etc/hosts 绕过云厂商 NAT 回环限制..."
+                echo "127.0.0.1 $kc_domain" >> /etc/hosts 2>/dev/null || true
+                echo "    ✓ 已自动配置 127.0.0.1 $kc_domain 到 /etc/hosts"
+            fi
+        fi
+    fi
+fi
+
 # 验证 Keycloak URL 是否可访问
 echo "    测试 Keycloak 连接 ($KEYCLOAK_URL)..."
 if curl -s -o /dev/null -w "%{http_code}" "$KEYCLOAK_URL" --max-time 5 | grep -q "200\|302\|303\|307\|404"; then
@@ -443,10 +464,16 @@ else
     exit 1
 fi
 
-# 创建安装目录
-echo "[2] 创建安装目录..."
+# 创建安装目录与宿主目录权限初始化
+echo "[2] 创建安装目录与检查 Keycloak 权限..."
 mkdir -p "$INSTALL_DIR"
-echo "    ✓ 目录已创建: $INSTALL_DIR"
+if [ -d "/opt/keycloak" ] || [ -n "$KEYCLOAK_RUNNING" ]; then
+    mkdir -p /opt/keycloak/data /opt/keycloak/themes 2>/dev/null || true
+    chown -R 1000:1000 /opt/keycloak/data /opt/keycloak/themes 2>/dev/null || true
+    chmod -R 775 /opt/keycloak/data /opt/keycloak/themes 2>/dev/null || true
+    echo "    ✓ Keycloak 挂载目录权限已加固 (UID 1000)"
+fi
+echo "    ✓ 目录已就绪: $INSTALL_DIR"
 
 # 复制文件
 echo "[2] 复制项目文件..."
@@ -481,6 +508,7 @@ echo "[3] 创建/更新配置文件..."
     "keycloak_url": "$KEYCLOAK_URL",
     "keycloak_admin": "$KEYCLOAK_ADMIN",
     "keycloak_password": "$KEYCLOAK_PASSWORD",
+    "console_username": "$KEYCLOAK_ADMIN",
     "keycloak_container": "$KEYCLOAK_CONTAINER",
     "web_port": $WEB_PORT,
     "onepanel_port": $ONEPANEL_PORT,
@@ -594,6 +622,8 @@ echo "  🎉 Keycloak Auth Manager 部署完成！"
 echo "=========================================="
 echo ""
 echo "访问地址: http://${PUBLIC_IP}:$WEB_PORT"
+echo "登录账号: $KEYCLOAK_ADMIN (亦可使用 admin 登录)"
+echo "登录密码: (您在部署时设置的 Keycloak Admin 密码)"
 echo ""
 echo "文件位置:"
 echo "  程序目录: $INSTALL_DIR"
