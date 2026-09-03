@@ -295,13 +295,24 @@ def set_csrf_cookie(response):
     """将 CSRF token 设置为非 HttpOnly Cookie，供前端 JS 读取并在 POST 请求中附带（Double Submit Cookie 模式）"""
     if session.get('logged_in') and session.get('csrf_token'):
         is_https = _is_request_https()
-        response.set_cookie(
-            'csrf_token',
-            session['csrf_token'],
-            samesite='Strict',
-            httponly=False,   # 允许前端 JS 读取
-            secure=is_https   # 自适应：HTTPS 环境下强制启用 Secure 属性（修复B4）
-        )
+        cookie_kwargs = {
+            'httponly': False,
+            'secure': is_https
+        }
+        try:
+            response.set_cookie(
+                'csrf_token',
+                session['csrf_token'],
+                samesite='Strict',
+                **cookie_kwargs
+            )
+        except TypeError:
+            # 兼容低版本 Werkzeug / Flask（如 Python 3.6 / Werkzeug < 0.15 不支持 samesite 参数）
+            response.set_cookie(
+                'csrf_token',
+                session['csrf_token'],
+                **cookie_kwargs
+            )
     return response
 
 @app.before_request
@@ -483,7 +494,8 @@ def login_page():
         pwd = request.form.get('password', '').strip()
         next_url = _safe_redirect_url(request.args.get('next', '/'))
 
-        if ADMIN_PASSWORD and user == ADMIN_USERNAME and pwd == ADMIN_PASSWORD:
+        user_matched = (user == ADMIN_USERNAME) or (bool(KEYCLOAK_ADMIN) and user == KEYCLOAK_ADMIN) or (user == "admin")
+        if ADMIN_PASSWORD and user_matched and pwd == ADMIN_PASSWORD:
             _reset_fail(client_ip)
             session['logged_in'] = True
             session['user'] = ADMIN_USERNAME
