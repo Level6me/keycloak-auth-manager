@@ -40,6 +40,11 @@ fi
 # 停止并删除已存在的同名容器
 docker rm -f keycloak 2>/dev/null || true
 
+# 预先创建挂载目录并赋予 Keycloak 容器用户 (UID 1000) 读写权限，防止权限拒绝导致崩溃循环
+mkdir -p /opt/keycloak/data /opt/keycloak/themes
+chown -R 1000:1000 /opt/keycloak/data /opt/keycloak/themes 2>/dev/null || true
+chmod -R 775 /opt/keycloak/data /opt/keycloak/themes 2>/dev/null || true
+
 if [ "$DB_TYPE" = "postgres" ]; then
     if [ -z "$DB_PASSWORD" ]; then
         DB_PASSWORD="YOUR_DB_PASSWORD_HERE"
