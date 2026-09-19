@@ -1490,17 +1490,17 @@
         </div>
 
         <form id="sslImportModalForm" onsubmit="submitImportSslModal(event)">
-            <!-- 切换导入方式：文件上传 / 粘贴 JSON -->
+            <!-- 切换导入方式：ZIP/JSON 文件上传 / 粘贴 JSON -->
             <div class="segmented-control" style="margin-bottom: 14px; width: 100%;">
-                <button type="button" class="segment-btn active" id="btnImportTabFile" onclick="switchImportTab('file')">📁 上传备份文件 (.json)</button>
+                <button type="button" class="segment-btn active" id="btnImportTabFile" onclick="switchImportTab('file')">📦 上传压缩包 (.zip) / JSON</button>
                 <button type="button" class="segment-btn" id="btnImportTabText" onclick="switchImportTab('text')">📝 粘贴 JSON / 证书内容</button>
             </div>
 
             <!-- Tab 1: 文件上传 -->
             <div id="importSectionFile" class="form-group">
-                <label class="form-label">📄 选择导出的证书 JSON 文件</label>
-                <input type="file" id="import_ssl_file" class="input-box" accept=".json,application/json" style="padding: 8px;">
-                <div class="form-hint">支持由系统导出的单证书 `ssl_*.json` 或批量证书备份包</div>
+                <label class="form-label">📁 选择证书 ZIP 压缩包或 JSON 备份文件</label>
+                <input type="file" id="import_ssl_file" class="input-box" accept=".zip,.json,application/zip,application/json,application/x-zip-compressed" style="padding: 8px;">
+                <div class="form-hint">支持导入按证书分目录保存的 ZIP 压缩包（内含私钥、公钥与元数据）或 JSON 备份文件</div>
             </div>
 
             <!-- Tab 2: 文本粘贴 -->
@@ -1511,7 +1511,7 @@
             </div>
 
             <div style="font-size: 12px; color: var(--text-sec); margin-bottom: 16px; background: var(--card-sec); padding: 10px 12px; border-radius: 10px; line-height: 1.6;">
-                💡 <b>自动续签保障</b>：导入时系统将自动匹配本地 ACME 与 DNS 凭据，并在 1Panel 中恢复完整的自动续签任务，无需重新申请。
+                💡 <b>自动续签保障</b>：导入时系统将自动解析各个证书目录下的私钥、公钥并匹配本地 ACME 与 DNS 凭据，在 1Panel 中完整恢复自动续签任务。
             </div>
 
             <div style="display: flex; gap: 10px;">
