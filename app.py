@@ -3097,6 +3097,53 @@ def api_update_domain_auth_methods(domain):
     return jsonify({"success": False, "error": "更新 Nginx 反代配置失败"})
 
 
+@app.route('/api/domain/<domain>/target', methods=['POST'])
+def api_update_domain_target(domain):
+    domain = domain.strip().lower()
+    if not is_valid_domain(domain):
+        return jsonify({"success": False, "error": "域名格式非法"}), 400
+
+    data = load_data()
+    if domain not in data:
+        return jsonify({"success": False, "error": "域名配置不存在"}), 404
+
+    target_host = request.form.get('target_host', '127.0.0.1').strip()
+    target_port_str = request.form.get('target_port', '').strip()
+
+    if not target_host:
+        target_host = '127.0.0.1'
+
+    try:
+        target_port = int(target_port_str)
+        if target_port < 1 or target_port > 65535:
+            raise ValueError()
+    except (ValueError, TypeError):
+        return jsonify({"success": False, "error": "目标端口必须为 1 ~ 65535 之间的有效整数"}), 400
+
+    auth = data[domain]
+    auth['target_host'] = target_host
+    auth['target_port'] = target_port
+    auth['port'] = target_port
+
+    oauth_port = auth.get('oauth_port', GLOBAL_SSO_PORT)
+    auth_enabled = auth.get('auth_enabled', True)
+    proxy_enabled = auth.get('proxy_enabled', True)
+
+    new_conf = update_nginx_config(domain, oauth_port, target_host, target_port, auth_enabled, proxy_enabled, reload_nginx=True)
+    if new_conf:
+        auth['nginx_config'] = new_conf
+        save_data(data)
+        log(f"域名 {domain} 目标后端地址与端口已更新为 {target_host}:{target_port}")
+        return jsonify({
+            "success": True,
+            "target_host": target_host,
+            "target_port": target_port,
+            "nginx_config": new_conf
+        })
+
+    return jsonify({"success": False, "error": "更新 Nginx 反代配置失败"}), 500
+
+
 @app.route('/api/list')
 def api_list():
     return json.dumps(load_data())

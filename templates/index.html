@@ -1134,11 +1134,23 @@
 
         <!-- Details Info -->
         <div class="card" style="padding: 12px 16px; margin-bottom: 16px;">
-
-            <div class="setting-row" style="padding: 6px 0;">
-                <span class="setting-label" style="font-size: 13px;">🎯 目标服务</span>
-                <code id="modalTargetHost" style="background: var(--card-sec); padding: 2px 6px; border-radius: 6px;">127.0.0.1:8080</code>
+            <div class="setting-row" style="padding: 8px 0; border-bottom: 1px solid var(--border-subtle); flex-wrap: wrap; gap: 6px;">
+                <div class="setting-info" style="min-width: 140px;">
+                    <span class="setting-label" style="font-size: 13px;">🎯 目标服务 (Host & 端口)</span>
+                    <span class="setting-desc" style="font-size: 11px;">反代转发的目标后端服务地址与端口</span>
+                </div>
+                <div id="modalTargetDisplay" style="display: flex; align-items: center; gap: 8px; margin-left: auto;">
+                    <code id="modalTargetHost" style="background: var(--card-sec); padding: 3px 8px; border-radius: 6px; font-weight: 700; font-size: 13px;">127.0.0.1:8080</code>
+                    <button class="pill-btn" onclick="toggleEditTarget(true)" title="修改目标后端与端口" style="padding: 2px 8px; font-size: 11px;">✏️ 修改</button>
+                </div>
+                <div id="modalTargetEdit" style="display: none; align-items: center; gap: 6px; flex-wrap: wrap; width: 100%; margin-top: 6px;">
+                    <input type="text" id="modalInputTargetHost" class="input-box" style="flex: 2; min-width: 130px; padding: 6px 8px; font-size: 12px;" placeholder="127.0.0.1">
+                    <input type="number" id="modalInputTargetPort" class="input-box" style="flex: 1; min-width: 75px; padding: 6px 8px; font-size: 12px;" placeholder="端口" min="1" max="65535">
+                    <button type="button" class="btn accent sm" onclick="saveTargetPortAjax()" id="btnSaveTargetPort" style="padding: 6px 10px; font-size: 12px;">💾 保存</button>
+                    <button type="button" class="btn secondary sm" onclick="toggleEditTarget(false)" style="padding: 6px 10px; font-size: 12px;">取消</button>
+                </div>
             </div>
+
             <div class="setting-row" style="padding: 6px 0;">
                 <span class="setting-label" style="font-size: 13px;">OAuth 端口</span>
                 <span id="modalOauthPort" class="badge secondary">:4180</span>
