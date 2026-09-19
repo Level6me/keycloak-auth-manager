@@ -569,19 +569,23 @@ body {
 
 /* Segmented Control */
 .segmented-control {
-    display: flex;
+    display: inline-flex;
+    align-items: center;
     background: rgba(120, 120, 128, 0.12);
-    padding: 4px;
-    border-radius: 14px;
-    gap: 4px;
+    padding: 3px;
+    border-radius: 12px;
+    gap: 3px;
+    box-sizing: border-box;
 }
 .segment-btn {
-    flex: 1;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
     text-align: center;
     border: none;
     background: none;
-    padding: 8px 12px;
-    border-radius: 10px;
+    padding: 6px 12px;
+    border-radius: 9px;
     font-size: 12px;
     font-weight: 700;
     color: var(--text-sec);
@@ -589,12 +593,41 @@ body {
     transition: all 0.2s cubic-bezier(0.1, 0.8, 0.25, 1);
     font-family: inherit;
     text-decoration: none;
+    white-space: nowrap;
+    box-sizing: border-box;
 }
 .segment-btn:hover { color: var(--text); }
 .segment-btn.active {
     background: var(--card);
     color: var(--text);
     box-shadow: var(--shadow-sm);
+}
+
+/* 视图模式切换器专用样式 (固定单行横排小图标) */
+.view-switcher,
+.segmented-control.view-switcher {
+    display: inline-flex !important;
+    flex-direction: row !important;
+    flex-wrap: nowrap !important;
+    width: auto !important;
+    height: 36px !important;
+    flex-shrink: 0 !important;
+    padding: 3px !important;
+    border-radius: 11px !important;
+    background: rgba(120, 120, 128, 0.12) !important;
+}
+.view-switcher .segment-btn,
+.segmented-control.view-switcher .segment-btn {
+    display: flex !important;
+    align-items: center !important;
+    justify-content: center !important;
+    width: 32px !important;
+    min-width: 32px !important;
+    max-width: 32px !important;
+    height: 30px !important;
+    padding: 0 !important;
+    flex: 0 0 32px !important;
+    border-radius: 8px !important;
 }
 
 /* Switch */
@@ -957,7 +990,7 @@ input:checked + .slider:before { transform: translateX(20px); }
         overflow: hidden;
     }
 
-    /* 顶部工具栏适配 (应用页 & 域名页) */
+    /* 顶部工具栏适配 (应用页 & 域名页 & SSL 证书页) */
     .apps-toolbar, .toolbar-row {
         flex-direction: column !important;
         align-items: stretch !important;
@@ -970,17 +1003,28 @@ input:checked + .slider:before { transform: translateX(20px); }
     .apps-action-btns {
         width: 100% !important;
         display: flex !important;
-        justify-content: space-between !important;
+        align-items: center !important;
+        justify-content: flex-start !important;
+        flex-wrap: wrap !important;
         gap: 6px !important;
     }
-    .apps-action-btns .pill-btn,
+    .apps-action-btns .pill-btn {
+        flex: 1 1 auto !important;
+        padding: 6px 8px !important;
+        font-size: 11px !important;
+        justify-content: center !important;
+        text-align: center !important;
+        white-space: nowrap !important;
+        min-height: 32px !important;
+    }
     .apps-action-btns .btn {
-        flex: 1 !important;
-        padding: 7px 6px !important;
+        flex: 1 1 auto !important;
+        padding: 6px 10px !important;
         font-size: 12px !important;
         justify-content: center !important;
         text-align: center !important;
         white-space: nowrap !important;
+        min-height: 32px !important;
     }
     .btn-add-app-text-long {
         display: none !important;
@@ -1021,18 +1065,51 @@ input:checked + .slider:before { transform: translateX(20px); }
         font-size: 15px !important;
     }
 
-    /* OIDC 指南弹窗选项卡在窄屏下自适应换行 */
-    .segmented-control {
+    /* 弹窗中的选项卡自适应换行，但严格排除视图切换器 */
+    .modal-dialog .segmented-control,
+    .form-group .segmented-control {
         height: auto !important;
         flex-wrap: wrap !important;
         gap: 4px !important;
+        width: 100% !important;
     }
-    .segment-btn {
-        padding: 6px 6px !important;
+    .modal-dialog .segment-btn,
+    .form-group .segment-btn {
+        padding: 6px 8px !important;
         font-size: 11px !important;
         flex: 1 1 auto !important;
-        min-width: 80px !important;
+        min-width: 70px !important;
         white-space: nowrap !important;
+    }
+
+    /* 视图模式切换器在移动端强制保持单行横排 */
+    .view-switcher,
+    .segmented-control.view-switcher,
+    .apps-toolbar .segmented-control,
+    .toolbar-row .segmented-control {
+        display: inline-flex !important;
+        flex-direction: row !important;
+        flex-wrap: nowrap !important;
+        height: 32px !important;
+        width: auto !important;
+        flex: 0 0 auto !important;
+        flex-shrink: 0 !important;
+        padding: 2px !important;
+        gap: 2px !important;
+    }
+    .view-switcher .segment-btn,
+    .segmented-control.view-switcher .segment-btn,
+    .apps-toolbar .segmented-control .segment-btn,
+    .toolbar-row .segmented-control .segment-btn {
+        width: 28px !important;
+        min-width: 28px !important;
+        max-width: 28px !important;
+        height: 28px !important;
+        padding: 0 !important;
+        flex: 0 0 28px !important;
+        display: flex !important;
+        align-items: center !important;
+        justify-content: center !important;
     }
 
     /* 设置行与键值对在移动端防溢出 */
