@@ -327,9 +327,7 @@ function renderDomainsUI(auths) {
                         <button class="btn danger sm" onclick="deleteDomainAjax('${domain}')">🗑️ 删除</button>
                     </div>
                 </td>
-            </tr>
-            `;
-            `;
+            </tr>`;
         }).join('');
     }
 }
