@@ -376,6 +376,9 @@ function openDomainDetail(domain) {
     if (toggleAllowPasskey) toggleAllowPasskey.checked = (auth.allow_passkey !== false);
     if (toggleAllowPassword) toggleAllowPassword.checked = (auth.allow_password !== false);
 
+    // 填充与加载 1Panel 关联证书选择器
+    populateModalDomainSslCerts(auth.ssl_id || 0);
+
     updateModalSwitchBadges(auth);
 
     // 显示模态窗
@@ -486,6 +489,12 @@ async function handleModalToggle(feature, enabled, checkboxEl) {
     try {
         const formData = new FormData();
         formData.append('enabled', enabled ? 'true' : 'false');
+        if (feature === 'ssl') {
+            const sslSelect = document.getElementById('modalSelectSslCert');
+            if (sslSelect && sslSelect.value) {
+                formData.append('ssl_id', sslSelect.value);
+            }
+        }
         formData.append('_csrf_token', (document.cookie.match(/(?:^|;\s*)csrf_token=([^;]+)/) || [])[1] || '');
         const res = await fetch(`/api/toggle/${domain}/${feature}`, {
             method: 'POST',
@@ -497,6 +506,9 @@ async function handleModalToggle(feature, enabled, checkboxEl) {
         if (data.success) {
             if (cachedDomainsData[domain]) {
                 cachedDomainsData[domain][`${feature}_enabled`] = enabled;
+                if (data.ssl_id !== undefined) {
+                    cachedDomainsData[domain].ssl_id = data.ssl_id;
+                }
                 if (data.nginx_config) {
                     cachedDomainsData[domain]['nginx_config'] = data.nginx_config;
                     document.getElementById('modalNginxPre').textContent = data.nginx_config;
@@ -507,12 +519,64 @@ async function handleModalToggle(feature, enabled, checkboxEl) {
             showToast(`${feature.toUpperCase()} 状态已更新为: ${enabled ? '开启' : '关闭'}`, 'success');
         } else {
             checkboxEl.checked = !enabled;
-            showToast('操作失败: ' + data.error, 'error');
+            showToast('操作失败: ' + (data.error || '未知错误'), 'error');
         }
     } catch (e) {
         checkboxEl.disabled = false;
         checkboxEl.checked = !enabled;
         showToast('网络通信异常', 'error');
+    }
+}
+
+async function populateModalDomainSslCerts(selectedSslId = 0) {
+    const select = document.getElementById('modalSelectSslCert');
+    if (!select) return;
+
+    let certs = cachedSslCertificates || [];
+    if (certs.length === 0) {
+        try {
+            const res = await fetch('/api/ssl/certificates');
+            const data = await res.json();
+            if (data.certificates) {
+                cachedSslCertificates = data.certificates;
+                certs = data.certificates;
+            }
+        } catch (e) {}
+    }
+
+    let html = '<option value="0">【未指定 / 自动匹配】</option>';
+    certs.forEach(c => {
+        const org = c.organization || "Let's Encrypt";
+        const exp = c.expire_date ? c.expire_date.split('T')[0] : '';
+        const isSel = (c.id === selectedSslId) ? 'selected' : '';
+        html += `<option value="${c.id}" ${isSel}>${escapeHtml(c.primary_domain)} (${org} · ${exp})</option>`;
+    });
+    select.innerHTML = html;
+    select.value = selectedSslId.toString();
+}
+
+async function handleDomainSslCertChange(sslId) {
+    if (!currentDetailDomain) return;
+    const domain = currentDetailDomain;
+    const targetSslId = parseInt(sslId || '0', 10);
+
+    const fd = new FormData();
+    fd.append('ssl_id', targetSslId.toString());
+    fd.append('_csrf_token', (document.cookie.match(/(?:^|;\s*)csrf_token=([^;]+)/) || [])[1] || '');
+
+    try {
+        const res = await fetch(`/api/domain/${domain}/ssl_cert`, { method: 'POST', body: fd });
+        const data = await res.json();
+        if (data.success) {
+            if (cachedDomainsData[domain]) {
+                cachedDomainsData[domain].ssl_id = targetSslId;
+            }
+            showToast('✅ 域名绑定证书已更新', 'success');
+        } else {
+            showToast('❌ 更新失败: ' + (data.error || '未知错误'), 'error');
+        }
+    } catch (e) {
+        showToast('❌ 网络通信异常', 'error');
     }
 }
 
@@ -2244,9 +2308,10 @@ function renderSslCertificates(filterKeyword = '') {
 
             ${(cert.websites && cert.websites.length > 0) ? `<div style="display: flex; flex-wrap: wrap; gap: 3px; max-height: 38px; overflow: hidden;">${websitesHtml}</div>` : ''}
 
-            <div style="display: flex; gap: 6px; padding-top: 4px; border-top: 1px solid var(--border-subtle); margin-top: auto;">
-                <button class="btn secondary sm" onclick="openSslItemLogModal(${cert.id}, '${escapeHtml(cert.primary_domain)}')" style="flex: 1; justify-content: center; font-size: 11px; padding: 4px 6px;">📜 签发日志</button>
-                <button class="btn accent sm" onclick="reapplySslForDomain('${escapeHtml(cert.primary_domain)}')" style="font-size: 11px; padding: 4px 8px; white-space: nowrap;">🔄 续签/申请</button>
+            <div style="display: flex; gap: 4px; padding-top: 4px; border-top: 1px solid var(--border-subtle); margin-top: auto; flex-wrap: wrap;">
+                <button class="btn secondary sm" onclick="downloadSslBundle(${cert.id}, '${escapeHtml(cert.primary_domain)}')" style="flex: 1; min-width: 50px; justify-content: center; font-size: 11px; padding: 4px 5px;" title="导出完整证书元数据包与自动续签凭据">📥 导出</button>
+                <button class="btn secondary sm" onclick="openSslItemLogModal(${cert.id}, '${escapeHtml(cert.primary_domain)}')" style="flex: 1; min-width: 50px; justify-content: center; font-size: 11px; padding: 4px 5px;">📜 日志</button>
+                <button class="btn accent sm" onclick="reapplySslForDomain('${escapeHtml(cert.primary_domain)}')" style="font-size: 11px; padding: 4px 7px; white-space: nowrap;">🔄 续签/申请</button>
             </div>
         </div>`;
 
@@ -2271,6 +2336,7 @@ function renderSslCertificates(filterKeyword = '') {
             <td><div style="display: flex; flex-wrap: wrap; gap: 3px;">${websitesHtml}</div></td>
             <td style="text-align: right;">
                 <div style="display: inline-flex; gap: 4px;">
+                    <button class="pill-btn" onclick="downloadSslBundle(${cert.id}, '${escapeHtml(cert.primary_domain)}')" style="padding: 3px 8px; font-size: 11px;" title="导出完整证书包">📥 导出</button>
                     <button class="pill-btn" onclick="openSslItemLogModal(${cert.id}, '${escapeHtml(cert.primary_domain)}')" style="padding: 3px 8px; font-size: 11px;">📜 日志</button>
                     <button class="btn accent sm" onclick="reapplySslForDomain('${escapeHtml(cert.primary_domain)}')" style="padding: 3px 8px; font-size: 11px;">🔄 申请</button>
                 </div>
@@ -2283,6 +2349,108 @@ function renderSslCertificates(filterKeyword = '') {
 
     // 应用当前视图模式
     switchSslView(sslViewMode);
+}
+
+// ─── SSL Export & Import Handlers ───
+function downloadSslBundle(sslId, domain) {
+    showToast(`正在导出 ${domain} 证书备份包...`, 'info');
+    const a = document.createElement('a');
+    a.href = `/api/ssl/export/${sslId}`;
+    a.download = `ssl_${(domain || 'cert').replace(/\*/g, 'wildcard')}_${sslId}.json`;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+}
+
+function exportAllSslBundles() {
+    showToast('正在批量导出所有 1Panel 证书完整备份包...', 'info');
+    const a = document.createElement('a');
+    a.href = `/api/ssl/export_all`;
+    a.download = `1panel_all_ssls_export.json`;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+}
+
+function openImportSslModal() {
+    document.querySelectorAll('.modal-overlay.active').forEach(m => m.classList.remove('active'));
+    const modal = document.getElementById('importSslModal');
+    if (!modal) return;
+    const form = document.getElementById('sslImportModalForm');
+    if (form) form.reset();
+    switchImportTab('file');
+    modal.classList.add('active');
+}
+
+function closeImportSslModal() {
+    const modal = document.getElementById('importSslModal');
+    if (modal) modal.classList.remove('active');
+}
+
+function switchImportTab(tabName) {
+    const fileSec = document.getElementById('importSectionFile');
+    const textSec = document.getElementById('importSectionText');
+    const btnFile = document.getElementById('btnImportTabFile');
+    const btnText = document.getElementById('btnImportTabText');
+
+    if (tabName === 'text') {
+        if (fileSec) fileSec.style.display = 'none';
+        if (textSec) textSec.style.display = 'block';
+        if (btnText) btnText.classList.add('active');
+        if (btnFile) btnFile.classList.remove('active');
+    } else {
+        if (fileSec) fileSec.style.display = 'block';
+        if (textSec) textSec.style.display = 'none';
+        if (btnFile) btnFile.classList.add('active');
+        if (btnText) btnText.classList.remove('active');
+    }
+}
+
+async function submitImportSslModal(e) {
+    if (e) e.preventDefault();
+    const btn = document.getElementById('modalSslImportSubmitBtn');
+    const fileInput = document.getElementById('import_ssl_file');
+    const jsonTextarea = document.getElementById('import_ssl_json');
+
+    const formData = new FormData();
+    formData.append('_csrf_token', (document.cookie.match(/(?:^|;\s*)csrf_token=([^;]+)/) || [])[1] || '');
+
+    if (fileInput && fileInput.files && fileInput.files.length > 0) {
+        formData.append('file', fileInput.files[0]);
+    } else if (jsonTextarea && jsonTextarea.value.trim()) {
+        formData.append('bundle_json', jsonTextarea.value.trim());
+    } else {
+        showToast('请选择证书备份文件或粘贴 JSON 数据', 'warning');
+        return;
+    }
+
+    if (btn) {
+        btn.disabled = true;
+        btn.textContent = '⏳ 正在导入中...';
+    }
+
+    try {
+        const res = await fetch('/api/ssl/import', { method: 'POST', body: formData });
+        const data = await res.json();
+        if (btn) {
+            btn.disabled = false;
+            btn.textContent = '🚀 确认导入证书';
+        }
+
+        if (data.success) {
+            showToast(data.message || '证书导入成功！', 'success');
+            closeImportSslModal();
+            await loadSslCertificatesAjax(true);
+        } else {
+            showToast('导入失败: ' + (data.error || '未知错误'), 'error');
+        }
+    } catch (err) {
+        if (btn) {
+            btn.disabled = false;
+            btn.textContent = '🚀 确认导入证书';
+        }
+        showToast('网络请求发生异常: ' + err.message, 'error');
+    }
 }
 
 function checkAndStartSslTaskPolling() {
@@ -2570,6 +2738,14 @@ window.closeSslDetailModal = closeSslDetailModal;
 window.cancelSslTaskAjax = cancelSslTaskAjax;
 window.reapplySslForDomain = reapplySslForDomain;
 window.loadSSLAccounts = loadSSLAccounts;
+window.downloadSslBundle = downloadSslBundle;
+window.exportAllSslBundles = exportAllSslBundles;
+window.openImportSslModal = openImportSslModal;
+window.closeImportSslModal = closeImportSslModal;
+window.switchImportTab = switchImportTab;
+window.submitImportSslModal = submitImportSslModal;
+window.handleDomainSslCertChange = handleDomainSslCertChange;
+window.populateModalDomainSslCerts = populateModalDomainSslCerts;
 
 
 

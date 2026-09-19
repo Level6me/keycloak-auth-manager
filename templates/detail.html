@@ -63,19 +63,29 @@
         </div>
 
         <!-- Switch 2: SSL 证书 -->
-        <div class="setting-row">
-            <div class="setting-info">
-                <span class="setting-label">🔒 HTTPS SSL 保护</span>
-                <span class="setting-desc">控制 1Panel 443 SSL 证书绑定与全站 HTTPS 强制跳转</span>
+        <div class="setting-row" style="flex-direction: column; align-items: stretch; gap: 8px;">
+            <div style="display: flex; justify-content: space-between; align-items: center; gap: 8px;">
+                <div class="setting-info">
+                    <span class="setting-label">🔒 HTTPS SSL 保护</span>
+                    <span class="setting-desc">控制 1Panel 443 SSL 证书绑定与全站 HTTPS 强制跳转 (基于所选证书)</span>
+                </div>
+                <div style="display: flex; align-items: center; gap: 8px;">
+                    <span id="ssl-status" class="badge {% if auth.ssl_enabled %}success{% else %}warning{% endif %}">
+                        {% if auth.ssl_enabled %}已开启{% else %}未开启{% endif %}
+                    </span>
+                    <label class="switch">
+                        <input type="checkbox" id="toggle-ssl" {% if auth.ssl_enabled %}checked{% endif %}>
+                        <span class="slider"></span>
+                    </label>
+                </div>
             </div>
-            <div style="display: flex; align-items: center; gap: 8px;">
-                <span id="ssl-status" class="badge {% if auth.ssl_enabled %}success{% else %}warning{% endif %}">
-                    {% if auth.ssl_enabled %}已开启{% else %}未开启{% endif %}
+            <div style="display: flex; align-items: center; justify-content: space-between; gap: 8px; flex-wrap: wrap; background: var(--card-sec); padding: 8px 12px; border-radius: 8px; border: 1px solid var(--border-subtle);">
+                <span style="font-size: 13px; color: var(--text-sec); display: flex; align-items: center; gap: 4px;">
+                    <span>🔗 绑定证书:</span>
                 </span>
-                <label class="switch">
-                    <input type="checkbox" id="toggle-ssl" {% if auth.ssl_enabled %}checked{% endif %}>
-                    <span class="slider"></span>
-                </label>
+                <select id="detailSelectSslCert" class="select-custom" style="flex: 1; min-width: 220px; max-width: 360px; padding: 6px 10px; font-size: 12px;" onchange="handlePageSslCertChange(this.value)">
+                    <option value="0">正在加载 1Panel 证书列表...</option>
+                </select>
             </div>
         </div>
 
@@ -457,7 +467,57 @@ function savePageTargetPortAjax() {
             }
             showToast('❌ 网络异常，请重试', 'error');
         });
+function escapeHtml(str) {
+    if (!str) return '';
+    return String(str).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
 }
+
+let currentDomainSslId = {{ auth.get('ssl_id', 0) }};
+
+async function loadDetailSslCerts() {
+    const select = document.getElementById('detailSelectSslCert');
+    if (!select) return;
+    try {
+        const res = await fetch('/api/ssl/certificates');
+        const data = await res.json();
+        const certs = data.certificates || [];
+        
+        let html = '<option value="0">【未指定 / 自动匹配】</option>';
+        certs.forEach(c => {
+            const org = c.organization || "Let's Encrypt";
+            const exp = c.expire_date ? c.expire_date.split('T')[0] : '';
+            const isSel = (c.id === currentDomainSslId) ? 'selected' : '';
+            html += `<option value="${c.id}" ${isSel}>${escapeHtml(c.primary_domain)} (${org} · ${exp})</option>`;
+        });
+        select.innerHTML = html;
+        select.value = currentDomainSslId.toString();
+    } catch (e) {
+        select.innerHTML = '<option value="0">加载证书列表失败</option>';
+    }
+}
+
+async function handlePageSslCertChange(sslId) {
+    currentDomainSslId = parseInt(sslId || '0', 10);
+    const fd = new FormData();
+    fd.append('ssl_id', currentDomainSslId.toString());
+    fd.append('_csrf_token', document.cookie.match(/csrf_token=([^;]+)/)?.[1] || '{{ session.get("csrf_token", "") }}');
+
+    try {
+        const res = await fetch('/api/domain/{{ domain }}/ssl_cert', { method: 'POST', body: fd });
+        const data = await res.json();
+        if (data.success) {
+            showToast('✅ 绑定证书已更新', 'success');
+        } else {
+            showToast('❌ 更新失败: ' + (data.error || '未知错误'), 'error');
+        }
+    } catch (e) {
+        showToast('❌ 网络通信异常', 'error');
+    }
+}
+
+document.addEventListener('DOMContentLoaded', function() {
+    loadDetailSslCerts();
+});
 </script>
 </body>
 </html>
