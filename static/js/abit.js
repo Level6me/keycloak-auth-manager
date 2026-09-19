@@ -2353,20 +2353,18 @@ function renderSslCertificates(filterKeyword = '') {
 
 // ─── SSL Export & Import Handlers ───
 function downloadSslBundle(sslId, domain) {
-    showToast(`正在导出 ${domain} 证书备份包...`, 'info');
+    showToast(`正在导出 ${domain} 证书 ZIP 压缩包...`, 'info');
     const a = document.createElement('a');
     a.href = `/api/ssl/export/${sslId}`;
-    a.download = `ssl_${(domain || 'cert').replace(/\*/g, 'wildcard')}_${sslId}.json`;
     document.body.appendChild(a);
     a.click();
     document.body.removeChild(a);
 }
 
 function exportAllSslBundles() {
-    showToast('正在批量导出所有 1Panel 证书完整备份包...', 'info');
+    showToast('正在批量导出 1Panel 全部证书 ZIP 压缩包 (按域名分目录)...', 'info');
     const a = document.createElement('a');
     a.href = `/api/ssl/export_all`;
-    a.download = `1panel_all_ssls_export.json`;
     document.body.appendChild(a);
     a.click();
     document.body.removeChild(a);
@@ -2420,13 +2418,13 @@ async function submitImportSslModal(e) {
     } else if (jsonTextarea && jsonTextarea.value.trim()) {
         formData.append('bundle_json', jsonTextarea.value.trim());
     } else {
-        showToast('请选择证书备份文件或粘贴 JSON 数据', 'warning');
+        showToast('请选择证书 ZIP 压缩包 / JSON 备份文件或粘贴数据', 'warning');
         return;
     }
 
     if (btn) {
         btn.disabled = true;
-        btn.textContent = '⏳ 正在导入中...';
+        btn.textContent = '⏳ 正在解析并导入中...';
     }
 
     try {

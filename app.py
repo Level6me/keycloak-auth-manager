@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-import os, sys, json, subprocess, secrets, string, time, re, hashlib, requests, threading, base64, ipaddress
+import os, sys, json, subprocess, secrets, string, time, re, hashlib, requests, threading, base64, ipaddress, zipfile, io, sqlite3
 import concurrent.futures
 from flask import Flask, render_template, request, redirect, url_for, flash, Response, stream_with_context, send_from_directory, session, jsonify
 from datetime import datetime
@@ -2909,9 +2909,38 @@ def get_1panel_db_conn():
         log(f"连接 1Panel agent.db 数据库失败: {e}")
         return None
 
+def _sanitize_ssl_folder_name(domain, ssl_id=None):
+    if not domain:
+        return f"cert_{ssl_id}" if ssl_id else "cert"
+    d = domain.strip().replace("*", "wildcard")
+    d = re.sub(r'[^\w\-.]', '_', d)
+    return d
+
+def _generate_ssl_readme(primary_domain, domains, org, auto_renew, expire_date, start_date, provider, key_type):
+    auto_renew_str = "开启 (Enabled)" if auto_renew else "关闭 (Disabled)"
+    return f"""==================================================
+1Panel SSL 证书备份包 (Certificate Backup)
+==================================================
+主域名 (Primary Domain) : {primary_domain}
+绑定域名 (Domains)        : {domains}
+颁发机构 (Organization)  : {org}
+证书算法 (Key Type)      : {key_type}
+申请方式 (Provider)      : {provider}
+自动续签 (Auto Renew)    : {auto_renew_str}
+签发时间 (Start Date)    : {start_date}
+到期时间 (Expire Date)   : {expire_date}
+备份生成时间             : {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
+
+目录文件说明:
+- privkey.pem   : SSL 私钥文件 (Private Key)
+- fullchain.pem : SSL 证书及中间证书链 (Certificate Chain)
+- metadata.json : 完整 1Panel 数据库元数据 (含 ACME/DNS 凭据配置，用于全量恢复与继续自动续签)
+==================================================
+"""
+
 @app.route('/api/ssl/export/<int:ssl_id>')
 def api_ssl_export(ssl_id):
-    """导出单个 SSL 证书的完整元数据与私钥、证书链、ACME及DNS信息"""
+    """导出单个 SSL 证书为分目录 ZIP 压缩包（包含 privkey.pem, fullchain.pem, metadata.json）"""
     conn = get_1panel_db_conn()
     if not conn:
         return jsonify({"success": False, "error": "无法连接 1Panel 数据库"}), 500
@@ -2940,25 +2969,36 @@ def api_ssl_export(ssl_id):
             if dns_row:
                 dns_info = dict(dns_row)
 
+        primary_domain = row_dict.get("primary_domain") or f"cert_{ssl_id}"
+        priv_key = row_dict.get("private_key") or ""
+        pem = row_dict.get("pem") or ""
+        domains = row_dict.get("domains") or primary_domain
+        org = row_dict.get("organization") or "Let's Encrypt"
+        auto_renew = row_dict.get("auto_renew", 1)
+        expire_date = str(row_dict.get("expire_date") or "")
+        start_date = str(row_dict.get("start_date") or "")
+        provider = row_dict.get("provider") or "dnsAccount"
+        key_type = row_dict.get("key_type") or "RSA2048"
+
         bundle = {
             "version": "1.0",
             "format": "1panel_ssl_bundle",
             "exported_at": datetime.now().isoformat(),
             "certificate": {
                 "id": row_dict["id"],
-                "primary_domain": row_dict.get("primary_domain") or "",
-                "domains": row_dict.get("domains") or "",
-                "private_key": row_dict.get("private_key") or "",
-                "pem": row_dict.get("pem") or "",
+                "primary_domain": primary_domain,
+                "domains": domains,
+                "private_key": priv_key,
+                "pem": pem,
                 "cert_url": row_dict.get("cert_url") or "",
                 "type": row_dict.get("type") or "YR1",
-                "provider": row_dict.get("provider") or "dnsAccount",
-                "organization": row_dict.get("organization") or "Let's Encrypt",
-                "auto_renew": row_dict.get("auto_renew", 1),
-                "expire_date": str(row_dict.get("expire_date") or ""),
-                "start_date": str(row_dict.get("start_date") or ""),
+                "provider": provider,
+                "organization": org,
+                "auto_renew": auto_renew,
+                "expire_date": expire_date,
+                "start_date": start_date,
                 "status": row_dict.get("status") or "ready",
-                "key_type": row_dict.get("key_type") or "RSA2048",
+                "key_type": key_type,
                 "skip_dns": row_dict.get("skip_dns") or 0,
                 "nameserver1": row_dict.get("nameserver1") or "",
                 "nameserver2": row_dict.get("nameserver2") or "",
@@ -2972,16 +3012,22 @@ def api_ssl_export(ssl_id):
             "dns_account": dns_info
         }
 
-        if request.args.get('download') == 'false':
+        req_format = request.args.get('format', 'zip').lower()
+        if req_format == 'json' or request.args.get('download') == 'false':
             return jsonify({"success": True, "bundle": bundle})
 
-        domain_safe = (row_dict.get("primary_domain") or "cert").replace("*", "wildcard").replace(".", "_")
-        filename = f"ssl_{domain_safe}_{ssl_id}.json"
-        
-        json_bytes = json.dumps(bundle, indent=2, ensure_ascii=False).encode('utf-8')
+        folder_name = _sanitize_ssl_folder_name(primary_domain, ssl_id)
+        zip_buf = io.BytesIO()
+        with zipfile.ZipFile(zip_buf, 'w', compression=zipfile.ZIP_DEFLATED) as zf:
+            zf.writestr(f"{folder_name}/privkey.pem", priv_key)
+            zf.writestr(f"{folder_name}/fullchain.pem", pem)
+            zf.writestr(f"{folder_name}/metadata.json", json.dumps(bundle, indent=2, ensure_ascii=False))
+            zf.writestr(f"{folder_name}/README.txt", _generate_ssl_readme(primary_domain, domains, org, auto_renew, expire_date, start_date, provider, key_type))
+
+        filename = f"ssl_{folder_name}_{ssl_id}.zip"
         return Response(
-            json_bytes,
-            mimetype="application/json",
+            zip_buf.getvalue(),
+            mimetype="application/zip",
             headers={"Content-Disposition": f"attachment; filename={filename}"}
         )
     except Exception as e:
@@ -2992,7 +3038,7 @@ def api_ssl_export(ssl_id):
 
 @app.route('/api/ssl/export_all')
 def api_ssl_export_all():
-    """批量导出 1Panel 所有证书完整元数据包"""
+    """批量导出 1Panel 所有证书为按域名分目录的 ZIP 压缩包"""
     conn = get_1panel_db_conn()
     if not conn:
         return jsonify({"success": False, "error": "无法连接 1Panel 数据库"}), 500
@@ -3037,7 +3083,7 @@ def api_ssl_export_all():
                 "dns_account": dns_map.get(rd.get('dns_account_id'))
             })
 
-        all_bundle = {
+        all_manifest = {
             "version": "1.0",
             "format": "1panel_ssl_bundle_collection",
             "exported_at": datetime.now().isoformat(),
@@ -3045,11 +3091,69 @@ def api_ssl_export_all():
             "certificates": cert_bundles
         }
 
-        filename = f"1panel_all_ssls_export_{datetime.now().strftime('%Y%m%d%H%M%S')}.json"
-        json_bytes = json.dumps(all_bundle, indent=2, ensure_ascii=False).encode('utf-8')
+        req_format = request.args.get('format', 'zip').lower()
+        if req_format == 'json':
+            json_bytes = json.dumps(all_manifest, indent=2, ensure_ascii=False).encode('utf-8')
+            filename = f"1panel_all_ssls_export_{datetime.now().strftime('%Y%m%d%H%M%S')}.json"
+            return Response(
+                json_bytes,
+                mimetype="application/json",
+                headers={"Content-Disposition": f"attachment; filename={filename}"}
+            )
+
+        zip_buf = io.BytesIO()
+        with zipfile.ZipFile(zip_buf, 'w', compression=zipfile.ZIP_DEFLATED) as zf:
+            zf.writestr("manifest.json", json.dumps(all_manifest, indent=2, ensure_ascii=False))
+            
+            readme_lines = [
+                "==================================================",
+                "1Panel 全部 SSL 证书批量备份汇总",
+                "==================================================",
+                f"备份生成时间 : {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}",
+                f"证书总数量   : {len(cert_bundles)} 张",
+                "--------------------------------------------------",
+                "证书清单:"
+            ]
+            for cb in cert_bundles:
+                readme_lines.append(f"- [{cb['id']}] {cb['primary_domain']} ({cb['organization']}) | 到期: {cb['expire_date']}")
+            readme_lines.append("==================================================")
+            zf.writestr("README.txt", "\n".join(readme_lines))
+
+            seen_folders = {}
+            for cb in cert_bundles:
+                raw_folder = _sanitize_ssl_folder_name(cb['primary_domain'], cb['id'])
+                if raw_folder in seen_folders:
+                    folder_name = f"{raw_folder}_{cb['id']}"
+                else:
+                    seen_folders[raw_folder] = True
+                    folder_name = raw_folder
+
+                single_bundle = {
+                    "version": "1.0",
+                    "format": "1panel_ssl_bundle",
+                    "exported_at": datetime.now().isoformat(),
+                    "certificate": cb,
+                    "acme_account": cb.get("acme_account"),
+                    "dns_account": cb.get("dns_account")
+                }
+                zf.writestr(f"{folder_name}/privkey.pem", cb.get("private_key") or "")
+                zf.writestr(f"{folder_name}/fullchain.pem", cb.get("pem") or "")
+                zf.writestr(f"{folder_name}/metadata.json", json.dumps(single_bundle, indent=2, ensure_ascii=False))
+                zf.writestr(f"{folder_name}/README.txt", _generate_ssl_readme(
+                    cb.get("primary_domain") or "",
+                    cb.get("domains") or "",
+                    cb.get("organization") or "",
+                    cb.get("auto_renew", 1),
+                    cb.get("expire_date") or "",
+                    cb.get("start_date") or "",
+                    cb.get("provider") or "",
+                    cb.get("key_type") or "RSA2048"
+                ))
+
+        filename = f"1panel_all_ssls_export_{datetime.now().strftime('%Y%m%d_%H%M%S')}.zip"
         return Response(
-            json_bytes,
-            mimetype="application/json",
+            zip_buf.getvalue(),
+            mimetype="application/zip",
             headers={"Content-Disposition": f"attachment; filename={filename}"}
         )
     except Exception as e:
@@ -3060,68 +3164,187 @@ def api_ssl_export_all():
 
 @app.route('/api/ssl/import', methods=['POST'])
 def api_ssl_import():
-    """完整导入证书并写入 1Panel agent.db，确保完整状态与自动续签持续有效"""
-    bundle_data = None
+    """完整导入证书并写入 1Panel agent.db，支持分目录 ZIP 压缩包、JSON 文件及文本"""
+    items_to_import = []
     
-    # 1. 尝试从上传文件读取
+    # 1. 尝试从上传的 ZIP 或 JSON 文件读取
     if 'file' in request.files and request.files['file'].filename:
         file = request.files['file']
-        try:
-            content = file.read().decode('utf-8')
-            bundle_data = json.loads(content)
-        except Exception as e:
-            return jsonify({"success": False, "error": f"上传的 JSON 文件解析失败: {str(e)}"}), 400
+        filename = file.filename.lower()
+        file_bytes = file.read()
+        
+        # 判断是否为 ZIP 压缩包
+        if filename.endswith('.zip') or file_bytes.startswith(b'PK\x03\x04'):
+            try:
+                with zipfile.ZipFile(io.BytesIO(file_bytes), 'r') as zf:
+                    zip_entries = defaultdict(dict)
+                    manifest_data = None
+                    
+                    for name in zf.namelist():
+                        if '__MACOSX' in name or name.endswith('.DS_Store') or name.endswith('/'):
+                            continue
+                        
+                        parts = [p for p in name.split('/') if p]
+                        if not parts:
+                            continue
+                        
+                        try:
+                            content_bytes = zf.read(name)
+                        except Exception:
+                            continue
+                        
+                        content_str = None
+                        for enc in ['utf-8', 'gbk', 'latin1']:
+                            try:
+                                content_str = content_bytes.decode(enc)
+                                break
+                            except Exception:
+                                pass
+                        
+                        if content_str is None:
+                            continue
+                        
+                        if len(parts) == 1:
+                            folder = "_root_"
+                            fname = parts[0]
+                        else:
+                            folder = parts[0]
+                            fname = parts[-1]
+                        
+                        lower_fname = fname.lower()
+                        if lower_fname == 'manifest.json':
+                            try:
+                                manifest_data = json.loads(content_str)
+                            except Exception:
+                                pass
+                        elif lower_fname == 'metadata.json' or (lower_fname.endswith('.json') and lower_fname != 'manifest.json'):
+                            try:
+                                zip_entries[folder]['metadata'] = json.loads(content_str)
+                            except Exception:
+                                pass
+                        elif lower_fname in ['privkey.pem', 'private.key', 'privkey.key', 'server.key', 'key.pem'] or lower_fname.endswith('.key'):
+                            zip_entries[folder]['key'] = content_str
+                        elif lower_fname in ['fullchain.pem', 'cert.pem', 'certificate.crt', 'fullchain.crt', 'server.crt', 'cert.crt'] or (lower_fname.endswith('.pem') and 'priv' not in lower_fname and 'key' not in lower_fname) or lower_fname.endswith('.crt'):
+                            zip_entries[folder]['cert'] = content_str
+
+                    # 处理解析出的 entries
+                    for folder, entry in zip_entries.items():
+                        meta = entry.get('metadata')
+                        if meta:
+                            if meta.get('format') == '1panel_ssl_bundle_collection' and isinstance(meta.get('certificates'), list):
+                                for c in meta['certificates']:
+                                    items_to_import.append(c)
+                            elif 'certificate' in meta:
+                                cert_obj = meta['certificate']
+                                cert_obj['acme_account'] = meta.get('acme_account')
+                                cert_obj['dns_account'] = meta.get('dns_account')
+                                if not cert_obj.get('pem') and entry.get('cert'):
+                                    cert_obj['pem'] = entry['cert']
+                                if not cert_obj.get('private_key') and entry.get('key'):
+                                    cert_obj['private_key'] = entry['key']
+                                items_to_import.append(cert_obj)
+                            elif meta.get('primary_domain'):
+                                cert_obj = dict(meta)
+                                if not cert_obj.get('pem') and entry.get('cert'):
+                                    cert_obj['pem'] = entry['cert']
+                                if not cert_obj.get('private_key') and entry.get('key'):
+                                    cert_obj['private_key'] = entry['key']
+                                items_to_import.append(cert_obj)
+                        elif entry.get('key') and entry.get('cert'):
+                            folder_clean = folder if folder != '_root_' else 'cert'
+                            folder_clean = re.sub(r'_\d+$', '', folder_clean)
+                            domain_name = folder_clean.replace('wildcard.', '*.').replace('_wildcard_.', '*.').replace('_wildcard_', '*')
+                            items_to_import.append({
+                                "primary_domain": domain_name,
+                                "domains": domain_name,
+                                "pem": entry['cert'],
+                                "private_key": entry['key'],
+                                "provider": "manual",
+                                "auto_renew": 0,
+                                "organization": "Manual Upload",
+                                "status": "ready"
+                            })
+
+                    # 如果没有子目录但根目录存在 manifest
+                    if not items_to_import and manifest_data and isinstance(manifest_data.get('certificates'), list):
+                        items_to_import = manifest_data.get('certificates')
+            except Exception as e:
+                return jsonify({"success": False, "error": f"解析 ZIP 压缩包失败: {str(e)}"}), 400
+        else:
+            # 可能是 JSON 文件
+            try:
+                content = file_bytes.decode('utf-8')
+                bundle_json = json.loads(content)
+                if isinstance(bundle_json, dict):
+                    if bundle_json.get('format') == '1panel_ssl_bundle_collection' and isinstance(bundle_json.get('certificates'), list):
+                        items_to_import = bundle_json.get('certificates')
+                    elif 'certificate' in bundle_json:
+                        cert_obj = bundle_json['certificate']
+                        cert_obj['acme_account'] = bundle_json.get('acme_account')
+                        cert_obj['dns_account'] = bundle_json.get('dns_account')
+                        items_to_import = [cert_obj]
+                    elif 'primary_domain' in bundle_json and 'pem' in bundle_json:
+                        items_to_import = [bundle_json]
+                elif isinstance(bundle_json, list):
+                    items_to_import = bundle_json
+            except Exception as e:
+                return jsonify({"success": False, "error": f"上传的 JSON 文件解析失败: {str(e)}"}), 400
 
     # 2. 尝试从表单 bundle_json 或 JSON body 读取
-    if not bundle_data:
+    if not items_to_import:
         raw_text = request.form.get('bundle_json', '').strip()
         if raw_text:
             try:
-                bundle_data = json.loads(raw_text)
+                bundle_json = json.loads(raw_text)
+                if isinstance(bundle_json, dict):
+                    if bundle_json.get('format') == '1panel_ssl_bundle_collection' and isinstance(bundle_json.get('certificates'), list):
+                        items_to_import = bundle_json.get('certificates')
+                    elif 'certificate' in bundle_json:
+                        cert_obj = bundle_json['certificate']
+                        cert_obj['acme_account'] = bundle_json.get('acme_account')
+                        cert_obj['dns_account'] = bundle_json.get('dns_account')
+                        items_to_import = [cert_obj]
+                    elif 'primary_domain' in bundle_json and 'pem' in bundle_json:
+                        items_to_import = [bundle_json]
+                elif isinstance(bundle_json, list):
+                    items_to_import = bundle_json
             except Exception as e:
                 return jsonify({"success": False, "error": f"粘贴的 JSON 内容格式错误: {str(e)}"}), 400
 
-    if not bundle_data and request.is_json:
-        bundle_data = request.get_json()
+    if not items_to_import and request.is_json:
+        req_json = request.get_json()
+        if isinstance(req_json, dict):
+            if req_json.get('format') == '1panel_ssl_bundle_collection' and isinstance(req_json.get('certificates'), list):
+                items_to_import = req_json.get('certificates')
+            elif 'certificate' in req_json:
+                cert_obj = req_json['certificate']
+                cert_obj['acme_account'] = req_json.get('acme_account')
+                cert_obj['dns_account'] = req_json.get('dns_account')
+                items_to_import = [cert_obj]
+            elif 'primary_domain' in req_json and 'pem' in req_json:
+                items_to_import = [req_json]
+        elif isinstance(req_json, list):
+            items_to_import = req_json
 
-    # 3. 兼容手动 PEM + 私钥导入
-    if not bundle_data:
+    # 3. 兼容手动 PEM + 私钥表单导入
+    if not items_to_import:
         manual_domain = request.form.get('primary_domain', '').strip()
         manual_pem = request.form.get('pem', '').strip()
         manual_key = request.form.get('private_key', '').strip()
         if manual_domain and manual_pem and manual_key:
-            bundle_data = {
-                "format": "1panel_ssl_bundle",
-                "certificate": {
-                    "primary_domain": manual_domain,
-                    "pem": manual_pem,
-                    "private_key": manual_key,
-                    "provider": "manual",
-                    "auto_renew": 0,
-                    "organization": "Manual Upload",
-                    "status": "ready"
-                }
-            }
-
-    if not bundle_data:
-        return jsonify({"success": False, "error": "未提供有效的证书导入数据或文件"}), 400
-
-    items_to_import = []
-    if isinstance(bundle_data, dict):
-        if bundle_data.get('format') == '1panel_ssl_bundle_collection' and isinstance(bundle_data.get('certificates'), list):
-            items_to_import = bundle_data.get('certificates')
-        elif 'certificate' in bundle_data:
-            cert_obj = bundle_data['certificate']
-            cert_obj['acme_account'] = bundle_data.get('acme_account')
-            cert_obj['dns_account'] = bundle_data.get('dns_account')
-            items_to_import = [cert_obj]
-        elif 'primary_domain' in bundle_data and 'pem' in bundle_data:
-            items_to_import = [bundle_data]
-    elif isinstance(bundle_data, list):
-        items_to_import = bundle_data
+            items_to_import = [{
+                "primary_domain": manual_domain,
+                "domains": manual_domain,
+                "pem": manual_pem,
+                "private_key": manual_key,
+                "provider": "manual",
+                "auto_renew": 0,
+                "organization": "Manual Upload",
+                "status": "ready"
+            }]
 
     if not items_to_import:
-        return jsonify({"success": False, "error": "未解析出任何有效的证书记录"}), 400
+        return jsonify({"success": False, "error": "未解析出任何有效的证书记录，请确认上传了有效的 ZIP 压缩包或 JSON 备份"}), 400
 
     conn = get_1panel_db_conn()
     if not conn:
@@ -3142,7 +3365,19 @@ def api_ssl_import():
         default_acme_id = local_acmes[0]['id'] if local_acmes else 1
         default_dns_id = local_dnss[0]['id'] if local_dnss else 0
 
-        for item in items_to_import:
+        # 去重防止重复处理同一个主域名
+        seen_domains = set()
+        unique_items = []
+        for it in items_to_import:
+            p_domain = (it.get('primary_domain') or '').strip()
+            if not p_domain:
+                continue
+            if p_domain in seen_domains:
+                continue
+            seen_domains.add(p_domain)
+            unique_items.append(it)
+
+        for item in unique_items:
             p_domain = item.get('primary_domain', '').strip()
             pem = item.get('pem', '').strip()
             priv_key = item.get('private_key', '').strip()
@@ -3165,7 +3400,7 @@ def api_ssl_import():
                 if matched_dns:
                     dns_id = matched_dns['id']
 
-            domains = item.get('domains') or ""
+            domains = item.get('domains') or p_domain
             cert_url = item.get('cert_url') or ""
             cert_type = item.get('type') or "YR1"
             provider = item.get('provider') or "dnsAccount"
@@ -3263,7 +3498,7 @@ def api_ssl_import():
         "imported_count": success_count,
         "imported_ids": imported_ids,
         "errors": errors,
-        "message": f"成功导入 {success_count} 张证书！已完整恢复状态并支持自动续签"
+        "message": f"成功导入 {success_count} 张证书！已完整恢复状态并保持自动续签"
     })
 
 @app.route('/api/domain/<domain>/ssl_cert', methods=['POST'])
