@@ -349,6 +349,12 @@ function openDomainDetail(domain) {
     const targetPort = auth.target_port || auth.port || 80;
     document.getElementById('modalDomainTitle').textContent = domain;
     document.getElementById('modalTargetHost').textContent = `${targetHost}:${targetPort}`;
+    const hostInput = document.getElementById('modalInputTargetHost');
+    const portInput = document.getElementById('modalInputTargetPort');
+    if (hostInput) hostInput.value = targetHost;
+    if (portInput) portInput.value = targetPort;
+    toggleEditTarget(false);
+
     document.getElementById('modalClientId').textContent = auth.client_id || '';
     document.getElementById('modalClientSecret').textContent = auth.client_secret || '';
     document.getElementById('modalCookieSecret').textContent = auth.cookie_secret || '';
@@ -377,6 +383,75 @@ function openDomainDetail(domain) {
     if (modal) modal.classList.add('active');
 }
 
+function toggleEditTarget(isEditing) {
+    const displayEl = document.getElementById('modalTargetDisplay');
+    const editEl = document.getElementById('modalTargetEdit');
+    if (displayEl) displayEl.style.display = isEditing ? 'none' : 'flex';
+    if (editEl) editEl.style.display = isEditing ? 'flex' : 'none';
+}
+
+async function saveTargetPortAjax() {
+    if (!currentDetailDomain) return;
+    const domain = currentDetailDomain;
+    const hostInput = document.getElementById('modalInputTargetHost');
+    const portInput = document.getElementById('modalInputTargetPort');
+    const btn = document.getElementById('btnSaveTargetPort');
+
+    const host = (hostInput ? hostInput.value.trim() : '') || '127.0.0.1';
+    const port = parseInt(portInput ? portInput.value.trim() : '80', 10);
+
+    if (isNaN(port) || port < 1 || port > 65535) {
+        showToast('请输入合法的端口号 (1-65535)', 'warning');
+        return;
+    }
+
+    if (btn) {
+        btn.disabled = true;
+        btn.textContent = '⏳ 保存中...';
+    }
+
+    try {
+        const formData = new FormData();
+        formData.append('target_host', host);
+        formData.append('target_port', port.toString());
+        formData.append('_csrf_token', (document.cookie.match(/(?:^|;\s*)csrf_token=([^;]+)/) || [])[1] || '');
+
+        const res = await fetch(`/api/domain/${domain}/target`, {
+            method: 'POST',
+            body: formData
+        });
+        const data = await res.json();
+        if (btn) {
+            btn.disabled = false;
+            btn.textContent = '💾 保存';
+        }
+
+        if (data.success) {
+            if (cachedDomainsData[domain]) {
+                cachedDomainsData[domain].target_host = host;
+                cachedDomainsData[domain].target_port = port;
+                cachedDomainsData[domain].port = port;
+                if (data.nginx_config) {
+                    cachedDomainsData[domain].nginx_config = data.nginx_config;
+                    document.getElementById('modalNginxPre').textContent = data.nginx_config;
+                }
+            }
+            document.getElementById('modalTargetHost').textContent = `${host}:${port}`;
+            toggleEditTarget(false);
+            renderDomainsUI(cachedDomainsData);
+            showToast(`目标服务已成功更新为: ${host}:${port}`, 'success');
+        } else {
+            showToast('修改失败: ' + (data.error || '未知错误'), 'error');
+        }
+    } catch (e) {
+        if (btn) {
+            btn.disabled = false;
+            btn.textContent = '💾 保存';
+        }
+        showToast('网络通信异常: ' + e.message, 'error');
+    }
+}
+
 function updateModalSwitchBadges(auth) {
     const badgeProxy = document.getElementById('modalBadgeProxy');
     const badgeSsl = document.getElementById('modalBadgeSsl');
@@ -399,6 +474,7 @@ function updateModalSwitchBadges(auth) {
 function closeDetailModal() {
     const modal = document.getElementById('domainDetailModal');
     if (modal) modal.classList.remove('active');
+    toggleEditTarget(false);
     currentDetailDomain = '';
 }
 
@@ -2479,6 +2555,8 @@ async function loadSSLAccounts() {
 }
 
 // 导出全局函数
+window.toggleEditTarget = toggleEditTarget;
+window.saveTargetPortAjax = saveTargetPortAjax;
 window.loadSslCertificatesAjax = loadSslCertificatesAjax;
 window.filterSslCertificates = filterSslCertificates;
 window.switchSslView = switchSslView;

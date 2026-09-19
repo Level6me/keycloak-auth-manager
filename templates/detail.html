@@ -175,12 +175,21 @@
             <span class="badge accent">🚀 全局 SSO 单容器共享</span>
         </div>
 
-        <div class="setting-row">
-            <div class="setting-info">
-                <span class="setting-label">目标服务地址</span>
-                <span class="setting-desc">实际反代转发的后端地址</span>
+        <div class="setting-row" style="flex-wrap: wrap; gap: 8px;">
+            <div class="setting-info" style="min-width: 180px;">
+                <span class="setting-label">目标服务地址与端口</span>
+                <span class="setting-desc">实际反代转发的后端目标地址与端口</span>
             </div>
-            <code>{{ auth.get('target_host', '127.0.0.1') }}:{{ auth.target_port }}</code>
+            <div id="pageTargetDisplay" style="display: flex; align-items: center; gap: 8px; margin-left: auto;">
+                <code id="pageTargetCode" style="background: var(--card-sec); padding: 3px 8px; border-radius: 6px; font-weight: 700;">{{ auth.get('target_host', '127.0.0.1') }}:{{ auth.target_port }}</code>
+                <button type="button" class="pill-btn" onclick="togglePageEditTarget(true)" title="修改目标地址与端口" style="padding: 2px 8px; font-size: 11px;">✏️ 修改</button>
+            </div>
+            <div id="pageTargetEdit" style="display: none; align-items: center; gap: 6px; flex-wrap: wrap; width: 100%; margin-top: 6px;">
+                <input type="text" id="pageInputTargetHost" class="input-box" style="flex: 2; min-width: 140px; padding: 6px 8px; font-size: 13px;" value="{{ auth.get('target_host', '127.0.0.1') }}" placeholder="127.0.0.1">
+                <input type="number" id="pageInputTargetPort" class="input-box" style="flex: 1; min-width: 80px; padding: 6px 8px; font-size: 13px;" value="{{ auth.target_port }}" placeholder="端口" min="1" max="65535">
+                <button type="button" class="btn accent sm" onclick="savePageTargetPortAjax()" id="btnPageSaveTarget" style="padding: 6px 12px; font-size: 12px;">💾 保存</button>
+                <button type="button" class="btn secondary sm" onclick="togglePageEditTarget(false)" style="padding: 6px 12px; font-size: 12px;">取消</button>
+            </div>
         </div>
 
         <div class="setting-row">
@@ -388,6 +397,64 @@ function setAuthMode(allowPasskey, allowPassword) {
         })
         .catch(() => {
             saving.style.display = 'none';
+            showToast('❌ 网络异常，请重试', 'error');
+        });
+}
+function togglePageEditTarget(isEditing) {
+    const displayEl = document.getElementById('pageTargetDisplay');
+    const editEl = document.getElementById('pageTargetEdit');
+    if (displayEl) displayEl.style.display = isEditing ? 'none' : 'flex';
+    if (editEl) editEl.style.display = isEditing ? 'flex' : 'none';
+}
+
+function savePageTargetPortAjax() {
+    const hostInput = document.getElementById('pageInputTargetHost');
+    const portInput = document.getElementById('pageInputTargetPort');
+    const btn = document.getElementById('btnPageSaveTarget');
+
+    const host = (hostInput ? hostInput.value.trim() : '') || '127.0.0.1';
+    const port = parseInt(portInput ? portInput.value.trim() : '80', 10);
+
+    if (isNaN(port) || port < 1 || port > 65535) {
+        showToast('请输入合法的端口号 (1-65535)', 'warning');
+        return;
+    }
+
+    if (btn) {
+        btn.disabled = true;
+        btn.textContent = '⏳ 保存中...';
+    }
+
+    const fd = new FormData();
+    fd.append('target_host', host);
+    fd.append('target_port', port.toString());
+    fd.append('_csrf_token', document.cookie.match(/csrf_token=([^;]+)/)?.[1] || '{{ session.get("csrf_token", "") }}');
+
+    fetch('/api/domain/{{ domain }}/target', { method: 'POST', body: fd })
+        .then(r => r.json())
+        .then(data => {
+            if (btn) {
+                btn.disabled = false;
+                btn.textContent = '💾 保存';
+            }
+            if (data.success) {
+                showToast(`✅ 目标服务已更新为: ${host}:${port}`, 'success');
+                const codeEl = document.getElementById('pageTargetCode');
+                if (codeEl) codeEl.textContent = `${host}:${port}`;
+                togglePageEditTarget(false);
+                if (data.nginx_config) {
+                    const pre = document.getElementById('nginxPre');
+                    if (pre) pre.textContent = data.nginx_config;
+                }
+            } else {
+                showToast('❌ 保存失败：' + (data.error || '未知错误'), 'error');
+            }
+        })
+        .catch(err => {
+            if (btn) {
+                btn.disabled = false;
+                btn.textContent = '💾 保存';
+            }
             showToast('❌ 网络异常，请重试', 'error');
         });
 }
