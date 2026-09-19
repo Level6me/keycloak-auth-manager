@@ -128,7 +128,7 @@
                             <span class="badge secondary" style="font-family: monospace;">:{{ auth.oauth_port }}</span>
                         </div>
 
-                        <div style="display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 8px; margin-top: 8px;">
+                        <div style="margin: 10px 0 8px 0; display: flex; flex-wrap: wrap; gap: 6px; min-height: 24px;">
                             <div class="badges-wrap" style="margin: 0;">
                                 {% if auth.proxy_enabled %}
                                     <span class="badge success">🔄 反代</span>
@@ -142,11 +142,11 @@
                                     <span class="badge accent">🛡️ 认证</span>
                                 {% endif %}
                             </div>
+                        </div>
 
-                            <div style="display: inline-flex; align-items: center; gap: 6px; margin-left: auto;">
-                                <button class="btn secondary sm" onclick="openDomainDetail('{{ domain }}')" style="padding: 4px 10px; font-size: 11px;">详情</button>
-                                <button class="btn danger sm" onclick="deleteDomainAjax('{{ domain }}')" style="padding: 4px 8px; font-size: 11px;">🗑️</button>
-                            </div>
+                        <div class="domain-actions" style="margin-top: auto; padding-top: 10px; border-top: 1px solid var(--border-subtle); display: flex; justify-content: space-between; align-items: center; gap: 6px;">
+                            <button class="btn secondary sm" onclick="openDomainDetail('{{ domain }}')" style="flex: 1; font-size: 12px; padding: 5px 8px; text-align: center; justify-content: center;">📋 详情配置</button>
+                            <button class="btn danger sm" onclick="deleteDomainAjax('{{ domain }}')" style="font-size: 12px; padding: 5px 10px;">🗑️ 删除</button>
                         </div>
                     </div>
                 </div>
@@ -162,7 +162,7 @@
                             <th>功能状态</th>
                             <th>目标服务</th>
                             <th>OAuth 端口</th>
-                            <th style="text-align: right;">操作</th>
+                            <th style="text-align: right;">操作管理</th>
                         </tr>
                     </thead>
                     <tbody id="tableBodyContainer">
@@ -191,8 +191,8 @@
                             <td><span class="badge secondary">{{ auth.oauth_port }}</span></td>
                             <td style="text-align: right;">
                                 <div style="display: inline-flex; gap: 6px;">
-                                    <button class="btn secondary sm" onclick="openDomainDetail('{{ domain }}')">详情</button>
-                                    <button class="btn danger sm" onclick="deleteDomainAjax('{{ domain }}')">删除</button>
+                                    <button class="btn secondary sm" onclick="openDomainDetail('{{ domain }}')">📋 详情</button>
+                                    <button class="btn danger sm" onclick="deleteDomainAjax('{{ domain }}')">🗑️ 删除</button>
                                 </div>
                             </td>
                         </tr>
