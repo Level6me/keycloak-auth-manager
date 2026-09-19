@@ -2594,7 +2594,7 @@ def index():
 
 @app.route('/add')
 def add_page():
-    return render_template('add.html')
+    return redirect('/#add')
 
 @app.route('/api/logs')
 def api_logs():

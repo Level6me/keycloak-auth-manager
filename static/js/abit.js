@@ -774,11 +774,16 @@ document.addEventListener('DOMContentLoaded', () => {
 
     // 根据 URL Hash 激活对应 Tab
     const hash = (window.location.hash || '').replace('#', '');
-    if (hash && ['domains', 'add', 'apps', 'ssl', 'users', 'settings'].includes(hash)) {
-        const titleMap = { 'domains': '总览', 'add': '添加认证', 'apps': '应用接入', 'ssl': '证书申请', 'users': '用户管理', 'settings': '系统配置' };
+    if (hash === 'add') {
+        switchTab('p-domains', '域名管理', document.getElementById('dock-btn-domains'));
+        setTimeout(() => {
+            if (typeof openAddDomainModal === 'function') openAddDomainModal();
+        }, 150);
+    } else if (hash && ['domains', 'apps', 'ssl', 'users', 'settings'].includes(hash)) {
+        const titleMap = { 'domains': '域名管理', 'apps': '应用接入', 'ssl': '证书申请', 'users': '用户管理', 'settings': '系统配置' };
         switchTab(`p-${hash}`, titleMap[hash] || hash, document.getElementById(`dock-btn-${hash}`));
     } else {
-        switchTab('p-domains', '总览', document.getElementById('dock-btn-domains'));
+        switchTab('p-domains', '域名管理', document.getElementById('dock-btn-domains'));
     }
 });
 
@@ -1585,7 +1590,32 @@ async function submitUserSites(e) {
     }
 }
 
+function openAddDomainModal() {
+    document.querySelectorAll('.modal-overlay.active').forEach(m => m.classList.remove('active'));
+    const modal = document.getElementById('addDomainModal');
+    if (!modal) return;
+    const termWrap = document.getElementById('addTerminalWrap');
+    if (termWrap) termWrap.style.display = 'none';
+    const form = document.getElementById('authAddForm');
+    if (form) {
+        form.reset();
+        if (typeof selectAddTargetType === 'function') selectAddTargetType('local');
+        if (typeof toggleAddSSLSection === 'function') toggleAddSSLSection(false);
+    }
+    if (typeof loadCloudflareZones === 'function') loadCloudflareZones();
+    if (typeof load1PanelAccounts === 'function') load1PanelAccounts();
+    modal.classList.add('active');
+}
+
+function closeAddDomainModal() {
+    const modal = document.getElementById('addDomainModal');
+    if (modal) modal.classList.remove('active');
+    if (typeof stopLogStream === 'function') stopLogStream();
+}
+
 // ─── 显式暴露全局函数，确保无论在任何内联或异步上下文中均 100% 可用 ───
+window.openAddDomainModal = openAddDomainModal;
+window.closeAddDomainModal = closeAddDomainModal;
 window.openResetUserModal = openResetUserModal;
 window.closeResetUserModal = closeResetUserModal;
 window.openUserSitesModal = openUserSitesModal;
