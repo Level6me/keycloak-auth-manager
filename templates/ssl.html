@@ -1,97 +1,217 @@
 <!DOCTYPE html>
-<html lang="zh-CN" data-theme="light">
+<html lang="zh-CN" data-theme="auto">
 <head>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
-    <title>SSL 证书申请 - Auth 认证管理</title>
+    <title>SSL 证书管理 - Keycloak Auth Manager</title>
     <link rel="icon" type="image/svg+xml" href="/static/favicon.svg">
     <link rel="alternate icon" href="/favicon.ico">
     <link rel="stylesheet" href="/static/css/abit.css">
 </head>
 <body>
 
-<div class="container" style="max-width: 760px;">
+<div class="container">
     <!-- Header -->
     <header class="header">
         <div class="header-left">
             <div class="header-title-group">
-                <span class="date-badge">ACME SSL CERTIFICATE</span>
-                <h1 class="title">申请 SSL 证书</h1>
+                <span class="date-badge">1PANEL SSL CERTIFICATES</span>
+                <h1 class="title">SSL 证书管理</h1>
             </div>
         </div>
         <div class="header-actions">
-            <button class="icon-btn" onclick="toggleTheme()" title="切换亮暗主题" style="width: 36px; height: 36px; font-size: 17px; background: var(--card); border: 1px solid var(--border); box-shadow: var(--shadow-sm);">
-                🌓
+            <button class="pill-btn" onclick="loadSslCertificatesAjax(false); showToast('已刷新证书列表', 'success');" title="刷新数据">
+                <span>🔄</span>
+                <span class="pill-text">刷新</span>
             </button>
+            <button class="pill-btn" id="btn-theme-toggle" onclick="cycleTheme()" title="切换明暗主题 (自动 / 浅色 / 深色)">
+                <span id="theme-icon">🌓</span>
+                <span id="theme-label" class="pill-text">自动</span>
+            </button>
+            <a href="/logout" class="pill-btn" title="退出控制台登录" style="text-decoration: none; color: inherit;">
+                <span>🚪</span>
+                <span class="pill-text">退出</span>
+            </a>
         </div>
     </header>
 
-    <div class="card">
-        <form id="sslForm">
+    <!-- SSL Stat Grid -->
+    <div class="stat-grid">
+        <div class="stat-card">
+            <div class="stat-icon blue">🔒</div>
+            <div class="stat-content">
+                <span class="stat-value" id="stat-total-certs">-</span>
+                <span class="stat-label">总证书数</span>
+            </div>
+        </div>
+        <div class="stat-card">
+            <div class="stat-icon green">✅</div>
+            <div class="stat-content">
+                <span class="stat-value" id="stat-ready-certs">-</span>
+                <span class="stat-label">正常就绪</span>
+            </div>
+        </div>
+        <div class="stat-card">
+            <div class="stat-icon orange">⏳</div>
+            <div class="stat-content">
+                <span class="stat-value" id="stat-applying-certs">-</span>
+                <span class="stat-label">申请 / 续期中</span>
+            </div>
+        </div>
+        <div class="stat-card">
+            <div class="stat-icon purple">🔄</div>
+            <div class="stat-content">
+                <span class="stat-value" id="stat-autorenew-certs">-</span>
+                <span class="stat-label">自动续签</span>
+            </div>
+        </div>
+    </div>
+
+    <!-- SSL Toolbar -->
+    <div class="apps-toolbar" style="display: flex; justify-content: space-between; align-items: center; gap: 10px; margin-bottom: 16px; flex-wrap: wrap;">
+        <div class="apps-search-wrap" style="flex: 1; min-width: 200px; max-width: 420px; position: relative;">
+            <input type="text" id="sslSearchInput" class="input-box" placeholder="搜索域名或机构..." oninput="filterSslCertificates(this.value)">
+        </div>
+        <div class="apps-action-btns" style="display: flex; align-items: center; gap: 8px;">
+            <button class="pill-btn" onclick="loadSslCertificatesAjax(false); showToast('正在刷新证书列表...', 'info');" title="刷新列表">
+                <span>🔄</span>
+                <span class="pill-text">刷新</span>
+            </button>
+            <button class="btn accent" onclick="openApplySslModal()" style="padding: 7px 14px; font-size: 13px; border-radius: 12px; display: inline-flex; align-items: center; gap: 6px;">
+                <span>➕</span>
+                <span>申请新证书</span>
+            </button>
+        </div>
+    </div>
+
+    <!-- Loading / Empty Tips -->
+    <div id="sslLoadingTip" style="display: none; text-align: center; padding: 40px 20px; color: var(--text-sec);">
+        <div style="font-size: 28px; margin-bottom: 8px;">⏳</div>
+        <div>正在从 1Panel 加载 SSL 证书列表...</div>
+    </div>
+
+    <div id="sslEmptyTip" style="display: none; text-align: center; padding: 60px 20px;">
+        <div style="font-size: 48px; margin-bottom: 12px;">🔒</div>
+        <div style="font-size: 16px; font-weight: 700; color: var(--text); margin-bottom: 6px;">暂无 1Panel SSL 证书</div>
+        <div style="font-size: 13px; color: var(--text-sec); margin-bottom: 20px;">点击下方按钮可申请 Let's Encrypt / ZeroSSL 证书并自动绑定反代站点</div>
+        <button class="btn accent" onclick="openApplySslModal()" style="padding: 10px 20px; font-size: 14px;">➕ 申请第一张证书</button>
+    </div>
+
+    <!-- Certificate Card View Container -->
+    <div id="sslCardContainer" class="domain-grid" style="display: none;"></div>
+
+    <div id="sslTableContainer" class="table-container" style="display: none; margin-top: 14px;">
+        <table class="table-modern">
+            <thead>
+                <tr>
+                    <th>主域名</th>
+                    <th>签发提供商</th>
+                    <th>验证方式</th>
+                    <th>状态</th>
+                    <th>生效/过期时间</th>
+                    <th>关联反代站点</th>
+                    <th style="text-align: right;">操作与详情</th>
+                </tr>
+            </thead>
+            <tbody id="sslTableBody"></tbody>
+        </table>
+    </div>
+</div>
+
+<!-- ==================== MODAL: APPLY SSL CERTIFICATE ==================== -->
+<div id="applySslModal" class="modal-overlay">
+    <div class="modal-dialog" style="max-width: 540px;">
+        <div class="modal-header">
+            <div style="display: flex; align-items: center; gap: 8px;">
+                <span style="font-size: 20px;">🔒</span>
+                <span class="modal-title">申请 SSL 证书</span>
+            </div>
+            <button class="icon-btn" onclick="closeApplySslModal()" style="width: 32px; height: 32px; font-size: 14px; cursor: pointer;">✕</button>
+        </div>
+        <form id="sslApplyModalForm" onsubmit="submitApplySslModal(event)">
             <div class="form-group">
                 <label class="form-label">🌐 申请域名</label>
-                <input type="text" name="domain" id="domain" class="input-box" 
-                       placeholder="例如: app.example.com" required 
+                <input type="text" id="modal_ssl_domain" class="input-box" 
+                       placeholder="例如: app.example.com 或 *.example.com" required 
                        autocomplete="off" autocorrect="off" autocapitalize="off">
-                <div class="form-hint">请确保域名已完成 DNS 解析并指向本服务器</div>
+                <div class="form-hint">请确保域名已解析到本服务器 (DNS 验证支持泛域名)</div>
             </div>
 
-            <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 12px; margin-bottom: 16px;">
+            <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 12px; margin-bottom: 14px;">
                 <div>
                     <label class="form-label">📧 ACME 账户</label>
-                    <select id="acme_account" class="select-custom" required>
+                    <select id="modal_ssl_acme_account" class="select-custom" required>
                         <option value="">正在加载 1Panel 账户...</option>
                     </select>
-                    <div class="form-hint">Let's Encrypt / ZeroSSL 账户</div>
                 </div>
                 <div>
                     <label class="form-label">🔑 验证方式</label>
-                    <select id="auth_method" class="select-custom">
+                    <select id="modal_ssl_auth_method" class="select-custom" onchange="toggleModalSSLDNSSection(this.value)">
                         <option value="http">HTTP 验证（默认）</option>
                         <option value="dns">DNS 验证（需 DNS 账户）</option>
                     </select>
-                    <div class="form-hint">HTTP 需放行 80 端口，DNS 支持泛域名</div>
                 </div>
             </div>
 
-            <div class="form-group" id="dns_container" style="display: none;">
+            <div class="form-group" id="modal_ssl_dns_container" style="display: none;">
                 <label class="form-label">🌐 DNS 账户</label>
-                <select id="dns_account" class="select-custom">
+                <select id="modal_ssl_dns_account" class="select-custom">
                     <option value="">请选择 DNS 账户...</option>
                 </select>
-                <div class="form-hint">在 1Panel 中预先配置的 DNS 提供商 API 凭据</div>
+                <div class="form-hint">使用 1Panel 中配置的 Cloudflare / 腾讯云 / 阿里云 DNS 凭据</div>
             </div>
 
-            <button type="submit" id="submitBtn" class="btn w-full" style="padding: 12px; font-size: 14px;">
-                🚀 开始申请并自动绑定 HTTPS
-            </button>
+            <div style="font-size: 12px; color: var(--text-sec); margin-bottom: 16px; background: var(--card-sec); padding: 10px 12px; border-radius: 10px; line-height: 1.6;">
+                💡 <b>后台静默申请支持</b>：提交申请后即使关闭本弹窗，系统也会在后台持续跟进 ACME 签发并自动开启反代站点 HTTPS。您可随时在证书列表查看进度与日志。
+            </div>
+
+            <div style="display: flex; gap: 10px;">
+                <button type="button" class="btn secondary w-full" onclick="closeApplySslModal()" style="padding: 11px;">关 闭</button>
+                <button type="submit" id="modalSslSubmitBtn" class="btn accent w-full" style="padding: 11px;">🚀 开始后台申请</button>
+            </div>
         </form>
     </div>
+</div>
 
-    <!-- Apple Terminal Log Window -->
-    <div class="terminal-card">
-        <div class="terminal-header">
-            <div class="terminal-dots">
-                <div class="terminal-dot red"></div>
-                <div class="terminal-dot yellow"></div>
-                <div class="terminal-dot green"></div>
+<!-- ==================== MODAL: SSL TASK & LOG DETAIL ==================== -->
+<div id="sslDetailModal" class="modal-overlay">
+    <div class="modal-dialog" style="max-width: 680px;">
+        <div class="modal-header">
+            <div style="display: flex; align-items: center; gap: 8px;">
+                <span style="font-size: 20px;">📜</span>
+                <div>
+                    <span class="modal-title" id="sslDetailTitle">证书申请详情</span>
+                    <div id="sslDetailSub" style="font-size: 11px; color: var(--text-sec); font-family: monospace;"></div>
+                </div>
             </div>
-            <div class="terminal-title">ACME ISSUING CONSOLE</div>
-            <div id="statusBadge" class="badge secondary" style="font-size: 10px;">IDLE</div>
+            <button class="icon-btn" onclick="closeSslDetailModal()" style="width: 32px; height: 32px; font-size: 14px; cursor: pointer;">✕</button>
         </div>
-        <div id="logs" class="terminal-body">
-            <div class="system">[系统] 准备就绪，提交表单后此处将实时显示 1Panel ACME 签发流水日志...</div>
-        </div>
-    </div>
 
-    <!-- Tips Card -->
-    <div class="card" style="background: var(--card-sec); border-color: var(--border-subtle); margin-top: 20px;">
-        <div class="card-title" style="font-size: 14px; margin-bottom: 8px;">💡 说明与注意事项</div>
-        <ul style="font-size: 12px; color: var(--text-sec); line-height: 1.7; padding-left: 18px; margin: 0;">
-            <li><b>HTTP 验证</b>：程序会自动在网站目录下生成验证文件。请确保 80 端口已放行且域名解析已生效。</li>
-            <li><b>DNS 验证</b>：适用于内网服务或申请泛域名证书，需提前在 1Panel 的「证书」-「DNS 账户」中添加提供商 API。</li>
-            <li><b>自动开启 HTTPS</b>：证书签发成功后，系统会自动在 OpenResty 中配置 443 SSL 监听并无缝重载。</li>
-        </ul>
+        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px; flex-wrap: wrap; gap: 8px;">
+            <div style="display: flex; align-items: center; gap: 8px;">
+                <span id="sslDetailStatusBadge" class="badge secondary">STATUS</span>
+                <span id="sslDetailTime" style="font-size: 12px; color: var(--text-sec);"></span>
+            </div>
+            <div id="sslDetailActions" style="display: flex; gap: 6px;"></div>
+        </div>
+
+        <div class="terminal-card" style="margin: 0;">
+            <div class="terminal-header">
+                <div class="terminal-dots">
+                    <div class="terminal-dot red"></div>
+                    <div class="terminal-dot yellow"></div>
+                    <div class="terminal-dot green"></div>
+                </div>
+                <div class="terminal-title">1PANEL ACME CONSOLE LOGS</div>
+            </div>
+            <div id="sslDetailLogs" class="terminal-body" style="max-height: 380px; overflow-y: auto;">
+                <div class="system">[系统] 正在读取实时签发流水日志...</div>
+            </div>
+        </div>
+
+        <div style="margin-top: 16px; text-align: right;">
+            <button type="button" class="btn secondary" onclick="closeSslDetailModal()" style="padding: 8px 18px;">关 闭</button>
+        </div>
     </div>
 </div>
 
@@ -101,20 +221,23 @@
         <svg viewBox="0 0 24 24"><path d="M10 20v-6h4v6h5v-8h3L12 3 2 12h3v8z"/></svg>
         <span>域名</span>
     </a>
-    <a href="/add" class="dock-btn">
+    <a href="/#add" class="dock-btn">
         <svg viewBox="0 0 24 24"><path d="M19 13h-6v6h-2v-6H5v-2h6V5h2v6h6v2z"/></svg>
         <span>添加</span>
     </a>
-    <a href="/ssl" class="dock-btn active">
+    <a href="/#apps" class="dock-btn">
+        <svg viewBox="0 0 24 24"><path d="M4 8h4V4H4v4zm6 12h4v-4h-4v4zm-6 0h4v-4H4v4zm0-6h4v-4H4v4zm6 0h4v-4h-4v4zm6-10v4h4V4h-4zm-6 4h4V4h-4v4zm6 6h4v-4h-4v4zm0 6h4v-4h-4v4z"/></svg>
+        <span>应用</span>
+    </a>
+    <a href="/#ssl" class="dock-btn active">
         <svg viewBox="0 0 24 24"><path d="M18 8h-1V6c0-2.76-2.24-5-5-5S7 3.24 7 6v2H6c-1.1 0-2 .9-2 2v10c0 1.1.9 2 2 2h12c1.1 0 2-.9 2-2V10c0-1.1-.9-2-2-2zm-6 9c-1.1 0-2-.9-2-2s.9-2 2-2 2 .9 2 2-.9 2-2 2zm3.1-9H8.9V6c0-1.71 1.39-3.1 3.1-3.1 1.71 0 3.1 1.39 3.1 3.1v2z"/></svg>
         <span>证书</span>
     </a>
-    <a href="/users" class="dock-btn">
+    <a href="/#users" class="dock-btn">
         <svg viewBox="0 0 24 24"><path d="M12 12c2.21 0 4-1.79 4-4s-1.79-4-4-4-4 1.79-4 4 1.79 4 4 4zm0 2c-2.67 0-8 1.34-8 4v2h16v-2c0-2.66-5.33-4-8-4z"/></svg>
         <span>用户</span>
     </a>
-    <a href="/settings" class="dock-btn">
-
+    <a href="/#settings" class="dock-btn">
         <svg viewBox="0 0 24 24"><path d="M19.14 12.94c.04-.3.06-.61.06-.94 0-.32-.02-.64-.07-.94l2.03-1.58c.18-.14.23-.41.12-.61l-1.92-3.32c-.12-.22-.37-.29-.59-.22l-2.39.96c-.5-.38-1.03-.7-1.62-.94l-.36-2.54c-.04-.24-.24-.41-.48-.41h-3.84c-.24 0-.43.17-.47.41l-.36 2.54c-.59.24-1.13.57-1.62.94l-2.39-.96c-.22-.08-.47 0-.59.22L2.74 8.87c-.12.21-.08.47.12.61l2.03 1.58c-.05.3-.09.63-.09.94s.02.64.07.94l-2.03 1.58c-.18.14-.23.41-.12.61l1.92 3.32c.12.22.37.29.59.22l2.39-.96c.5.38 1.03.7 1.62.94l.36 2.54c.05.24.24.41.48.41h3.84c.24 0 .44-.17.47-.41l.36-2.54c.59-.24 1.13-.56 1.62-.94l2.39.96c.22.08.47 0 .59-.22l1.92-3.32c.12-.22.07-.47-.12-.61l-2.01-1.58zM12 15.6c-1.98 0-3.6-1.62-3.6-3.6s1.62-3.6 3.6-3.6 3.6 1.62 3.6 3.6-1.62 3.6-3.6 3.6z"/></svg>
         <span>设置</span>
     </a>
@@ -122,197 +245,20 @@
 
 <script src="/static/js/abit.js"></script>
 <script>
-let eventSource = null;
-let pollTimer = null;
-let lastLogId = 0;
-
-document.addEventListener('DOMContentLoaded', async () => {
-    // 自动读取 URL 参数中的 domain
+document.addEventListener('DOMContentLoaded', () => {
+    initTheme();
+    loadSslCertificatesAjax(false);
+    
+    // 如果 URL 参数包含 domain，直接弹出申请弹窗
     const urlParams = new URLSearchParams(window.location.search);
     const domainParam = urlParams.get('domain');
     if (domainParam) {
-        document.getElementById('domain').value = domainParam;
-    }
-    
-    // 加载 1Panel 账户
-    try {
-        const acmeRes = await fetch('/api/acme_accounts');
-        const acmes = await acmeRes.json();
-        const acmeSelect = document.getElementById('acme_account');
-        acmeSelect.innerHTML = '';
-        if (acmes.length === 0) {
-            acmeSelect.innerHTML = '<option value="">未找到 1Panel ACME 账户，请先在 1Panel 中添加</option>';
-        } else {
-            acmes.forEach(acc => {
-                const opt = document.createElement('option');
-                opt.value = acc.id;
-                opt.textContent = `${acc.email} (ID: ${acc.id})`;
-                acmeSelect.appendChild(opt);
-            });
-        }
-        
-        const dnsRes = await fetch('/api/dns_accounts');
-        const dnss = await dnsRes.json();
-        const dnsSelect = document.getElementById('dns_account');
-        dnsSelect.innerHTML = '';
-        if (dnss.length === 0) {
-            dnsSelect.innerHTML = '<option value="">未配置 DNS 账户</option>';
-        } else {
-            dnss.forEach(acc => {
-                const opt = document.createElement('option');
-                opt.value = acc.id;
-                opt.textContent = `${acc.name} (ID: ${acc.id})`;
-                dnsSelect.appendChild(opt);
-            });
-        }
-    } catch (e) {
-        console.error("加载账户失败:", e);
+        setTimeout(() => openApplySslModal(domainParam), 200);
     }
 });
-
-document.getElementById('auth_method').addEventListener('change', function() {
-    const dnsContainer = document.getElementById('dns_container');
-    if (this.value === 'dns') {
-        dnsContainer.style.display = 'block';
-        document.getElementById('dns_account').setAttribute('required', 'true');
-    } else {
-        dnsContainer.style.display = 'none';
-        document.getElementById('dns_account').removeAttribute('required');
-    }
-});
-
-function appendLogLine(text) {
-    const logs = document.getElementById('logs');
-    const line = document.createElement('div');
-    line.textContent = text;
-    if (text.includes('失败') || text.includes('error') || text.includes('Error') || text.includes('异常') || text.includes('Failed')) {
-        line.className = 'error';
-    } else if (text.includes('成功') || text.includes('完成') || text.includes('绑定成功') || text.includes('证书签发成功') || text.includes('🎉')) {
-        line.className = 'success';
-    } else if (text.startsWith('[系统]')) {
-        line.className = 'system';
-    } else {
-        line.className = 'info';
-    }
-    logs.appendChild(line);
-    logs.scrollTop = logs.scrollHeight;
-}
-
-function startLogStream() {
-    lastLogId = 0;
-    if (eventSource) eventSource.close();
-    if (pollTimer) clearInterval(pollTimer);
-
-    try {
-        eventSource = new EventSource('/api/logs?last_id=0');
-        eventSource.onmessage = function(event) {
-            if (event.data && event.data !== 'heartbeat') {
-                appendLogLine(event.data);
-            }
-            if (event.lastEventId) {
-                lastLogId = parseInt(event.lastEventId) || lastLogId;
-            }
-        };
-    } catch (err) {}
-
-    // 双重保障轮询
-    pollTimer = setInterval(async () => {
-        try {
-            const res = await fetch(`/api/logs/poll?last_id=${lastLogId}`);
-            if (res.ok) {
-                const data = await res.json();
-                if (data.logs && data.logs.length > 0) {
-                    data.logs.forEach(entry => appendLogLine(entry.text));
-                    lastLogId = data.last_id;
-                }
-            }
-        } catch (e) {}
-    }, 800);
-}
-
-function stopLogStream() {
-    if (eventSource) setTimeout(() => eventSource.close(), 3000);
-    if (pollTimer) setTimeout(() => clearInterval(pollTimer), 3500);
-}
-
-// 提交表单
-document.getElementById('sslForm').addEventListener('submit', async function(e) {
-    e.preventDefault();
-    
-    const domain = document.getElementById('domain').value.trim();
-    const acmeId = document.getElementById('acme_account').value;
-    const authMethod = document.getElementById('auth_method').value;
-    const dnsId = document.getElementById('dns_account').value;
-    
-    const btn = document.getElementById('submitBtn');
-    const logs = document.getElementById('logs');
-    const status = document.getElementById('statusBadge');
-    
-    if (!domain) {
-        showToast('请输入申请域名', 'warning');
-        return;
-    }
-    if (!acmeId) {
-        showToast('请选择 ACME 账户', 'warning');
-        return;
-    }
-    if (authMethod === 'dns' && !dnsId) {
-        showToast('请选择 DNS 账户', 'warning');
-        return;
-    }
-    
-    btn.disabled = true;
-    btn.innerHTML = '⏳ 正在向 1Panel 提交申请...';
-    status.className = 'badge warning';
-    status.textContent = 'ISSUING';
-    logs.innerHTML = '<div class="system">[系统] 正在初始化 SSL 申请流程，连接实时日志流...</div>';
-    
-    startLogStream();
-
-    try {
-        const formData = new FormData();
-        formData.append('domain', domain);
-        formData.append('acme_id', acmeId);
-        if (authMethod === 'dns') {
-            formData.append('dns_id', dnsId);
-        }
-        
-        const response = await fetch('/api/apply_ssl', {
-            method: 'POST',
-            body: formData
-        });
-        
-        const result = await response.json();
-        
-        if (result.success) {
-            status.className = 'badge success';
-            status.textContent = 'SUCCESS';
-            btn.innerHTML = '✅ 申请成功！';
-            showToast('证书申请成功，已绑定 HTTPS', 'success');
-            appendLogLine('[系统] 证书已成功签发，并已在 1Panel 中启用 HTTPS 绑定重载。');
-            
-            setTimeout(() => {
-                window.location.href = `/detail/${domain}`;
-            }, 2500);
-        } else {
-            status.className = 'badge danger';
-            status.textContent = 'FAILED';
-            btn.innerHTML = '🚀 重新申请';
-            btn.disabled = false;
-            showToast('申请失败: ' + (result.error || '未知错误'), 'error');
-            appendLogLine('[系统] 错误提示: ' + (result.error || '未知错误'));
-        }
-    } catch (err) {
-        status.className = 'badge danger';
-        status.textContent = 'NETWORK ERROR';
-        btn.innerHTML = '🚀 重新申请';
-        btn.disabled = false;
-        showToast('网络请求失败', 'error');
-        appendLogLine('[系统] 网络请求失败: ' + err);
-    } finally {
-        stopLogStream();
-    }
-});
+</script>
+</body>
+</html>
 </script>
 </body>
 </html>
