@@ -263,18 +263,18 @@ function renderDomainsUI(auths) {
                         <span class="badge secondary" style="font-family: monospace;">:${auth.oauth_port}</span>
                     </div>
 
-                    <div style="display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 8px; margin-top: 8px;">
+                    <div style="margin: 10px 0 8px 0; display: flex; flex-wrap: wrap; gap: 6px; min-height: 24px;">
                         <div class="badges-wrap" style="margin: 0;">
                             ${proxyBadge}
                             ${sslBadge}
                             ${authBadge}
                             ${loginPolicyBadge}
                         </div>
+                    </div>
 
-                        <div style="display: inline-flex; align-items: center; gap: 6px; margin-left: auto;">
-                            <button class="btn secondary sm" onclick="openDomainDetail('${domain}')" style="padding: 4px 10px; font-size: 11px;">详情</button>
-                            <button class="btn danger sm" onclick="deleteDomainAjax('${domain}')" style="padding: 4px 8px; font-size: 11px;">🗑️</button>
-                        </div>
+                    <div class="domain-actions" style="margin-top: auto; padding-top: 10px; border-top: 1px solid var(--border-subtle); display: flex; justify-content: space-between; align-items: center; gap: 6px;">
+                        <button class="btn secondary sm" onclick="openDomainDetail('${domain}')" style="flex: 1; font-size: 12px; padding: 5px 8px; text-align: center; justify-content: center;">📋 详情配置</button>
+                        <button class="btn danger sm" onclick="deleteDomainAjax('${domain}')" style="font-size: 12px; padding: 5px 10px;">🗑️ 删除</button>
                     </div>
                 </div>
             </div>
@@ -323,11 +323,12 @@ function renderDomainsUI(auths) {
                 <td><span class="badge secondary">${auth.oauth_port}</span></td>
                 <td style="text-align: right;">
                     <div style="display: inline-flex; gap: 6px;">
-                        <button class="btn secondary sm" onclick="openDomainDetail('${domain}')">详情</button>
-                        <button class="btn danger sm" onclick="deleteDomainAjax('${domain}')">删除</button>
+                        <button class="btn secondary sm" onclick="openDomainDetail('${domain}')">📋 详情</button>
+                        <button class="btn danger sm" onclick="deleteDomainAjax('${domain}')">🗑️ 删除</button>
                     </div>
                 </td>
             </tr>
+            `;
             `;
         }).join('');
     }
@@ -939,11 +940,11 @@ function renderUsersUI(users) {
                         <div>
                             <span class="domain-name">
                                 ${statusDot}
-                                ${u.username}
+                                ${escapeHtml(u.username)}
                             </span>
                             <div class="domain-target">
                                 <span>📧 邮箱:</span>
-                                <span style="color: var(--text); font-weight: 500;">${u.email || '<span style="color:var(--text-sec); font-style:italic;">未绑定邮箱</span>'}</span>
+                                <span style="color: var(--text); font-weight: 500;">${escapeHtml(u.email) || '<span style="color:var(--text-sec); font-style:italic;">未绑定邮箱</span>'}</span>
                             </div>
                         </div>
                         <label class="switch" title="切换账户启用状态">
@@ -952,24 +953,24 @@ function renderUsersUI(users) {
                         </label>
                     </div>
 
-                    <div style="display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 8px; margin-top: 10px;">
+                    <div style="margin: 10px 0 6px 0; display: flex; flex-wrap: wrap; gap: 6px; min-height: 24px;">
                         <div class="badges-wrap" style="margin: 0;">
                             ${adminBadge}
                             ${passkeyBadge}
                             ${siteBadge}
                         </div>
-
-                        <div style="display: inline-flex; align-items: center; gap: 5px; margin-left: auto;">
-                            <button type="button" class="btn secondary sm btn-user-action" data-action="reset" data-user-id="${escapeHtml(u.id)}" data-username="${escapeHtml(u.username)}" data-has-passkey="${u.has_passkey ? 'true' : 'false'}" onclick="openResetUserModal('${u.id}', '${escapeHtml(u.username)}', ${Boolean(u.has_passkey)})" style="padding: 4px 7px; font-size: 11px;" title="重置密码或重新绑定 Passkey">凭据</button>
-                            <button type="button" class="btn secondary sm btn-user-action" data-action="sites" data-user-id="${escapeHtml(u.id)}" data-username="${escapeHtml(u.username)}" onclick="openUserSitesModal('${u.id}', '${escapeHtml(u.username)}')" style="padding: 4px 7px; font-size: 11px;" title="配置可访问站点权限">站点</button>
-                            <button type="button" class="btn secondary sm btn-user-action" data-action="roles" data-user-id="${escapeHtml(u.id)}" data-username="${escapeHtml(u.username)}" onclick="openUserRolesModal('${u.id}', '${escapeHtml(u.username)}')" style="padding: 4px 7px; font-size: 11px;" title="分配角色权限">角色</button>
-                            <button type="button" class="btn danger sm btn-user-action" data-action="delete" data-user-id="${escapeHtml(u.id)}" data-username="${escapeHtml(u.username)}" onclick="deleteUserAjax('${u.id}', '${escapeHtml(u.username)}')" style="padding: 4px 7px; font-size: 11px;" title="删除用户">🗑️</button>
-                        </div>
                     </div>
 
-                    <div style="margin-top: 8px; font-size: 11px; color: var(--text-sec); display: flex; justify-content: space-between;">
-                        <span>创建时间:</span>
-                        <span>${formatTimestamp(u.created_timestamp)}</span>
+                    <div style="font-size: 11px; color: var(--text-sec); display: flex; justify-content: space-between; align-items: center; background: var(--card-sec); padding: 5px 10px; border-radius: 8px; border: 1px solid var(--border-subtle); margin-bottom: 8px;">
+                        <span>🕒 创建时间:</span>
+                        <span style="font-family: monospace;">${formatTimestamp(u.created_timestamp)}</span>
+                    </div>
+
+                    <div class="domain-actions" style="margin-top: auto; padding-top: 10px; border-top: 1px solid var(--border-subtle); display: flex; justify-content: space-between; align-items: center; gap: 6px;">
+                        <button type="button" class="btn secondary sm btn-user-action" data-action="reset" data-user-id="${escapeHtml(u.id)}" data-username="${escapeHtml(u.username)}" data-has-passkey="${u.has_passkey ? 'true' : 'false'}" onclick="openResetUserModal('${u.id}', '${escapeHtml(u.username)}', ${Boolean(u.has_passkey)})" style="flex: 1; justify-content: center; font-size: 11px; padding: 5px 6px;" title="重置密码或重新绑定 Passkey">🔐 凭据</button>
+                        <button type="button" class="btn secondary sm btn-user-action" data-action="sites" data-user-id="${escapeHtml(u.id)}" data-username="${escapeHtml(u.username)}" onclick="openUserSitesModal('${u.id}', '${escapeHtml(u.username)}')" style="flex: 1; justify-content: center; font-size: 11px; padding: 5px 6px;" title="配置可访问站点权限">🌐 站点</button>
+                        <button type="button" class="btn secondary sm btn-user-action" data-action="roles" data-user-id="${escapeHtml(u.id)}" data-username="${escapeHtml(u.username)}" onclick="openUserRolesModal('${u.id}', '${escapeHtml(u.username)}')" style="flex: 1; justify-content: center; font-size: 11px; padding: 5px 6px;" title="分配角色权限">🛡️ 角色</button>
+                        <button type="button" class="btn danger sm btn-user-action" data-action="delete" data-user-id="${escapeHtml(u.id)}" data-username="${escapeHtml(u.username)}" onclick="deleteUserAjax('${u.id}', '${escapeHtml(u.username)}')" style="font-size: 11px; padding: 5px 8px;" title="删除用户">🗑️</button>
                     </div>
                 </div>
             `;
@@ -1928,12 +1929,12 @@ function renderOidcClients(filterKeyword = '') {
                     </div>
                 </td>
                 <td style="text-align: right;">
-                    <div style="display: inline-flex; gap: 4px;">
-                        <button class="pill-btn" onclick="openOidcGuideModal('${escapeHtml(c.client_id)}')" style="padding: 4px 8px; font-size: 11px;">📋 参数</button>
+                    <div style="display: inline-flex; gap: 6px;">
+                        <button class="btn secondary sm" onclick="openOidcGuideModal('${escapeHtml(c.client_id)}')">📋 参数</button>
                         ${!isSys ? `
-                        <button class="btn secondary sm" onclick="openEditOidcClientModal('${escapeHtml(c.client_id)}')" style="padding: 4px 8px; font-size: 11px;">✏️</button>
-                        <button class="btn danger sm" onclick="deleteOidcClientAjax('${escapeHtml(c.client_id)}', '${escapeHtml(c.name)}')" style="padding: 4px 8px; font-size: 11px;">🗑️</button>
-                        ` : '<span style="font-size: 11px; color: var(--text-sec); padding: 4px 6px;">系统</span>'}
+                        <button class="btn secondary sm" onclick="openEditOidcClientModal('${escapeHtml(c.client_id)}')">✏️ 编辑</button>
+                        <button class="btn danger sm" onclick="deleteOidcClientAjax('${escapeHtml(c.client_id)}', '${escapeHtml(c.name)}')">🗑️ 删除</button>
+                        ` : '<span style="font-size: 11px; color: var(--text-sec); padding: 4px 6px;">系统内置</span>'}
                     </div>
                 </td>
             </tr>`;
@@ -2445,9 +2446,9 @@ function renderSslCertificates(filterKeyword = '') {
             </td>
             <td><span style="font-size: 11px; color: var(--text-sec);">-</span></td>
             <td style="text-align: right;">
-                <div style="display: inline-flex; gap: 4px;">
-                    <button class="pill-btn" onclick="openSslTaskDetailModal('${escapeHtml(task.task_id)}')" style="padding: 3px 8px; font-size: 11px;">📜 日志</button>
-                    ${isApplying ? `<button class="btn danger sm" onclick="cancelSslTaskAjax('${escapeHtml(task.task_id)}')" style="padding: 3px 8px; font-size: 11px;">🛑 取消</button>` : ''}
+                <div style="display: inline-flex; gap: 6px;">
+                    <button class="btn secondary sm" onclick="openSslTaskDetailModal('${escapeHtml(task.task_id)}')">📜 日志</button>
+                    ${isApplying ? `<button class="btn danger sm" onclick="cancelSslTaskAjax('${escapeHtml(task.task_id)}')">🛑 取消</button>` : ''}
                 </div>
             </td>
         </tr>`;
@@ -2544,10 +2545,10 @@ function renderSslCertificates(filterKeyword = '') {
             </td>
             <td><div style="display: flex; flex-wrap: wrap; gap: 3px;">${websitesHtml}</div></td>
             <td style="text-align: right;">
-                <div style="display: inline-flex; gap: 4px;">
-                    <button class="pill-btn" onclick="downloadSslBundle(${cert.id}, '${escapeHtml(cert.primary_domain)}')" style="padding: 3px 8px; font-size: 11px;" title="导出完整证书包">📥 导出</button>
-                    <button class="pill-btn" onclick="openSslItemLogModal(${cert.id}, '${escapeHtml(cert.primary_domain)}')" style="padding: 3px 8px; font-size: 11px;">📜 日志</button>
-                    <button class="btn accent sm" onclick="reapplySslForDomain('${escapeHtml(cert.primary_domain)}')" style="padding: 3px 8px; font-size: 11px;">🔄 申请</button>
+                <div style="display: inline-flex; gap: 6px;">
+                    <button class="btn secondary sm" onclick="downloadSslBundle(${cert.id}, '${escapeHtml(cert.primary_domain)}')" title="导出完整证书包">📥 导出</button>
+                    <button class="btn secondary sm" onclick="openSslItemLogModal(${cert.id}, '${escapeHtml(cert.primary_domain)}')">📜 日志</button>
+                    <button class="btn accent sm" onclick="reapplySslForDomain('${escapeHtml(cert.primary_domain)}')">🔄 申请</button>
                 </div>
             </td>
         </tr>`;

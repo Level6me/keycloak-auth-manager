@@ -788,6 +788,47 @@ input:checked + .slider:before { transform: translateX(20px); }
     background: var(--card-hover);
 }
 
+/* Card & Table Action Buttons Uniformity */
+.domain-actions {
+    margin-top: auto;
+    padding-top: 10px;
+    border-top: 1px solid var(--border-subtle);
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    gap: 6px;
+    width: 100%;
+    box-sizing: border-box;
+}
+
+.domain-actions .btn {
+    font-size: 12px;
+    font-weight: 600;
+    border-radius: 10px;
+    height: 32px;
+    padding: 0 10px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 4px;
+    white-space: nowrap;
+    transition: all 0.15s cubic-bezier(0.1, 0.8, 0.25, 1);
+}
+
+.table-modern td .btn {
+    font-size: 11px;
+    font-weight: 600;
+    border-radius: 8px;
+    height: 28px;
+    padding: 0 8px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 4px;
+    white-space: nowrap;
+    transition: all 0.15s cubic-bezier(0.1, 0.8, 0.25, 1);
+}
+
 /* Terminal Log Window (Apple Style) */
 .terminal-card {
     background: var(--terminal-bg);
