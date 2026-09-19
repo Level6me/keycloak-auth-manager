@@ -603,6 +603,66 @@ body {
     box-shadow: var(--shadow-sm);
 }
 
+/* ==================== UNIFIED APPS TOOLBAR & ACTION BUTTONS ==================== */
+.apps-toolbar {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    gap: 10px;
+    margin-bottom: 16px;
+    flex-wrap: wrap;
+    width: 100%;
+}
+
+.apps-search-wrap {
+    flex: 1;
+    min-width: 220px;
+    max-width: 420px;
+    position: relative;
+}
+
+.apps-search-wrap .input-box {
+    width: 100%;
+    height: 38px;
+    padding: 8px 14px;
+    font-size: 13px;
+    border-radius: 12px;
+    box-sizing: border-box;
+}
+
+.apps-action-btns {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    flex-wrap: wrap;
+}
+
+.apps-action-btns .pill-btn {
+    height: 38px;
+    padding: 0 14px;
+    font-size: 13px;
+    font-weight: 600;
+    border-radius: 12px;
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    white-space: nowrap;
+    box-sizing: border-box;
+}
+
+.apps-action-btns .btn.accent {
+    height: 38px;
+    padding: 0 16px;
+    font-size: 13px;
+    font-weight: 600;
+    border-radius: 12px;
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    white-space: nowrap;
+    box-sizing: border-box;
+}
+
 /* 视图模式切换器专用样式 (固定单行横排小图标) */
 .view-switcher,
 .segmented-control.view-switcher {
@@ -610,24 +670,26 @@ body {
     flex-direction: row !important;
     flex-wrap: nowrap !important;
     width: auto !important;
-    height: 36px !important;
+    height: 38px !important;
     flex-shrink: 0 !important;
     padding: 3px !important;
-    border-radius: 11px !important;
+    border-radius: 12px !important;
     background: rgba(120, 120, 128, 0.12) !important;
+    box-sizing: border-box !important;
 }
 .view-switcher .segment-btn,
 .segmented-control.view-switcher .segment-btn {
     display: flex !important;
     align-items: center !important;
     justify-content: center !important;
-    width: 32px !important;
-    min-width: 32px !important;
-    max-width: 32px !important;
-    height: 30px !important;
+    width: 34px !important;
+    min-width: 34px !important;
+    max-width: 34px !important;
+    height: 32px !important;
     padding: 0 !important;
-    flex: 0 0 32px !important;
-    border-radius: 8px !important;
+    flex: 0 0 34px !important;
+    border-radius: 9px !important;
+    box-sizing: border-box !important;
 }
 
 /* Switch */
@@ -1221,8 +1283,8 @@ body.modal-open {
 .ssl-compact-card {
     background: var(--card);
     border: 1px solid var(--border);
-    border-radius: 14px;
-    padding: 12px 14px;
+    border-radius: 18px;
+    padding: 16px;
     box-shadow: var(--shadow-sm);
     display: flex;
     flex-direction: column;
@@ -1230,14 +1292,14 @@ body.modal-open {
     transition: transform 0.15s, box-shadow 0.15s, border-color 0.15s;
     min-width: 0;
     position: relative;
-    gap: 8px;
+    gap: 10px;
     box-sizing: border-box;
 }
 
 .ssl-compact-card:hover {
     transform: translateY(-2px);
     box-shadow: var(--shadow-md);
-    border-color: var(--accent);
+    border-color: rgba(120, 120, 128, 0.28);
 }
 
 .ssl-compact-card.task-card {

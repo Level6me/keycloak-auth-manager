@@ -1765,14 +1765,39 @@ function updateOidcStats() {
     if (sysEl) sysEl.textContent = sys;
 }
 
+let appsViewMode = localStorage.getItem('abit_apps_view_mode') || 'card';
+
+function switchAppsView(mode) {
+    appsViewMode = mode;
+    try { localStorage.setItem('abit_apps_view_mode', mode); } catch (e) {}
+    const cardContainer = document.getElementById('appsCardContainer');
+    const tableContainer = document.getElementById('appsTableViewContainer');
+    const btnCard = document.getElementById('btnAppsCardView');
+    const btnTable = document.getElementById('btnAppsTableView');
+
+    if (mode === 'table') {
+        if (cardContainer) cardContainer.style.display = 'none';
+        if (tableContainer) tableContainer.style.display = 'block';
+        if (btnTable) btnTable.classList.add('active');
+        if (btnCard) btnCard.classList.remove('active');
+    } else {
+        if (cardContainer) cardContainer.style.display = 'grid';
+        if (tableContainer) tableContainer.style.display = 'none';
+        if (btnCard) btnCard.classList.add('active');
+        if (btnTable) btnTable.classList.remove('active');
+    }
+}
+
 function filterOidcApps(keyword) {
     renderOidcClients(keyword);
 }
 
 function renderOidcClients(filterKeyword = '') {
-    const container = document.getElementById('appsCardContainer');
+    const cardContainer = document.getElementById('appsCardContainer');
+    const tableContainer = document.getElementById('appsTableViewContainer');
+    const tableBody = document.getElementById('appsTableBodyContainer');
     const emptyTip = document.getElementById('appsEmptyTip');
-    if (!container) return;
+    if (!cardContainer) return;
 
     const keyword = (filterKeyword || '').trim().toLowerCase();
     const clients = cachedOidcClientsData.filter(c => {
@@ -1783,15 +1808,16 @@ function renderOidcClients(filterKeyword = '') {
     });
 
     if (clients.length === 0) {
-        container.style.display = 'none';
+        cardContainer.style.display = 'none';
+        if (tableContainer) tableContainer.style.display = 'none';
         if (emptyTip) emptyTip.style.display = 'block';
         return;
     }
 
     if (emptyTip) emptyTip.style.display = 'none';
-    container.style.display = 'grid';
 
-    container.innerHTML = clients.map(c => {
+    // 1. 渲染卡片视图 (Card Grid)
+    cardContainer.innerHTML = clients.map(c => {
         const isSys = c.is_system;
         const authBadge = c.auth_method === 'passkey_only' ? 
             `<span class="badge success">仅 Passkey</span>` : 
@@ -1804,47 +1830,118 @@ function renderOidcClients(filterKeyword = '') {
 
         return `
         <div class="domain-card" style="display: flex; flex-direction: column; min-width: 0; max-width: 100%; box-sizing: border-box; overflow: hidden;">
-            <div class="domain-header" style="align-items: flex-start; min-width: 0; max-width: 100%; display: flex; justify-content: space-between; gap: 8px;">
-                <div style="min-width: 0; flex: 1; overflow: hidden;">
-                    <div style="display: flex; align-items: center; gap: 6px; margin-bottom: 4px; min-width: 0; max-width: 100%;">
-                        <span style="font-size: 18px; flex-shrink: 0;">${isSys ? '🛡️' : '📱'}</span>
-                        <span style="font-size: 16px; font-weight: 700; color: var(--text); overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">${escapeHtml(c.name)}</span>
-                        ${sysBadge}
+            <div>
+                <div class="domain-card-header">
+                    <div style="min-width: 0; flex: 1; overflow: hidden;">
+                        <span class="domain-name" style="cursor: default;">
+                            <span style="font-size: 18px; flex-shrink: 0;">${isSys ? '🛡️' : '📱'}</span>
+                            <span style="overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">${escapeHtml(c.name)}</span>
+                            ${sysBadge}
+                        </span>
+                        <div class="domain-target">
+                            <span>🔑 Client ID:</span>
+                            <code style="background: var(--card-sec); padding: 2px 6px; border-radius: 6px; border: 1px solid var(--border-subtle); font-size: 11px; color: var(--accent);">${escapeHtml(c.client_id)}</code>
+                        </div>
                     </div>
-                    <div style="font-size: 12px; font-family: monospace; color: var(--accent); overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">${escapeHtml(c.client_id)}</div>
+                    <div style="flex-shrink: 0;">${authBadge}</div>
                 </div>
-                <div style="flex-shrink: 0;">${authBadge}</div>
-            </div>
 
-            <div style="margin: 8px 0; display: flex; flex-direction: column; gap: 4px; min-height: 44px; min-width: 0; max-width: 100%; overflow: hidden;">
-                ${c.description ? `<div style="font-size: 12px; color: var(--text-sec); margin-bottom: 2px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">${escapeHtml(c.description)}</div>` : ''}
-                ${uris || '<div style="font-size: 11px; color: var(--text-sec);">暂无回调地址</div>'}
-            </div>
+                <div style="margin: 8px 0; display: flex; flex-direction: column; gap: 4px; min-height: 40px; min-width: 0; max-width: 100%; overflow: hidden;">
+                    ${c.description ? `<div style="font-size: 12px; color: var(--text-sec); margin-bottom: 2px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">${escapeHtml(c.description)}</div>` : ''}
+                    ${uris || '<div style="font-size: 11px; color: var(--text-sec);">暂无回调地址</div>'}
+                </div>
 
-            <!-- Client Secret Box -->
-            <div style="background: var(--card-sec); border-radius: 8px; padding: 8px 10px; margin-bottom: 12px; display: flex; justify-content: space-between; align-items: center; gap: 8px; min-width: 0; max-width: 100%; box-sizing: border-box;">
-                <div style="display: flex; flex-direction: column; min-width: 0; flex: 1; overflow: hidden;">
-                    <span style="font-size: 10px; color: var(--text-sec); font-weight: 700;">CLIENT SECRET</span>
-                    <div style="display: flex; align-items: center; gap: 6px; min-width: 0; max-width: 100%;">
-                        <input type="password" id="${secretId}" value="${escapeHtml(c.client_secret || '')}" readonly style="background: transparent; border: none; font-family: monospace; font-size: 11px; color: var(--text); outline: none; width: 100%; min-width: 0; text-overflow: ellipsis; flex: 1;">
-                        <button type="button" onclick="toggleSecretInputVisibility('${secretId}')" class="pill-btn" style="padding: 2px 6px; font-size: 10px; flex-shrink: 0;">👁️</button>
+                <!-- Client Secret Box -->
+                <div style="background: var(--card-sec); border-radius: 8px; padding: 6px 10px; margin-bottom: 10px; display: flex; justify-content: space-between; align-items: center; gap: 8px; min-width: 0; max-width: 100%; box-sizing: border-box; border: 1px solid var(--border-subtle);">
+                    <div style="display: flex; flex-direction: column; min-width: 0; flex: 1; overflow: hidden;">
+                        <span style="font-size: 10px; color: var(--text-sec); font-weight: 700;">CLIENT SECRET</span>
+                        <div style="display: flex; align-items: center; gap: 6px; min-width: 0; max-width: 100%;">
+                            <input type="password" id="${secretId}" value="${escapeHtml(c.client_secret || '')}" readonly style="background: transparent; border: none; font-family: monospace; font-size: 11px; color: var(--text); outline: none; width: 100%; min-width: 0; text-overflow: ellipsis; flex: 1;">
+                            <button type="button" onclick="toggleSecretInputVisibility('${secretId}')" class="pill-btn" style="padding: 2px 6px; font-size: 10px; flex-shrink: 0;" title="显示/隐藏">👁️</button>
+                        </div>
+                    </div>
+                    <div style="display: flex; gap: 4px; flex-shrink: 0;">
+                        <button class="pill-btn" onclick="copyToClipboard('${escapeHtml(c.client_secret || '')}', 'Client Secret')" style="padding: 4px 8px; font-size: 11px; white-space: nowrap;">📋 复制</button>
+                        ${!isSys ? `<button class="pill-btn" onclick="regenerateOidcSecret('${escapeHtml(c.client_id)}')" title="重置密钥" style="padding: 4px 8px; font-size: 11px; flex-shrink: 0;">🔄</button>` : ''}
                     </div>
                 </div>
-                <div style="display: flex; gap: 4px; flex-shrink: 0;">
-                    <button class="pill-btn" onclick="copyToClipboard('${escapeHtml(c.client_secret || '')}', 'Client Secret')" style="padding: 4px 8px; font-size: 11px; white-space: nowrap;">📋 复制</button>
-                    ${!isSys ? `<button class="pill-btn" onclick="regenerateOidcSecret('${escapeHtml(c.client_id)}')" title="重置密钥" style="padding: 4px 8px; font-size: 11px; flex-shrink: 0;">🔄</button>` : ''}
-                </div>
-            </div>
 
-            <div class="domain-actions" style="margin-top: auto; padding-top: 10px; border-top: 1px solid var(--border-subtle); display: flex; justify-content: space-between; align-items: center; gap: 6px; width: 100%; box-sizing: border-box; min-width: 0;">
-                <button class="btn secondary sm" onclick="openOidcGuideModal('${escapeHtml(c.client_id)}')" style="font-size: 12px; padding: 6px 8px; flex: 1; text-align: center; justify-content: center; min-width: 0; white-space: nowrap;">📋 参数</button>
-                ${!isSys ? `
-                <button class="btn sm" onclick="openEditOidcClientModal('${escapeHtml(c.client_id)}')" style="font-size: 12px; padding: 6px 8px; flex: 1; text-align: center; justify-content: center; min-width: 0; white-space: nowrap;">✏️ 编辑</button>
-                <button class="btn danger sm" onclick="deleteOidcClientAjax('${escapeHtml(c.client_id)}', '${escapeHtml(c.name)}')" style="font-size: 12px; padding: 6px 8px; flex: 1; text-align: center; justify-content: center; min-width: 0; white-space: nowrap;">🗑️ 删除</button>
-                ` : '<span style="font-size: 11px; color: var(--text-sec); padding: 4px 8px; flex: 1; text-align: right;">系统内置</span>'}
+                <div class="domain-actions" style="margin-top: auto; padding-top: 10px; border-top: 1px solid var(--border-subtle); display: flex; justify-content: space-between; align-items: center; gap: 6px; width: 100%; box-sizing: border-box; min-width: 0;">
+                    <button class="btn secondary sm" onclick="openOidcGuideModal('${escapeHtml(c.client_id)}')" style="font-size: 12px; padding: 5px 8px; flex: 1; text-align: center; justify-content: center; min-width: 0; white-space: nowrap;">📋 参数</button>
+                    ${!isSys ? `
+                    <button class="btn secondary sm" onclick="openEditOidcClientModal('${escapeHtml(c.client_id)}')" style="font-size: 12px; padding: 5px 8px; flex: 1; text-align: center; justify-content: center; min-width: 0; white-space: nowrap;">✏️ 编辑</button>
+                    <button class="btn danger sm" onclick="deleteOidcClientAjax('${escapeHtml(c.client_id)}', '${escapeHtml(c.name)}')" style="font-size: 12px; padding: 5px 8px; flex: 1; text-align: center; justify-content: center; min-width: 0; white-space: nowrap;">🗑️ 删除</button>
+                    ` : '<span style="font-size: 11px; color: var(--text-sec); padding: 4px 8px; flex: 1; text-align: right;">系统内置</span>'}
+                </div>
             </div>
         </div>`;
     }).join('');
+
+    // 2. 渲染表格视图 (Table View)
+    if (tableBody) {
+        tableBody.innerHTML = clients.map(c => {
+            const isSys = c.is_system;
+            const authBadge = c.auth_method === 'passkey_only' ? 
+                `<span class="badge success">仅 Passkey</span>` : 
+                (c.auth_method === 'password_only' ? `<span class="badge secondary">仅密码</span>` : `<span class="badge accent">混合认证</span>`);
+
+            const sysBadge = isSys ? `<span class="badge warning" style="font-size: 10px; margin-left: 4px;">系统内置</span>` : '';
+            const uris = (c.redirect_uris || []).length > 0 ? 
+                (c.redirect_uris || []).map(u => `<div style="font-family: monospace; font-size: 11px; color: var(--text-sec); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 260px;" title="${escapeHtml(u)}">🔗 ${escapeHtml(u)}</div>`).join('') :
+                '<span style="font-size: 11px; color: var(--text-sec);">暂无回调地址</span>';
+
+            const secretId = `tbl_secret_${c.client_id.replace(/[^a-zA-Z0-9]/g, '_')}`;
+
+            return `
+            <tr>
+                <td>
+                    <div style="display: flex; align-items: center; gap: 8px;">
+                        <span style="font-size: 18px; flex-shrink: 0;">${isSys ? '🛡️' : '📱'}</span>
+                        <div style="min-width: 0;">
+                            <div style="font-weight: 700; font-size: 13px; color: var(--text); display: flex; align-items: center;">
+                                <span style="overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">${escapeHtml(c.name)}</span>
+                                ${sysBadge}
+                            </div>
+                            ${c.description ? `<div style="font-size: 11px; color: var(--text-sec); max-width: 220px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;" title="${escapeHtml(c.description)}">${escapeHtml(c.description)}</div>` : ''}
+                        </div>
+                    </div>
+                </td>
+                <td>
+                    <code style="background: var(--card-sec); padding: 2px 6px; border-radius: 6px; border: 1px solid var(--border-subtle); font-size: 12px; color: var(--accent);">${escapeHtml(c.client_id)}</code>
+                </td>
+                <td>
+                    <div class="badges-wrap" style="margin: 0;">
+                        ${authBadge}
+                    </div>
+                </td>
+                <td>
+                    <div style="display: flex; flex-direction: column; gap: 2px;">
+                        ${uris}
+                    </div>
+                </td>
+                <td>
+                    <div style="background: var(--card-sec); border-radius: 8px; padding: 4px 8px; display: inline-flex; align-items: center; gap: 6px; border: 1px solid var(--border-subtle); max-width: 240px;">
+                        <input type="password" id="${secretId}" value="${escapeHtml(c.client_secret || '')}" readonly style="background: transparent; border: none; font-family: monospace; font-size: 11px; color: var(--text); outline: none; width: 90px; text-overflow: ellipsis;">
+                        <button type="button" onclick="toggleSecretInputVisibility('${secretId}')" class="pill-btn" style="padding: 1px 5px; font-size: 10px;" title="显示/隐藏">👁️</button>
+                        <button class="pill-btn" onclick="copyToClipboard('${escapeHtml(c.client_secret || '')}', 'Client Secret')" style="padding: 1px 6px; font-size: 10px;" title="复制密钥">📋</button>
+                        ${!isSys ? `<button class="pill-btn" onclick="regenerateOidcSecret('${escapeHtml(c.client_id)}')" title="重置密钥" style="padding: 1px 5px; font-size: 10px;">🔄</button>` : ''}
+                    </div>
+                </td>
+                <td style="text-align: right;">
+                    <div style="display: inline-flex; gap: 4px;">
+                        <button class="pill-btn" onclick="openOidcGuideModal('${escapeHtml(c.client_id)}')" style="padding: 4px 8px; font-size: 11px;">📋 参数</button>
+                        ${!isSys ? `
+                        <button class="btn secondary sm" onclick="openEditOidcClientModal('${escapeHtml(c.client_id)}')" style="padding: 4px 8px; font-size: 11px;">✏️</button>
+                        <button class="btn danger sm" onclick="deleteOidcClientAjax('${escapeHtml(c.client_id)}', '${escapeHtml(c.name)}')" style="padding: 4px 8px; font-size: 11px;">🗑️</button>
+                        ` : '<span style="font-size: 11px; color: var(--text-sec); padding: 4px 6px;">系统</span>'}
+                    </div>
+                </td>
+            </tr>`;
+        }).join('');
+    }
+
+    // 应用当前视图模式
+    switchAppsView(appsViewMode);
 }
 
 function toggleSecretInputVisibility(inputId) {
@@ -2300,22 +2397,30 @@ function renderSslCertificates(filterKeyword = '') {
 
         // 卡片视图
         cardHtml += `
-        <div class="ssl-compact-card task-card">
-            <div style="display: flex; justify-content: space-between; align-items: center; gap: 6px;">
-                <div style="display: flex; align-items: center; gap: 5px; min-width: 0; flex: 1;">
-                    <span style="font-size: 15px;">⚡</span>
-                    <span style="font-size: 14px; font-weight: 700; color: var(--text); overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">${escapeHtml(task.domain)}</span>
+        <div class="domain-card" style="border-color: var(--accent); background: var(--accent-bg);">
+            <div>
+                <div class="domain-card-header">
+                    <div>
+                        <span class="domain-name" style="color: var(--accent);">
+                            <span style="font-size: 16px;">⚡</span>
+                            ${escapeHtml(task.domain)}
+                        </span>
+                        <div class="domain-target" style="font-family: monospace; font-size: 11px;">
+                            <span>任务 ID:</span>
+                            <code>${escapeHtml(task.task_id.substring(0, 8))}...</code>
+                        </div>
+                    </div>
+                    <span class="${badgeClass}">${badgeText}</span>
                 </div>
-                <span class="${badgeClass}" style="font-size: 10px; padding: 2px 6px;">${badgeText}</span>
-            </div>
 
-            <div style="font-size: 11px; color: var(--text-sec); background: var(--card); border-radius: 6px; padding: 5px 8px; font-family: monospace; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">
-                ${escapeHtml(latestLog)}
-            </div>
+                <div style="font-size: 11px; color: var(--text-sec); background: var(--card); border-radius: 8px; padding: 8px 10px; font-family: monospace; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; border: 1px solid var(--border-subtle); margin: 8px 0;">
+                    ${escapeHtml(latestLog)}
+                </div>
 
-            <div style="display: flex; gap: 6px; padding-top: 4px; border-top: 1px solid var(--border-subtle);">
-                <button class="btn secondary sm" onclick="openSslTaskDetailModal('${escapeHtml(task.task_id)}')" style="flex: 1; justify-content: center; font-size: 11px; padding: 4px 6px;">📜 进度日志</button>
-                ${isApplying ? `<button class="btn danger sm" onclick="cancelSslTaskAjax('${escapeHtml(task.task_id)}')" style="font-size: 11px; padding: 4px 8px;">🛑 取消</button>` : ''}
+                <div class="domain-actions" style="margin-top: auto; padding-top: 10px; border-top: 1px solid var(--border-subtle); display: flex; gap: 6px;">
+                    <button class="btn secondary sm" onclick="openSslTaskDetailModal('${escapeHtml(task.task_id)}')" style="flex: 1; justify-content: center; font-size: 11px; padding: 5px 6px;">📜 进度日志</button>
+                    ${isApplying ? `<button class="btn danger sm" onclick="cancelSslTaskAjax('${escapeHtml(task.task_id)}')" style="font-size: 11px; padding: 5px 10px;">🛑 取消</button>` : ''}
+                </div>
             </div>
         </div>`;
 
@@ -2384,33 +2489,38 @@ function renderSslCertificates(filterKeyword = '') {
         const authTypeLabel = cert.provider === 'dnsAccount' ? 'DNS 验证' : 'HTTP 验证';
         const orgLabel = cert.organization || "Let's Encrypt";
 
-        // 卡片视图 (紧凑精炼)
+        // 卡片视图 (统一 Apple Glass 风格)
         cardHtml += `
-        <div class="ssl-compact-card">
-            <div style="display: flex; justify-content: space-between; align-items: center; gap: 6px;">
-                <div style="display: flex; align-items: center; gap: 5px; min-width: 0; flex: 1;">
-                    <span style="font-size: 15px;">🔒</span>
-                    <span style="font-size: 14px; font-weight: 700; color: var(--text); overflow: hidden; text-overflow: ellipsis; white-space: nowrap;" title="${escapeHtml(cert.primary_domain)}">${escapeHtml(cert.primary_domain)}</span>
+        <div class="domain-card">
+            <div>
+                <div class="domain-card-header">
+                    <div>
+                        <span class="domain-name" title="${escapeHtml(cert.primary_domain)}">
+                            <span style="font-size: 16px;">🔒</span>
+                            ${escapeHtml(cert.primary_domain)}
+                        </span>
+                        <div class="domain-target">
+                            <span>🏢 机构:</span>
+                            <span style="color: var(--text);">${escapeHtml(orgLabel)} · ${authTypeLabel}</span>
+                        </div>
+                    </div>
+                    <div>${statusBadge}</div>
                 </div>
-                <div>${statusBadge}</div>
-            </div>
 
-            <div style="font-size: 11px; color: var(--text-sec); display: flex; justify-content: space-between; align-items: center;">
-                <span>${escapeHtml(orgLabel)} · ${authTypeLabel}</span>
-                <span>${cert.auto_renew ? '<span style="color: var(--success);">🔄 自动续签</span>' : '<span style="color: var(--text-sec);">手动</span>'}</span>
-            </div>
+                <div style="font-size: 12px; display: flex; justify-content: space-between; align-items: center; background: var(--card-sec); padding: 6px 10px; border-radius: 8px; border: 1px solid var(--border-subtle); margin: 8px 0;">
+                    <span style="color: var(--text-sec); font-family: monospace;">📅 ${expireShort}</span>
+                    <span>${daysLeftStr} ${cert.auto_renew ? '· <span style="color: var(--success); font-weight: 600;">🔄 自动续签</span>' : ''}</span>
+                </div>
 
-            <div style="font-size: 11px; display: flex; justify-content: space-between; align-items: center; background: var(--card-sec); padding: 4px 8px; border-radius: 6px;">
-                <span style="color: var(--text-sec);">${expireShort}</span>
-                <span>${daysLeftStr}</span>
-            </div>
+                <div style="min-height: 24px; margin-bottom: 8px;">
+                    ${(cert.websites && cert.websites.length > 0) ? `<div style="display: flex; flex-wrap: wrap; gap: 4px;">${websitesHtml}</div>` : '<div style="font-size: 11px; color: var(--text-sec);">未绑定反代站点</div>'}
+                </div>
 
-            ${(cert.websites && cert.websites.length > 0) ? `<div style="display: flex; flex-wrap: wrap; gap: 3px; max-height: 38px; overflow: hidden;">${websitesHtml}</div>` : ''}
-
-            <div style="display: flex; gap: 4px; padding-top: 4px; border-top: 1px solid var(--border-subtle); margin-top: auto; flex-wrap: wrap;">
-                <button class="btn secondary sm" onclick="downloadSslBundle(${cert.id}, '${escapeHtml(cert.primary_domain)}')" style="flex: 1; min-width: 50px; justify-content: center; font-size: 11px; padding: 4px 5px;" title="导出完整证书元数据包与自动续签凭据">📥 导出</button>
-                <button class="btn secondary sm" onclick="openSslItemLogModal(${cert.id}, '${escapeHtml(cert.primary_domain)}')" style="flex: 1; min-width: 50px; justify-content: center; font-size: 11px; padding: 4px 5px;">📜 日志</button>
-                <button class="btn accent sm" onclick="reapplySslForDomain('${escapeHtml(cert.primary_domain)}')" style="font-size: 11px; padding: 4px 7px; white-space: nowrap;">🔄 续签/申请</button>
+                <div class="domain-actions" style="margin-top: auto; padding-top: 10px; border-top: 1px solid var(--border-subtle); display: flex; justify-content: space-between; align-items: center; gap: 6px;">
+                    <button class="btn secondary sm" onclick="downloadSslBundle(${cert.id}, '${escapeHtml(cert.primary_domain)}')" style="flex: 1; justify-content: center; font-size: 11px; padding: 5px 6px;" title="导出完整证书元数据包与自动续签凭据">📥 导出</button>
+                    <button class="btn secondary sm" onclick="openSslItemLogModal(${cert.id}, '${escapeHtml(cert.primary_domain)}')" style="flex: 1; justify-content: center; font-size: 11px; padding: 5px 6px;">📜 日志</button>
+                    <button class="btn accent sm" onclick="reapplySslForDomain('${escapeHtml(cert.primary_domain)}')" style="font-size: 11px; padding: 5px 8px; white-space: nowrap;">🔄 续签/申请</button>
+                </div>
             </div>
         </div>`;
 
@@ -2843,9 +2953,14 @@ window.switchImportTab = switchImportTab;
 window.submitImportSslModal = submitImportSslModal;
 window.handleDomainSslCertChange = handleDomainSslCertChange;
 window.populateModalDomainSslCerts = populateModalDomainSslCerts;
-
-
-
-
-
-
+window.switchAppsView = switchAppsView;
+window.filterOidcApps = filterOidcApps;
+window.renderOidcClients = renderOidcClients;
+window.loadOidcClientsAjax = loadOidcClientsAjax;
+window.openAddOidcClientModal = openAddOidcClientModal;
+window.closeAddOidcClientModal = closeAddOidcClientModal;
+window.openGlobalOidcEndpointsModal = openGlobalOidcEndpointsModal;
+window.openOidcGuideModal = openOidcGuideModal;
+window.closeOidcGuideModal = closeOidcGuideModal;
+window.switchGuideTab = switchGuideTab;
+window.toggleSecretInputVisibility = toggleSecretInputVisibility;
