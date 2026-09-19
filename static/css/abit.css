@@ -891,6 +891,15 @@ input:checked + .slider:before { transform: translateX(20px); }
     }
 }
 
+/* 弹窗激活时的背景页面滚动锁定 (防止滑动穿透) */
+html.modal-open,
+body.modal-open {
+    overflow: hidden !important;
+    height: 100% !important;
+    touch-action: none !important;
+    -webkit-overflow-scrolling: auto !important;
+}
+
 /* Apple Glass Modal / Drawer */
 .modal-overlay {
     position: fixed;
@@ -909,6 +918,8 @@ input:checked + .slider:before { transform: translateX(20px); }
     opacity: 0;
     pointer-events: none;
     transition: opacity 0.25s cubic-bezier(0.16, 1, 0.3, 1);
+    overscroll-behavior: contain;
+    touch-action: none;
 }
 .modal-overlay.active {
     opacity: 1;
@@ -923,6 +934,9 @@ input:checked + .slider:before { transform: translateX(20px); }
     max-width: 680px;
     max-height: 85vh;
     overflow-y: auto;
+    -webkit-overflow-scrolling: touch;
+    overscroll-behavior: contain;
+    touch-action: pan-y;
     padding: 24px;
     transform: scale(0.95) translateY(10px);
     transition: transform 0.25s cubic-bezier(0.16, 1, 0.3, 1);
@@ -1056,6 +1070,8 @@ input:checked + .slider:before { transform: translateX(20px); }
         width: 100% !important;
         box-sizing: border-box !important;
         -webkit-overflow-scrolling: touch !important;
+        overscroll-behavior: contain !important;
+        touch-action: pan-y !important;
     }
     .modal-header {
         margin-bottom: 14px !important;

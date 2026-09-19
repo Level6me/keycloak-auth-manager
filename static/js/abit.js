@@ -1660,21 +1660,53 @@ document.addEventListener('click', (e) => {
     }
 });
 
-// ─── 全局模态框遮罩点击关闭与 ESC 快捷关闭 ───
+// ─── 弹窗激活状态与背景页面滚动锁定同步（防止背景上下滑动穿透）───
+function syncModalScrollLock() {
+    const hasActiveModal = !!document.querySelector('.modal-overlay.active');
+    if (hasActiveModal) {
+        document.body.classList.add('modal-open');
+        document.documentElement.classList.add('modal-open');
+    } else {
+        document.body.classList.remove('modal-open');
+        document.documentElement.classList.remove('modal-open');
+    }
+}
+window.syncModalScrollLock = syncModalScrollLock;
+
+// ─── 全局模态框遮罩点击关闭、ESC 快捷关闭与背景滚动锁定 ───
 document.addEventListener('DOMContentLoaded', () => {
+    // 1. 初始化 MutationObserver 监听所有模态弹窗的 class 变化，自动触发页面滚动锁定/解锁
+    const modalObserver = new MutationObserver(() => {
+        syncModalScrollLock();
+    });
+
     document.querySelectorAll('.modal-overlay').forEach(overlay => {
+        modalObserver.observe(overlay, { attributes: true, attributeFilter: ['class'] });
+
+        // 点击遮罩空白区域关闭弹窗
         overlay.addEventListener('click', (e) => {
             if (e.target === overlay) {
                 overlay.classList.remove('active');
             }
         });
+
+        // 阻止遮罩空白区域的触摸滑动穿透到底层页面
+        overlay.addEventListener('touchmove', (e) => {
+            if (e.target === overlay) {
+                e.preventDefault();
+            }
+        }, { passive: false });
     });
     
+    // ESC 键关闭弹窗
     document.addEventListener('keydown', (e) => {
         if (e.key === 'Escape') {
             document.querySelectorAll('.modal-overlay.active').forEach(m => m.classList.remove('active'));
         }
     });
+
+    // 初始状态同步一次
+    syncModalScrollLock();
 });
 
 
