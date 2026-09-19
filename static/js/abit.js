@@ -2175,6 +2175,19 @@ function renderSslCertificates(filterKeyword = '') {
         return t.domain && t.domain.toLowerCase().includes(keyword);
     });
 
+    // 收集处于申请中的任务域名和 SSL ID 用于去重
+    const applyingTaskDomains = new Set(
+        activeTasks
+            .filter(t => t.status === 'applying')
+            .map(t => (t.domain || '').toLowerCase())
+            .filter(Boolean)
+    );
+    const applyingTaskSslIds = new Set(
+        activeTasks
+            .filter(t => t.status === 'applying' && t.ssl_id)
+            .map(t => t.ssl_id)
+    );
+
     const certs = (cachedSslCertificates || []).filter(c => {
         if (!keyword) return true;
         return (c.primary_domain && c.primary_domain.toLowerCase().includes(keyword)) ||
@@ -2182,7 +2195,18 @@ function renderSslCertificates(filterKeyword = '') {
                (c.acme_account && c.acme_account.toLowerCase().includes(keyword));
     });
 
-    if (activeTasks.length === 0 && certs.length === 0) {
+    // 去重：若某个证书仍在申请中（未 ready）且已有活跃 task 正在跟踪，则过滤掉 1Panel 提前占位的空白记录，由活跃任务卡片统一呈现
+    const displayCerts = certs.filter(c => {
+        const isReady = c.status === 'ready' || c.status === 'success' || c.status === 'issued';
+        if (isReady) return true;
+        const dom = (c.primary_domain || '').toLowerCase();
+        if (applyingTaskDomains.has(dom) || applyingTaskSslIds.has(c.id)) {
+            return false;
+        }
+        return true;
+    });
+
+    if (activeTasks.length === 0 && displayCerts.length === 0) {
         cardContainer.style.display = 'none';
         tableContainer.style.display = 'none';
         if (emptyTip) emptyTip.style.display = 'block';
@@ -2198,8 +2222,18 @@ function renderSslCertificates(filterKeyword = '') {
     // --- 活跃任务渲染 ---
     activeTasks.forEach(task => {
         const isApplying = task.status === 'applying';
-        const badgeClass = isApplying ? 'badge warning' : (task.status === 'cancelled' ? 'badge secondary' : 'badge danger');
-        const badgeText = isApplying ? '⏳ 申请中' : (task.status === 'cancelled' ? '已取消' : '失败');
+        let badgeClass = 'badge warning';
+        let badgeText = '⏳ 申请中';
+        if (task.status === 'ready' || task.status === 'success') {
+            badgeClass = 'badge success';
+            badgeText = '✅ 已就绪';
+        } else if (task.status === 'cancelled') {
+            badgeClass = 'badge secondary';
+            badgeText = '⚠️ 已取消';
+        } else if (!isApplying) {
+            badgeClass = 'badge danger';
+            badgeText = '❌ 申请失败';
+        }
         const latestLog = (task.logs && task.logs.length) ? task.logs[task.logs.length - 1] : (task.message || '正在排队处理...');
 
         // 卡片视图
@@ -2253,7 +2287,7 @@ function renderSslCertificates(filterKeyword = '') {
     });
 
     // --- 已就绪/已签发证书渲染 ---
-    certs.forEach(cert => {
+    displayCerts.forEach(cert => {
         const isReady = cert.status === 'ready' || cert.status === 'success' || cert.status === 'issued';
         const isApplying = cert.status === 'applying';
         const statusBadge = isReady ? 
@@ -2266,7 +2300,7 @@ function renderSslCertificates(filterKeyword = '') {
 
         let expireShort = '-';
         let daysLeftStr = '';
-        if (cert.expire_date) {
+        if (cert.expire_date && !cert.expire_date.startsWith('0001-01-01') && !cert.expire_date.startsWith('1970-01-01') && isReady) {
             const expDate = new Date(cert.expire_date);
             const now = new Date();
             const daysLeft = Math.ceil((expDate - now) / (1000 * 60 * 60 * 24));
@@ -2280,6 +2314,9 @@ function renderSslCertificates(filterKeyword = '') {
                     daysLeftStr = `<span style="color: var(--danger); font-weight: 700;">已过期</span>`;
                 }
             }
+        } else {
+            expireShort = isReady ? '正常' : '待签发';
+            daysLeftStr = isReady ? '' : '<span style="color: var(--warning);">⏳ 申请中</span>';
         }
 
         const authTypeLabel = cert.provider === 'dnsAccount' ? 'DNS 验证' : 'HTTP 验证';
