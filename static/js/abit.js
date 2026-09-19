@@ -1993,6 +1993,29 @@ function updateSslStats() {
     if (renewEl) renewEl.textContent = autorenew;
 }
 
+let sslViewMode = localStorage.getItem('abit_ssl_view_mode') || 'card';
+
+function switchSslView(mode) {
+    sslViewMode = mode;
+    try { localStorage.setItem('abit_ssl_view_mode', mode); } catch (e) {}
+    const cardContainer = document.getElementById('sslCardContainer');
+    const tableContainer = document.getElementById('sslTableContainer');
+    const btnCard = document.getElementById('btnSslCardView');
+    const btnTable = document.getElementById('btnSslTableView');
+
+    if (mode === 'table') {
+        if (cardContainer) cardContainer.style.display = 'none';
+        if (tableContainer) tableContainer.style.display = 'block';
+        if (btnTable) btnTable.classList.add('active');
+        if (btnCard) btnCard.classList.remove('active');
+    } else {
+        if (cardContainer) cardContainer.style.display = 'grid';
+        if (tableContainer) tableContainer.style.display = 'none';
+        if (btnCard) btnCard.classList.add('active');
+        if (btnTable) btnTable.classList.remove('active');
+    }
+}
+
 function filterSslCertificates(keyword) {
     renderSslCertificates(keyword);
 }
@@ -2027,94 +2050,163 @@ function renderSslCertificates(filterKeyword = '') {
     }
 
     if (emptyTip) emptyTip.style.display = 'none';
-    cardContainer.style.display = 'grid';
-    tableContainer.style.display = 'none'; // 移动端与桌面默认卡片流
 
-    let html = '';
+    // 1. 渲染紧凑卡片 (Card View)
+    let cardHtml = '';
+    let tableHtml = '';
 
-    // 1. 渲染当前正在进行的后台申请任务卡片 (带呼吸动画与取消按钮)
+    // --- 活跃任务渲染 ---
     activeTasks.forEach(task => {
         const isApplying = task.status === 'applying';
         const badgeClass = isApplying ? 'badge warning' : (task.status === 'cancelled' ? 'badge secondary' : 'badge danger');
-        const badgeText = isApplying ? '⏳ 申请中...' : (task.status === 'cancelled' ? '已取消' : '失败');
+        const badgeText = isApplying ? '⏳ 申请中' : (task.status === 'cancelled' ? '已取消' : '失败');
+        const latestLog = (task.logs && task.logs.length) ? task.logs[task.logs.length - 1] : (task.message || '正在排队处理...');
 
-        html += `
-        <div class="domain-card" style="border: 1px solid var(--accent); background: var(--accent-bg); min-width: 0; display: flex; flex-direction: column;">
-            <div class="domain-header" style="display: flex; justify-content: space-between; align-items: flex-start; gap: 8px;">
-                <div style="min-width: 0; flex: 1;">
-                    <div style="display: flex; align-items: center; gap: 6px; margin-bottom: 4px;">
-                        <span style="font-size: 18px;">⚡</span>
-                        <span style="font-size: 16px; font-weight: 800; color: var(--text); overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">${escapeHtml(task.domain)}</span>
-                    </div>
-                    <div style="font-size: 11px; color: var(--text-sec); font-family: monospace;">任务 ID: ${escapeHtml(task.task_id)}</div>
+        // 卡片视图
+        cardHtml += `
+        <div class="ssl-compact-card task-card">
+            <div style="display: flex; justify-content: space-between; align-items: center; gap: 6px;">
+                <div style="display: flex; align-items: center; gap: 5px; min-width: 0; flex: 1;">
+                    <span style="font-size: 15px;">⚡</span>
+                    <span style="font-size: 14px; font-weight: 700; color: var(--text); overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">${escapeHtml(task.domain)}</span>
                 </div>
-                <div><span class="${badgeClass}">${badgeText}</span></div>
+                <span class="${badgeClass}" style="font-size: 10px; padding: 2px 6px;">${badgeText}</span>
             </div>
 
-            <div style="margin: 10px 0; font-size: 12px; color: var(--text); line-height: 1.5; background: var(--card); border-radius: 8px; padding: 8px 10px;">
-                <div style="color: var(--accent); font-weight: 700; margin-bottom: 2px;">最新进度:</div>
-                <div style="font-family: monospace; font-size: 11px; color: var(--text-sec); overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">
-                    ${escapeHtml(task.logs && task.logs.length ? task.logs[task.logs.length - 1] : task.message)}
-                </div>
+            <div style="font-size: 11px; color: var(--text-sec); background: var(--card); border-radius: 6px; padding: 5px 8px; font-family: monospace; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">
+                ${escapeHtml(latestLog)}
             </div>
 
-            <div class="domain-actions" style="margin-top: auto; padding-top: 8px; border-top: 1px solid var(--border-subtle); display: flex; gap: 8px;">
-                <button class="btn secondary sm" onclick="openSslTaskDetailModal('${escapeHtml(task.task_id)}')" style="flex: 1; justify-content: center; font-size: 12px; padding: 6px 10px;">📜 查看流水日志</button>
-                ${isApplying ? `<button class="btn danger sm" onclick="cancelSslTaskAjax('${escapeHtml(task.task_id)}')" style="flex: 1; justify-content: center; font-size: 12px; padding: 6px 10px;">🛑 取消申请</button>` : ''}
+            <div style="display: flex; gap: 6px; padding-top: 4px; border-top: 1px solid var(--border-subtle);">
+                <button class="btn secondary sm" onclick="openSslTaskDetailModal('${escapeHtml(task.task_id)}')" style="flex: 1; justify-content: center; font-size: 11px; padding: 4px 6px;">📜 进度日志</button>
+                ${isApplying ? `<button class="btn danger sm" onclick="cancelSslTaskAjax('${escapeHtml(task.task_id)}')" style="font-size: 11px; padding: 4px 8px;">🛑 取消</button>` : ''}
             </div>
         </div>`;
+
+        // 表格视图
+        tableHtml += `
+        <tr style="background: var(--accent-bg);">
+            <td>
+                <div style="display: flex; align-items: center; gap: 6px;">
+                    <span>⚡</span>
+                    <div>
+                        <div style="font-weight: 700; font-size: 13px; color: var(--accent);">${escapeHtml(task.domain)}</div>
+                        <div style="font-size: 10px; color: var(--text-sec); font-family: monospace;">任务 ID: ${escapeHtml(task.task_id.substring(0, 8))}...</div>
+                    </div>
+                </div>
+            </td>
+            <td><span class="badge secondary" style="font-size: 10px;">后台任务</span></td>
+            <td><span class="${badgeClass}" style="font-size: 10px;">${badgeText}</span></td>
+            <td>
+                <div style="font-size: 11px; color: var(--text-sec); max-width: 220px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;" title="${escapeHtml(latestLog)}">
+                    ${escapeHtml(latestLog)}
+                </div>
+            </td>
+            <td><span style="font-size: 11px; color: var(--text-sec);">-</span></td>
+            <td style="text-align: right;">
+                <div style="display: inline-flex; gap: 4px;">
+                    <button class="pill-btn" onclick="openSslTaskDetailModal('${escapeHtml(task.task_id)}')" style="padding: 3px 8px; font-size: 11px;">📜 日志</button>
+                    ${isApplying ? `<button class="btn danger sm" onclick="cancelSslTaskAjax('${escapeHtml(task.task_id)}')" style="padding: 3px 8px; font-size: 11px;">🛑 取消</button>` : ''}
+                </div>
+            </td>
+        </tr>`;
     });
 
-    // 2. 渲染已完成/已存在的证书卡片
+    // --- 已就绪/已签发证书渲染 ---
     certs.forEach(cert => {
         const isReady = cert.status === 'ready' || cert.status === 'success' || cert.status === 'issued';
         const isApplying = cert.status === 'applying';
         const statusBadge = isReady ? 
-            '<span class="badge success">✅ 正常就绪</span>' : 
-            (isApplying ? '<span class="badge warning">⏳ 申请中</span>' : `<span class="badge danger">❌ ${escapeHtml(cert.status)}</span>`);
+            '<span class="badge success" style="font-size: 10px; padding: 2px 6px;">✅ 就绪</span>' : 
+            (isApplying ? '<span class="badge warning" style="font-size: 10px; padding: 2px 6px;">⏳ 申请中</span>' : `<span class="badge danger" style="font-size: 10px; padding: 2px 6px;">❌ ${escapeHtml(cert.status)}</span>`);
 
         const websitesHtml = (cert.websites || []).length > 0 ? 
-            cert.websites.map(w => `<span class="badge secondary" style="font-size: 10px;">🌐 ${escapeHtml(w)}</span>`).join(' ') : 
-            '<span style="font-size: 11px; color: var(--text-sec);">暂未绑定反代网站</span>';
+            cert.websites.map(w => `<span class="badge secondary" style="font-size: 10px; padding: 1px 5px;">🌐 ${escapeHtml(w)}</span>`).join(' ') : 
+            '<span style="font-size: 11px; color: var(--text-sec);">未绑定反代</span>';
 
-        const expireDateStr = cert.expire_date ? cert.expire_date.replace('T', ' ').replace('Z', '') : '-';
+        let expireShort = '-';
+        let daysLeftStr = '';
+        if (cert.expire_date) {
+            const expDate = new Date(cert.expire_date);
+            const now = new Date();
+            const daysLeft = Math.ceil((expDate - now) / (1000 * 60 * 60 * 24));
+            expireShort = cert.expire_date.split('T')[0] || cert.expire_date;
+            if (!isNaN(daysLeft)) {
+                if (daysLeft > 30) {
+                    daysLeftStr = `<span style="color: var(--success); font-weight: 600;">${daysLeft}天后到期</span>`;
+                } else if (daysLeft > 0) {
+                    daysLeftStr = `<span style="color: var(--warning); font-weight: 700;">${daysLeft}天后到期</span>`;
+                } else {
+                    daysLeftStr = `<span style="color: var(--danger); font-weight: 700;">已过期</span>`;
+                }
+            }
+        }
 
-        html += `
-        <div class="domain-card" style="min-width: 0; display: flex; flex-direction: column;">
-            <div class="domain-header" style="display: flex; justify-content: space-between; align-items: flex-start; gap: 8px;">
-                <div style="min-width: 0; flex: 1;">
-                    <div style="display: flex; align-items: center; gap: 6px; margin-bottom: 4px;">
-                        <span style="font-size: 18px;">🔒</span>
-                        <span style="font-size: 16px; font-weight: 700; color: var(--text); overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">${escapeHtml(cert.primary_domain)}</span>
-                    </div>
-                    <div style="font-size: 11px; color: var(--text-sec);">${escapeHtml(cert.organization || "Let's Encrypt")} · ${cert.provider === 'dnsAccount' ? 'DNS 验证' : 'HTTP 验证'}</div>
+        const authTypeLabel = cert.provider === 'dnsAccount' ? 'DNS 验证' : 'HTTP 验证';
+        const orgLabel = cert.organization || "Let's Encrypt";
+
+        // 卡片视图 (紧凑精炼)
+        cardHtml += `
+        <div class="ssl-compact-card">
+            <div style="display: flex; justify-content: space-between; align-items: center; gap: 6px;">
+                <div style="display: flex; align-items: center; gap: 5px; min-width: 0; flex: 1;">
+                    <span style="font-size: 15px;">🔒</span>
+                    <span style="font-size: 14px; font-weight: 700; color: var(--text); overflow: hidden; text-overflow: ellipsis; white-space: nowrap;" title="${escapeHtml(cert.primary_domain)}">${escapeHtml(cert.primary_domain)}</span>
                 </div>
                 <div>${statusBadge}</div>
             </div>
 
-            <div style="margin: 8px 0; display: flex; flex-direction: column; gap: 6px; font-size: 12px;">
-                <div style="display: flex; justify-content: space-between;">
-                    <span style="color: var(--text-sec);">过期时间:</span>
-                    <span style="font-family: monospace; font-size: 11px; color: var(--text);">${expireDateStr}</span>
-                </div>
-                <div style="display: flex; justify-content: space-between;">
-                    <span style="color: var(--text-sec);">自动续签:</span>
-                    <span style="font-weight: 700; color: ${cert.auto_renew ? 'var(--success)' : 'var(--text-sec)'};">${cert.auto_renew ? '已开启' : '关闭'}</span>
-                </div>
-                <div style="margin-top: 4px;">
-                    <div style="color: var(--text-sec); margin-bottom: 4px; font-size: 11px;">绑定站点:</div>
-                    <div style="display: flex; flex-wrap: wrap; gap: 4px;">${websitesHtml}</div>
-                </div>
+            <div style="font-size: 11px; color: var(--text-sec); display: flex; justify-content: space-between; align-items: center;">
+                <span>${escapeHtml(orgLabel)} · ${authTypeLabel}</span>
+                <span>${cert.auto_renew ? '<span style="color: var(--success);">🔄 自动续签</span>' : '<span style="color: var(--text-sec);">手动</span>'}</span>
             </div>
 
-            <div class="domain-actions" style="margin-top: auto; padding-top: 10px; border-top: 1px solid var(--border-subtle); display: flex; justify-content: space-between; gap: 8px;">
-                <button class="btn secondary sm" onclick="openSslItemLogModal(${cert.id}, '${escapeHtml(cert.primary_domain)}')" style="flex: 1; justify-content: center; font-size: 12px; padding: 6px 10px;">📜 查看签发日志</button>
-                <button class="btn accent sm" onclick="reapplySslForDomain('${escapeHtml(cert.primary_domain)}')" style="font-size: 12px; padding: 6px 12px; white-space: nowrap;">🔄 重新申请</button>
+            <div style="font-size: 11px; display: flex; justify-content: space-between; align-items: center; background: var(--card-sec); padding: 4px 8px; border-radius: 6px;">
+                <span style="color: var(--text-sec);">${expireShort}</span>
+                <span>${daysLeftStr}</span>
+            </div>
+
+            ${(cert.websites && cert.websites.length > 0) ? `<div style="display: flex; flex-wrap: wrap; gap: 3px; max-height: 38px; overflow: hidden;">${websitesHtml}</div>` : ''}
+
+            <div style="display: flex; gap: 6px; padding-top: 4px; border-top: 1px solid var(--border-subtle); margin-top: auto;">
+                <button class="btn secondary sm" onclick="openSslItemLogModal(${cert.id}, '${escapeHtml(cert.primary_domain)}')" style="flex: 1; justify-content: center; font-size: 11px; padding: 4px 6px;">📜 签发日志</button>
+                <button class="btn accent sm" onclick="reapplySslForDomain('${escapeHtml(cert.primary_domain)}')" style="font-size: 11px; padding: 4px 8px; white-space: nowrap;">🔄 续签/申请</button>
             </div>
         </div>`;
+
+        // 表格视图 (紧凑精炼)
+        tableHtml += `
+        <tr>
+            <td>
+                <div style="display: flex; align-items: center; gap: 6px;">
+                    <span>🔒</span>
+                    <div>
+                        <div style="font-weight: 700; font-size: 13px; color: var(--text);">${escapeHtml(cert.primary_domain)}</div>
+                        <div style="font-size: 11px; color: var(--text-sec);">${escapeHtml(orgLabel)}</div>
+                    </div>
+                </div>
+            </td>
+            <td><span class="badge secondary" style="font-size: 10px;">${authTypeLabel}</span></td>
+            <td>${statusBadge}</td>
+            <td>
+                <div style="font-size: 12px; font-family: monospace;">${expireShort}</div>
+                <div style="font-size: 10px;">${daysLeftStr} ${cert.auto_renew ? '· <span style="color: var(--success);">自动续签</span>' : ''}</div>
+            </td>
+            <td><div style="display: flex; flex-wrap: wrap; gap: 3px;">${websitesHtml}</div></td>
+            <td style="text-align: right;">
+                <div style="display: inline-flex; gap: 4px;">
+                    <button class="pill-btn" onclick="openSslItemLogModal(${cert.id}, '${escapeHtml(cert.primary_domain)}')" style="padding: 3px 8px; font-size: 11px;">📜 日志</button>
+                    <button class="btn accent sm" onclick="reapplySslForDomain('${escapeHtml(cert.primary_domain)}')" style="padding: 3px 8px; font-size: 11px;">🔄 申请</button>
+                </div>
+            </td>
+        </tr>`;
     });
 
-    cardContainer.innerHTML = html;
+    cardContainer.innerHTML = cardHtml;
+    if (tableBody) tableBody.innerHTML = tableHtml;
+
+    // 应用当前视图模式
+    switchSslView(sslViewMode);
 }
 
 function checkAndStartSslTaskPolling() {
@@ -2389,6 +2481,7 @@ async function loadSSLAccounts() {
 // 导出全局函数
 window.loadSslCertificatesAjax = loadSslCertificatesAjax;
 window.filterSslCertificates = filterSslCertificates;
+window.switchSslView = switchSslView;
 window.openApplySslModal = openApplySslModal;
 window.closeApplySslModal = closeApplySslModal;
 window.toggleModalSSLDNSSection = toggleModalSSLDNSSection;
@@ -2399,6 +2492,7 @@ window.closeSslDetailModal = closeSslDetailModal;
 window.cancelSslTaskAjax = cancelSslTaskAjax;
 window.reapplySslForDomain = reapplySslForDomain;
 window.loadSSLAccounts = loadSSLAccounts;
+
 
 
 

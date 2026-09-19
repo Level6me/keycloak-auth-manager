@@ -1109,3 +1109,86 @@ input:checked + .slider:before { transform: translateX(20px); }
     }
 }
 
+/* ==================== Compact SSL Management Styles ==================== */
+.ssl-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(min(100%, 280px), 1fr));
+    gap: 12px;
+    margin-bottom: 20px;
+    width: 100%;
+    box-sizing: border-box;
+}
+
+@media (min-width: 1200px) {
+    .ssl-grid {
+        grid-template-columns: repeat(auto-fill, minmax(min(100%, 270px), 1fr));
+    }
+}
+
+.ssl-compact-card {
+    background: var(--card);
+    border: 1px solid var(--border);
+    border-radius: 14px;
+    padding: 12px 14px;
+    box-shadow: var(--shadow-sm);
+    display: flex;
+    flex-direction: column;
+    justify-content: space-between;
+    transition: transform 0.15s, box-shadow 0.15s, border-color 0.15s;
+    min-width: 0;
+    position: relative;
+    gap: 8px;
+    box-sizing: border-box;
+}
+
+.ssl-compact-card:hover {
+    transform: translateY(-2px);
+    box-shadow: var(--shadow-md);
+    border-color: var(--accent);
+}
+
+.ssl-compact-card.task-card {
+    background: var(--accent-bg);
+    border-color: var(--accent);
+}
+
+.ssl-compact-table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 13px;
+}
+
+.ssl-compact-table th {
+    padding: 9px 12px;
+    text-align: left;
+    font-size: 11px;
+    font-weight: 700;
+    color: var(--text-sec);
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    border-bottom: 1px solid var(--border);
+    background: var(--card-sec);
+}
+
+.ssl-compact-table td {
+    padding: 9px 12px;
+    border-bottom: 1px solid var(--border-subtle);
+    color: var(--text);
+    vertical-align: middle;
+}
+
+.ssl-compact-table tr:hover td {
+    background: var(--card-sec);
+}
+
+.ssl-badge-mini {
+    display: inline-flex;
+    align-items: center;
+    gap: 3px;
+    font-size: 11px;
+    padding: 2px 7px;
+    border-radius: 6px;
+    font-weight: 600;
+}
+
+
