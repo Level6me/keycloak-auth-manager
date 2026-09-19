@@ -2189,118 +2189,203 @@ def delete_1panel_website(domain):
     log(f"1Panel 网站删除失败: {del_res}")
     return False
 
+# ─── SSL 异步申请任务与全局跟踪字典 ───
+_SSL_TASKS_LOCK = threading.Lock()
+_SSL_TASKS = {}
+# 结构: { domain: { 'task_id': str, 'domain': str, 'ssl_id': int, 'status': 'applying'|'ready'|'failed'|'cancelled', 'message': str, 'logs': [str], 'created_at': str, 'updated_at': str, 'cancel_requested': bool } }
+
+def _ssl_background_worker(task_id, domain, acme_id, dns_id):
+    with _SSL_TASKS_LOCK:
+        task = _SSL_TASKS.get(task_id)
+    if not task:
+        return
+
+    def task_log(msg):
+        with _SSL_TASKS_LOCK:
+            t = _SSL_TASKS.get(task_id)
+            if t:
+                t['logs'].append(msg)
+                t['updated_at'] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        log(f"[{domain}] {msg}")
+
+    try:
+        task_log(f"开始为 {domain} 申请 SSL 证书...")
+        # 若未指定 acme_id，自动从 1Panel 查询默认 ACME 账户
+        if not acme_id:
+            acme_res = call_1panel_api("/api/v1/websites/acme/search", "POST", {"page": 1, "pageSize": 10, "orderBy": "created_at", "order": "null"})
+            if acme_res and acme_res.get("code") == 200 and acme_res.get("data") and acme_res["data"].get("items"):
+                acme_id = acme_res["data"]["items"][0]["id"]
+
+        if not acme_id:
+            with _SSL_TASKS_LOCK:
+                if task_id in _SSL_TASKS:
+                    _SSL_TASKS[task_id]['status'] = 'failed'
+                    _SSL_TASKS[task_id]['message'] = '未在 1Panel 中找到可用的 ACME 账户'
+            task_log("❌ 未在 1Panel 中找到可用的 ACME 账户 (请先在 1Panel -> 证书 中添加 ACME 账户)")
+            return
+
+        ssl_payload = {
+            "primaryDomain": domain,
+            "provider": "dnsAccount" if dns_id else "http",
+            "acmeAccountId": int(acme_id),
+            "autoRenew": True,
+            "description": "Auto SSL by KAM",
+            "apply": True,
+            "keyType": "2048",
+        }
+        if dns_id:
+            ssl_payload["dnsAccountId"] = int(dns_id)
+
+        task_log("正在向 1Panel 提交 SSL 申请...")
+        ssl_res = call_1panel_api("/api/v1/websites/ssl", "POST", ssl_payload)
+        if not (ssl_res and ssl_res.get("code") == 200 and ssl_res.get("data")):
+            err_msg = ssl_res.get('message', '未知错误') if ssl_res else '1Panel 无响应'
+            with _SSL_TASKS_LOCK:
+                if task_id in _SSL_TASKS:
+                    _SSL_TASKS[task_id]['status'] = 'failed'
+                    _SSL_TASKS[task_id]['message'] = f"提交失败: {err_msg}"
+            task_log(f"❌ 提交 SSL 申请失败: {err_msg}")
+            return
+
+        ssl_id = ssl_res["data"]["id"]
+        with _SSL_TASKS_LOCK:
+            if task_id in _SSL_TASKS:
+                _SSL_TASKS[task_id]['ssl_id'] = ssl_id
+        task_log(f"申请已提交 (SSL ID: {ssl_id})，等待证书签发中...")
+
+        ssl_ready = False
+        last_log_size = 0
+        log_file = None
+
+        def read_1panel_task_log(current_last_size, current_log_file):
+            try:
+                import glob
+                if not current_log_file:
+                    possible_logs = glob.glob(f"/opt/1panel/log/ssl/*{domain}-ssl-{ssl_id}.log")
+                    if not possible_logs:
+                        possible_logs = glob.glob(f"/opt/1panel/log/ssl/{domain}-ssl-{ssl_id}.log")
+                    if possible_logs:
+                        current_log_file = possible_logs[0]
+
+                if current_log_file and os.path.exists(current_log_file):
+                    with open(current_log_file, 'r', encoding='utf-8') as f:
+                        f.seek(current_last_size)
+                        new_content = f.read()
+                        if new_content:
+                            for line in new_content.strip().split('\n'):
+                                if line:
+                                    task_log(f"[1Panel SSL] {line}")
+                        current_last_size = f.tell()
+            except Exception as e:
+                task_log(f"[Debug] 读取日志异常: {str(e)}")
+            return current_last_size, current_log_file
+
+        # 最多等待 20 分钟（兼容 DNS 传播）
+        for loop_idx in range(240):
+            with _SSL_TASKS_LOCK:
+                t = _SSL_TASKS.get(task_id)
+                if t and t.get('cancel_requested'):
+                    t['status'] = 'cancelled'
+                    t['message'] = '用户已手动取消申请'
+                    task_log("⚠️ 证书申请已被用户手动取消")
+                    return
+
+            time.sleep(5)
+            last_log_size, log_file = read_1panel_task_log(last_log_size, log_file)
+
+            search_res = call_1panel_api("/api/v1/websites/ssl/search", "POST", {"page": 1, "pageSize": 100, "orderBy": "created_at", "order": "null"})
+            if search_res and search_res.get("code") == 200 and search_res.get("data") and search_res["data"].get("items"):
+                item = next((x for x in search_res["data"]["items"] if x["id"] == ssl_id), None)
+                if item:
+                    status = str(item.get("status", "")).lower()
+                    if status in ["ready", "success", "issued"]:
+                        ssl_ready = True
+                        last_log_size, log_file = read_1panel_task_log(last_log_size, log_file)
+                        task_log("🎉 证书签发成功！")
+                        break
+                    elif status in ["error", "failed", "fail"]:
+                        # 严格判定：只有 1Panel 明确标记证书状态为 Error/Failed 时才判定为真正失败
+                        err_msg = item.get('message', status)
+                        last_log_size, log_file = read_1panel_task_log(last_log_size, log_file)
+                        with _SSL_TASKS_LOCK:
+                            if task_id in _SSL_TASKS:
+                                _SSL_TASKS[task_id]['status'] = 'failed'
+                                _SSL_TASKS[task_id]['message'] = err_msg
+                        task_log(f"❌ 证书申请失败: {err_msg}")
+                        return
+
+        if not ssl_ready:
+            with _SSL_TASKS_LOCK:
+                if task_id in _SSL_TASKS:
+                    _SSL_TASKS[task_id]['status'] = 'failed'
+                    _SSL_TASKS[task_id]['message'] = '证书申请超时，请查看详情'
+            task_log("❌ 证书申请超时，请前往 1Panel 后台或详情日志查看")
+            return
+
+        task_log("正在将证书绑定到反代网站并开启 HTTPS...")
+        ws_res = call_1panel_api("/api/v1/websites/search", "POST", {"page": 1, "pageSize": 10, "info": domain, "orderBy": "created_at", "order": "null"})
+        if ws_res and ws_res.get("code") == 200 and ws_res.get("data") and ws_res["data"].get("items"):
+            ws_item = next((x for x in ws_res["data"]["items"] if x.get("primaryDomain") == domain or domain in x.get("domains", [])), None)
+            if ws_item:
+                ws_id = ws_item["id"]
+                https_payload = {
+                    "websiteID": ws_id,
+                    "enable": True,
+                    "websiteSSLID": ssl_id,
+                    "type": "existed",
+                    "httpConfig": "HTTPToHTTPS",
+                    "httpsPorts": [443]
+                }
+                call_1panel_api(f"/api/v1/websites/{ws_id}/https", "POST", https_payload)
+                task_log("HTTPS 绑定成功，网站配置已无缝重载！")
+
+                fresh_data = load_data()
+                if domain in fresh_data:
+                    fresh_data[domain]['ssl_enabled'] = True
+                    save_data(fresh_data)
+
+                with _SSL_TASKS_LOCK:
+                    if task_id in _SSL_TASKS:
+                        _SSL_TASKS[task_id]['status'] = 'ready'
+                        _SSL_TASKS[task_id]['message'] = '证书签发成功并已绑定 HTTPS'
+                task_log("全部完成！")
+                return
+
+        with _SSL_TASKS_LOCK:
+            if task_id in _SSL_TASKS:
+                _SSL_TASKS[task_id]['status'] = 'ready'
+                _SSL_TASKS[task_id]['message'] = '证书签发成功 (未关联反代网站)'
+        task_log("证书已签发就绪 (未找到 1Panel 反代网站，未自动绑定)")
+
+    except Exception as exc:
+        with _SSL_TASKS_LOCK:
+            if task_id in _SSL_TASKS:
+                _SSL_TASKS[task_id]['status'] = 'failed'
+                _SSL_TASKS[task_id]['message'] = str(exc)
+        task_log(f"❌ 申请发生异常: {str(exc)}")
+
 def do_apply_ssl(domain, acme_id, dns_id=None):
+    """发起后台 SSL 申请任务"""
     if not domain:
         return False, "域名参数缺失"
-        
-    # 若未指定 acme_id，自动从 1Panel 查询默认 ACME 账户
-    if not acme_id:
-        acme_res = call_1panel_api("/api/v1/websites/acme/search", "POST", {"page": 1, "pageSize": 10, "orderBy": "created_at", "order": "null"})
-        if acme_res and acme_res.get("code") == 200 and acme_res.get("data") and acme_res["data"].get("items"):
-            acme_id = acme_res["data"]["items"][0]["id"]
-            
-    if not acme_id:
-        return False, "未在 1Panel 中找到可用的 ACME 账户 (请先在 1Panel -> 证书 中添加 ACME 账户)"
 
-    log(f"开始为 {domain} 申请 SSL 证书...")
-    ssl_payload = {
-        "primaryDomain": domain,
-        "provider": "dnsAccount" if dns_id else "http",
-        "acmeAccountId": int(acme_id),
-        "autoRenew": True,
-        "description": "Auto SSL by KAM",
-        "apply": True,
-        "keyType": "2048",
-    }
-    if dns_id:
-        ssl_payload["dnsAccountId"] = int(dns_id)
-    
-    log("正在向 1Panel 提交 SSL 申请...")
-    ssl_res = call_1panel_api("/api/v1/websites/ssl", "POST", ssl_payload)
-    if not (ssl_res and ssl_res.get("code") == 200 and ssl_res.get("data")):
-        err_msg = ssl_res.get('message', '未知错误') if ssl_res else '1Panel 无响应'
-        log(f"提交 SSL 申请失败: {err_msg}")
-        return False, f"提交 SSL 申请失败: {err_msg}"
-        
-    ssl_id = ssl_res["data"]["id"]
-    log(f"申请已提交 (SSL ID: {ssl_id})，等待证书签发中 (通常需要 15-60 秒)...")
-    
-    ssl_ready = False
-    last_log_size = 0
-    log_file = None
-    
-    def read_1panel_log(current_last_size, current_log_file):
-        try:
-            import glob
-            if not current_log_file:
-                possible_logs = glob.glob(f"/opt/1panel/log/ssl/*{domain}-ssl-{ssl_id}.log")
-                if not possible_logs:
-                    possible_logs = glob.glob(f"/opt/1panel/log/ssl/{domain}-ssl-{ssl_id}.log")
-                if possible_logs:
-                    current_log_file = possible_logs[0]
-            
-            if current_log_file and os.path.exists(current_log_file):
-                with open(current_log_file, 'r', encoding='utf-8') as f:
-                    f.seek(current_last_size)
-                    new_content = f.read()
-                    if new_content:
-                        for line in new_content.strip().split('\n'):
-                            if line:
-                                log(f"[1Panel SSL] {line}")
-                    current_last_size = f.tell()
-        except Exception as e:
-            log(f"[Debug] 读取日志异常: {str(e)}")
-        return current_last_size, current_log_file
-    
-    for _ in range(36): # 最多轮询等待 3 分钟
-        time.sleep(5)
-        last_log_size, log_file = read_1panel_log(last_log_size, log_file)
-        
-        search_res = call_1panel_api("/api/v1/websites/ssl/search", "POST", {"page": 1, "pageSize": 100, "orderBy": "created_at", "order": "null"})
-        if search_res and search_res.get("code") == 200 and search_res.get("data") and search_res["data"]["items"]:
-            item = next((x for x in search_res["data"]["items"] if x["id"] == ssl_id), None)
-            if item:
-                status = item.get("status", "")
-                if status in ["Ready", "Success", "Issued", "ready", "success", "issued"]:
-                    ssl_ready = True
-                    last_log_size, log_file = read_1panel_log(last_log_size, log_file)
-                    log("证书签发成功！")
-                    break
-                elif "Error" in status or "Failed" in status or "error" in status.lower() or "fail" in status.lower():
-                    err_msg = item.get('message', status)
-                    last_log_size, log_file = read_1panel_log(last_log_size, log_file)
-                    log(f"证书申请失败: {err_msg}")
-                    return False, f"1Panel API返回失败状态: {err_msg}"
-                    
-    if not ssl_ready:
-        log("证书申请超时 (超过3分钟)，请前往 1Panel 后台查看详情")
-        return False, "证书申请超过3分钟超时，请前往 1Panel 后台查看详情"
-        
-    log("正在将证书绑定到网站并开启 HTTPS...")
-    ws_res = call_1panel_api("/api/v1/websites/search", "POST", {"page": 1, "pageSize": 10, "info": domain, "orderBy": "created_at", "order": "null"})
-    if ws_res and ws_res.get("code") == 200 and ws_res.get("data") and ws_res["data"]["items"]:
-        ws_item = next((x for x in ws_res["data"]["items"] if x.get("primaryDomain") == domain or domain in x.get("domains", [])), None)
-        if ws_item:
-            ws_id = ws_item["id"]
-            https_payload = {
-                "websiteID": ws_id,
-                "enable": True,
-                "websiteSSLID": ssl_id,
-                "type": "existed",
-                "httpConfig": "HTTPToHTTPS",
-                "httpsPorts": [443]
-            }
-            call_1panel_api(f"/api/v1/websites/{ws_id}/https", "POST", https_payload)
-            log("HTTPS 绑定成功，网站配置已重载！")
-            
-            fresh_data = load_data()
-            if domain in fresh_data:
-                fresh_data[domain]['ssl_enabled'] = True
-                save_data(fresh_data)
-            return True, ""
-            
-    log("绑定失败：未能找到 1Panel 反代网站信息")
-    return False, "未找到对应的反代网站信息"
+    task_id = f"ssl_{domain}_{int(time.time())}"
+    with _SSL_TASKS_LOCK:
+        _SSL_TASKS[task_id] = {
+            "task_id": task_id,
+            "domain": domain,
+            "ssl_id": 0,
+            "status": "applying",
+            "message": "正在提交申请...",
+            "logs": [f"[{datetime.now().strftime('%H:%M:%S')}] 任务已启动，正在向 1Panel 提交申请..."],
+            "created_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+            "updated_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+            "cancel_requested": False,
+        }
+
+    th = threading.Thread(target=_ssl_background_worker, args=(task_id, domain, acme_id, dns_id), daemon=True)
+    th.start()
+    return True, task_id
 
 def _save_settings_from_dict(form_dict):
     """统一保存系统设置配置的底层函数，消除 /settings 与 /api/settings 重复逻辑（修复A1）"""
@@ -2676,19 +2761,106 @@ def api_create():
 
 @app.route('/api/apply_ssl', methods=['POST'])
 def api_apply_ssl():
-    clear_logs()
     domain = request.form.get('domain', '').strip().lower()
     if not is_valid_domain(domain):
         return json.dumps({"success": False, "error": "域名格式非法"})
     acme_id = request.form.get('acme_id')
     dns_id = request.form.get('dns_id')
-    
-    ssl_ok, ssl_err = do_apply_ssl(domain, acme_id, dns_id)
+
+    ssl_ok, task_id_or_err = do_apply_ssl(domain, acme_id, dns_id)
     if ssl_ok:
-        log("全部完成!")
-        return json.dumps({"success": True})
+        return json.dumps({"success": True, "task_id": task_id_or_err, "message": "SSL 申请任务已在后台启动"})
     else:
-        return json.dumps({"success": False, "error": ssl_err})
+        return json.dumps({"success": False, "error": task_id_or_err})
+
+@app.route('/api/ssl/certificates')
+def api_ssl_certificates():
+    """获取 1Panel 所有已申请和申请中的 SSL 证书列表，并融合当前活跃任务"""
+    certs = []
+    try:
+        search_res = call_1panel_api("/api/v1/websites/ssl/search", "POST", {"page": 1, "pageSize": 100, "orderBy": "created_at", "order": "null"})
+        if search_res and search_res.get("code") == 200 and search_res.get("data") and search_res["data"].get("items"):
+            for item in search_res["data"]["items"]:
+                # 关联的反代站点域名
+                bound_websites = []
+                if item.get("websites"):
+                    bound_websites = [w.get("primaryDomain") or w.get("alias") for w in item["websites"] if w]
+
+                acme_name = ""
+                if item.get("acmeAccount"):
+                    acme_name = item["acmeAccount"].get("email") or item["acmeAccount"].get("type", "")
+
+                dns_name = ""
+                if item.get("dnsAccount"):
+                    dns_name = item["dnsAccount"].get("name") or item["dnsAccount"].get("type", "")
+
+                certs.append({
+                    "id": item.get("id"),
+                    "primary_domain": item.get("primaryDomain", ""),
+                    "domains": item.get("domains", ""),
+                    "provider": item.get("provider", ""),
+                    "organization": item.get("organization", "Let's Encrypt"),
+                    "status": str(item.get("status", "")).lower(),
+                    "message": item.get("message", ""),
+                    "start_date": item.get("startDate", ""),
+                    "expire_date": item.get("expireDate", ""),
+                    "auto_renew": bool(item.get("autoRenew")),
+                    "key_type": item.get("keyType", "2048"),
+                    "acme_account": acme_name,
+                    "dns_account": dns_name,
+                    "websites": bound_websites,
+                    "log_path": item.get("logPath", ""),
+                })
+    except Exception as e:
+        log(f"获取 1Panel SSL 列表异常: {str(e)}")
+
+    # 融合当前内存中的后台活跃任务
+    with _SSL_TASKS_LOCK:
+        active_tasks = list(_SSL_TASKS.values())
+
+    return jsonify({
+        "success": True,
+        "certificates": certs,
+        "active_tasks": active_tasks
+    })
+
+@app.route('/api/ssl/task/<task_id>')
+def api_ssl_task_status(task_id):
+    """查询指定 SSL 申请任务的实时状态与最新日志"""
+    with _SSL_TASKS_LOCK:
+        task = _SSL_TASKS.get(task_id)
+        if not task:
+            return jsonify({"success": False, "error": "任务不存在"}), 404
+        return jsonify({"success": True, "task": task})
+
+@app.route('/api/ssl/cancel/<task_id>', methods=['POST'])
+def api_ssl_cancel_task(task_id):
+    """取消指定的 SSL 申请任务"""
+    with _SSL_TASKS_LOCK:
+        task = _SSL_TASKS.get(task_id)
+        if not task:
+            return jsonify({"success": False, "error": "任务不存在"}), 404
+        task['cancel_requested'] = True
+        task['status'] = 'cancelled'
+        task['message'] = '已请求取消申请'
+        task['logs'].append(f"[{datetime.now().strftime('%H:%M:%S')}] 用户请求取消任务")
+    return jsonify({"success": True, "message": "已成功取消任务"})
+
+@app.route('/api/ssl/logs/<int:ssl_id>')
+def api_ssl_item_logs(ssl_id):
+    """读取指定 SSL ID 对应的 1Panel 历史证书日志"""
+    try:
+        import glob
+        possible_logs = glob.glob(f"/opt/1panel/log/ssl/*-ssl-{ssl_id}.log")
+        if not possible_logs:
+            possible_logs = glob.glob(f"/opt/1panel/log/ssl/*ssl-{ssl_id}*.log")
+        if possible_logs and os.path.exists(possible_logs[0]):
+            with open(possible_logs[0], 'r', encoding='utf-8') as f:
+                content = f.read()
+            return jsonify({"success": True, "logs": content.split('\n')})
+        return jsonify({"success": True, "logs": ["(暂无日志文件或日志已被 1Panel 轮转归档)"]})
+    except Exception as e:
+        return jsonify({"success": False, "error": str(e)})
 
 @app.route('/detail/<domain>')
 def detail(domain):

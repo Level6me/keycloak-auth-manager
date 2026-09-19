@@ -1933,23 +1933,473 @@ function switchGuideTab(tab) {
     document.getElementById('guideTabContentGit').style.display = tab === 'git' ? 'block' : 'none';
 }
 
-// 导出 OIDC 全局函数
-window.loadOidcClientsAjax = loadOidcClientsAjax;
-window.filterOidcApps = filterOidcApps;
-window.openAddOidcClientModal = openAddOidcClientModal;
-window.closeAddOidcClientModal = closeAddOidcClientModal;
-window.openEditOidcClientModal = openEditOidcClientModal;
-window.closeEditOidcClientModal = closeEditOidcClientModal;
-window.submitAddOidcClientForm = submitAddOidcClientForm;
-window.submitEditOidcClientForm = submitEditOidcClientForm;
-window.autoFixClientRedirectUris = autoFixClientRedirectUris;
-window.regenerateOidcSecret = regenerateOidcSecret;
-window.deleteOidcClientAjax = deleteOidcClientAjax;
-window.openGlobalOidcEndpointsModal = openGlobalOidcEndpointsModal;
-window.openOidcGuideModal = openOidcGuideModal;
-window.closeOidcGuideModal = closeOidcGuideModal;
-window.switchGuideTab = switchGuideTab;
-window.toggleSecretInputVisibility = toggleSecretInputVisibility;
+// ═════════════════════════════════════════════════════════════════════
+// ─── 9. SSL 证书管理与后台静默申请引擎 (SSL Certificate Engine) ───
+// ═════════════════════════════════════════════════════════════════════
+let cachedSslCertificates = [];
+let cachedSslActiveTasks = [];
+let sslTaskPollTimer = null;
+let currentDetailSslTaskId = null;
+let currentDetailSslId = null;
+
+async function loadSslCertificatesAjax(silent = false) {
+    const loadingTip = document.getElementById('sslLoadingTip');
+    const emptyTip = document.getElementById('sslEmptyTip');
+    const cardContainer = document.getElementById('sslCardContainer');
+    const tableContainer = document.getElementById('sslTableContainer');
+
+    if (!silent && loadingTip) loadingTip.style.display = 'block';
+
+    try {
+        const res = await fetch('/api/ssl/certificates');
+        if (!res.ok) throw new Error('网络请求失败');
+        const data = await res.json();
+        if (loadingTip) loadingTip.style.display = 'none';
+
+        if (data.success) {
+            cachedSslCertificates = data.certificates || [];
+            cachedSslActiveTasks = data.active_tasks || [];
+            renderSslCertificates();
+            updateSslStats();
+            checkAndStartSslTaskPolling();
+        } else {
+            if (!silent) showToast('加载证书列表失败: ' + (data.error || '未知错误'), 'error');
+        }
+    } catch (e) {
+        if (loadingTip) loadingTip.style.display = 'none';
+        if (!silent) showToast('加载 1Panel 证书列表异常', 'error');
+    }
+}
+
+function updateSslStats() {
+    const totalEl = document.getElementById('stat-total-certs');
+    const readyEl = document.getElementById('stat-ready-certs');
+    const applyingEl = document.getElementById('stat-applying-certs');
+    const renewEl = document.getElementById('stat-autorenew-certs');
+
+    if (!totalEl) return;
+
+    const certs = cachedSslCertificates || [];
+    const activeTasks = (cachedSslActiveTasks || []).filter(t => t.status === 'applying');
+    
+    const total = certs.length;
+    const ready = certs.filter(c => c.status === 'ready' || c.status === 'success' || c.status === 'issued').length;
+    const applying = activeTasks.length + certs.filter(c => c.status === 'applying').length;
+    const autorenew = certs.filter(c => c.auto_renew).length;
+
+    totalEl.textContent = total;
+    if (readyEl) readyEl.textContent = ready;
+    if (applyingEl) applyingEl.textContent = applying;
+    if (renewEl) renewEl.textContent = autorenew;
+}
+
+function filterSslCertificates(keyword) {
+    renderSslCertificates(keyword);
+}
+
+function renderSslCertificates(filterKeyword = '') {
+    const cardContainer = document.getElementById('sslCardContainer');
+    const tableContainer = document.getElementById('sslTableContainer');
+    const tableBody = document.getElementById('sslTableBody');
+    const emptyTip = document.getElementById('sslEmptyTip');
+    if (!cardContainer || !tableContainer) return;
+
+    const keyword = (filterKeyword || '').trim().toLowerCase();
+    
+    // 活跃申请任务 (进行中的优先排在最前)
+    const activeTasks = (cachedSslActiveTasks || []).filter(t => {
+        if (!keyword) return true;
+        return t.domain && t.domain.toLowerCase().includes(keyword);
+    });
+
+    const certs = (cachedSslCertificates || []).filter(c => {
+        if (!keyword) return true;
+        return (c.primary_domain && c.primary_domain.toLowerCase().includes(keyword)) ||
+               (c.organization && c.organization.toLowerCase().includes(keyword)) ||
+               (c.acme_account && c.acme_account.toLowerCase().includes(keyword));
+    });
+
+    if (activeTasks.length === 0 && certs.length === 0) {
+        cardContainer.style.display = 'none';
+        tableContainer.style.display = 'none';
+        if (emptyTip) emptyTip.style.display = 'block';
+        return;
+    }
+
+    if (emptyTip) emptyTip.style.display = 'none';
+    cardContainer.style.display = 'grid';
+    tableContainer.style.display = 'none'; // 移动端与桌面默认卡片流
+
+    let html = '';
+
+    // 1. 渲染当前正在进行的后台申请任务卡片 (带呼吸动画与取消按钮)
+    activeTasks.forEach(task => {
+        const isApplying = task.status === 'applying';
+        const badgeClass = isApplying ? 'badge warning' : (task.status === 'cancelled' ? 'badge secondary' : 'badge danger');
+        const badgeText = isApplying ? '⏳ 申请中...' : (task.status === 'cancelled' ? '已取消' : '失败');
+
+        html += `
+        <div class="domain-card" style="border: 1px solid var(--accent); background: var(--accent-bg); min-width: 0; display: flex; flex-direction: column;">
+            <div class="domain-header" style="display: flex; justify-content: space-between; align-items: flex-start; gap: 8px;">
+                <div style="min-width: 0; flex: 1;">
+                    <div style="display: flex; align-items: center; gap: 6px; margin-bottom: 4px;">
+                        <span style="font-size: 18px;">⚡</span>
+                        <span style="font-size: 16px; font-weight: 800; color: var(--text); overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">${escapeHtml(task.domain)}</span>
+                    </div>
+                    <div style="font-size: 11px; color: var(--text-sec); font-family: monospace;">任务 ID: ${escapeHtml(task.task_id)}</div>
+                </div>
+                <div><span class="${badgeClass}">${badgeText}</span></div>
+            </div>
+
+            <div style="margin: 10px 0; font-size: 12px; color: var(--text); line-height: 1.5; background: var(--card); border-radius: 8px; padding: 8px 10px;">
+                <div style="color: var(--accent); font-weight: 700; margin-bottom: 2px;">最新进度:</div>
+                <div style="font-family: monospace; font-size: 11px; color: var(--text-sec); overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">
+                    ${escapeHtml(task.logs && task.logs.length ? task.logs[task.logs.length - 1] : task.message)}
+                </div>
+            </div>
+
+            <div class="domain-actions" style="margin-top: auto; padding-top: 8px; border-top: 1px solid var(--border-subtle); display: flex; gap: 8px;">
+                <button class="btn secondary sm" onclick="openSslTaskDetailModal('${escapeHtml(task.task_id)}')" style="flex: 1; justify-content: center; font-size: 12px; padding: 6px 10px;">📜 查看流水日志</button>
+                ${isApplying ? `<button class="btn danger sm" onclick="cancelSslTaskAjax('${escapeHtml(task.task_id)}')" style="flex: 1; justify-content: center; font-size: 12px; padding: 6px 10px;">🛑 取消申请</button>` : ''}
+            </div>
+        </div>`;
+    });
+
+    // 2. 渲染已完成/已存在的证书卡片
+    certs.forEach(cert => {
+        const isReady = cert.status === 'ready' || cert.status === 'success' || cert.status === 'issued';
+        const isApplying = cert.status === 'applying';
+        const statusBadge = isReady ? 
+            '<span class="badge success">✅ 正常就绪</span>' : 
+            (isApplying ? '<span class="badge warning">⏳ 申请中</span>' : `<span class="badge danger">❌ ${escapeHtml(cert.status)}</span>`);
+
+        const websitesHtml = (cert.websites || []).length > 0 ? 
+            cert.websites.map(w => `<span class="badge secondary" style="font-size: 10px;">🌐 ${escapeHtml(w)}</span>`).join(' ') : 
+            '<span style="font-size: 11px; color: var(--text-sec);">暂未绑定反代网站</span>';
+
+        const expireDateStr = cert.expire_date ? cert.expire_date.replace('T', ' ').replace('Z', '') : '-';
+
+        html += `
+        <div class="domain-card" style="min-width: 0; display: flex; flex-direction: column;">
+            <div class="domain-header" style="display: flex; justify-content: space-between; align-items: flex-start; gap: 8px;">
+                <div style="min-width: 0; flex: 1;">
+                    <div style="display: flex; align-items: center; gap: 6px; margin-bottom: 4px;">
+                        <span style="font-size: 18px;">🔒</span>
+                        <span style="font-size: 16px; font-weight: 700; color: var(--text); overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">${escapeHtml(cert.primary_domain)}</span>
+                    </div>
+                    <div style="font-size: 11px; color: var(--text-sec);">${escapeHtml(cert.organization || "Let's Encrypt")} · ${cert.provider === 'dnsAccount' ? 'DNS 验证' : 'HTTP 验证'}</div>
+                </div>
+                <div>${statusBadge}</div>
+            </div>
+
+            <div style="margin: 8px 0; display: flex; flex-direction: column; gap: 6px; font-size: 12px;">
+                <div style="display: flex; justify-content: space-between;">
+                    <span style="color: var(--text-sec);">过期时间:</span>
+                    <span style="font-family: monospace; font-size: 11px; color: var(--text);">${expireDateStr}</span>
+                </div>
+                <div style="display: flex; justify-content: space-between;">
+                    <span style="color: var(--text-sec);">自动续签:</span>
+                    <span style="font-weight: 700; color: ${cert.auto_renew ? 'var(--success)' : 'var(--text-sec)'};">${cert.auto_renew ? '已开启' : '关闭'}</span>
+                </div>
+                <div style="margin-top: 4px;">
+                    <div style="color: var(--text-sec); margin-bottom: 4px; font-size: 11px;">绑定站点:</div>
+                    <div style="display: flex; flex-wrap: wrap; gap: 4px;">${websitesHtml}</div>
+                </div>
+            </div>
+
+            <div class="domain-actions" style="margin-top: auto; padding-top: 10px; border-top: 1px solid var(--border-subtle); display: flex; justify-content: space-between; gap: 8px;">
+                <button class="btn secondary sm" onclick="openSslItemLogModal(${cert.id}, '${escapeHtml(cert.primary_domain)}')" style="flex: 1; justify-content: center; font-size: 12px; padding: 6px 10px;">📜 查看签发日志</button>
+                <button class="btn accent sm" onclick="reapplySslForDomain('${escapeHtml(cert.primary_domain)}')" style="font-size: 12px; padding: 6px 12px; white-space: nowrap;">🔄 重新申请</button>
+            </div>
+        </div>`;
+    });
+
+    cardContainer.innerHTML = html;
+}
+
+function checkAndStartSslTaskPolling() {
+    const hasActive = (cachedSslActiveTasks || []).some(t => t.status === 'applying');
+    if (hasActive) {
+        if (!sslTaskPollTimer) {
+            sslTaskPollTimer = setInterval(async () => {
+                await loadSslCertificatesAjax(true);
+                // 若详情弹窗正打开某个任务，同步刷新弹窗日志
+                if (currentDetailSslTaskId) {
+                    const curTask = cachedSslActiveTasks.find(t => t.task_id === currentDetailSslTaskId);
+                    if (curTask) {
+                        renderSslModalLogs(curTask.logs || []);
+                        updateSslDetailModalHeader(curTask.status, curTask.domain, curTask.updated_at, curTask.task_id);
+                    }
+                }
+            }, 3000);
+        }
+    } else {
+        if (sslTaskPollTimer) {
+            clearInterval(sslTaskPollTimer);
+            sslTaskPollTimer = null;
+        }
+    }
+}
+
+// ─── Apply SSL Modal & Submission ───
+function openApplySslModal(prefillDomain = '') {
+    const modal = document.getElementById('applySslModal');
+    if (!modal) return;
+    if (prefillDomain) {
+        document.getElementById('modal_ssl_domain').value = prefillDomain;
+    }
+    loadModalSSLAccounts();
+    modal.classList.add('active');
+}
+
+function closeApplySslModal() {
+    const modal = document.getElementById('applySslModal');
+    if (modal) modal.classList.remove('active');
+}
+
+function toggleModalSSLDNSSection(val) {
+    document.getElementById('modal_ssl_dns_container').style.display = (val === 'dns') ? 'block' : 'none';
+}
+
+async function loadModalSSLAccounts() {
+    try {
+        const acmeRes = await fetch('/api/acme_accounts');
+        const acmes = await acmeRes.json();
+        const select = document.getElementById('modal_ssl_acme_account');
+        select.innerHTML = '';
+        acmes.forEach(acc => {
+            const opt = document.createElement('option');
+            opt.value = acc.id;
+            opt.textContent = `${acc.email} (ID: ${acc.id})`;
+            select.appendChild(opt);
+        });
+
+        const dnsRes = await fetch('/api/dns_accounts');
+        const dnss = await dnsRes.json();
+        const dnsSelect = document.getElementById('modal_ssl_dns_account');
+        dnsSelect.innerHTML = '';
+        dnss.forEach(acc => {
+            const opt = document.createElement('option');
+            opt.value = acc.id;
+            opt.textContent = `${acc.name} (ID: ${acc.id})`;
+            dnsSelect.appendChild(opt);
+        });
+    } catch (e) {}
+}
+
+async function submitApplySslModal(e) {
+    if (e) e.preventDefault();
+    const domain = document.getElementById('modal_ssl_domain').value.trim();
+    const acmeId = document.getElementById('modal_ssl_acme_account').value;
+    const authMethod = document.getElementById('modal_ssl_auth_method').value;
+    const dnsId = document.getElementById('modal_ssl_dns_account').value;
+    const btn = document.getElementById('modalSslSubmitBtn');
+
+    if (!domain) {
+        showToast('请输入申请域名', 'warning');
+        return;
+    }
+    if (authMethod === 'dns' && !dnsId) {
+        showToast('请选择 DNS 账户', 'warning');
+        return;
+    }
+
+    if (btn) {
+        btn.disabled = true;
+        btn.textContent = '⏳ 正在提交...';
+    }
+
+    const csrfToken = (typeof getCsrfToken === 'function') ? getCsrfToken() : ((document.cookie.match(/(?:^|;\s*)csrf_token=([^;]+)/) || [])[1] || '');
+    const formData = new FormData();
+    formData.append('domain', domain);
+    formData.append('acme_id', acmeId);
+    if (authMethod === 'dns') formData.append('dns_id', dnsId);
+    formData.append('_csrf_token', csrfToken);
+
+    try {
+        const res = await fetch('/api/apply_ssl', { method: 'POST', body: formData });
+        const result = await res.json();
+        if (btn) {
+            btn.disabled = false;
+            btn.textContent = '🚀 开始后台申请';
+        }
+
+        if (result.success) {
+            showToast(`已成功发起 ${domain} 的 SSL 证书申请任务！`, 'success');
+            closeApplySslModal();
+            // 立即刷新证书列表并弹出详情窗口查看进度
+            await loadSslCertificatesAjax(true);
+            if (result.task_id) {
+                openSslTaskDetailModal(result.task_id);
+            }
+        } else {
+            showToast('提交失败: ' + (result.error || '未知错误'), 'error');
+        }
+    } catch (err) {
+        if (btn) {
+            btn.disabled = false;
+            btn.textContent = '🚀 开始后台申请';
+        }
+        showToast('网络请求发生异常: ' + err.message, 'error');
+    }
+}
+
+// ─── SSL Task / Log Detail Modal ───
+function openSslTaskDetailModal(taskId) {
+    currentDetailSslTaskId = taskId;
+    currentDetailSslId = null;
+    const modal = document.getElementById('sslDetailModal');
+    if (!modal) return;
+
+    const task = (cachedSslActiveTasks || []).find(t => t.task_id === taskId);
+    if (task) {
+        updateSslDetailModalHeader(task.status, task.domain, task.updated_at, task.task_id);
+        renderSslModalLogs(task.logs || []);
+    } else {
+        updateSslDetailModalHeader('loading', '正在加载...', '', taskId);
+        fetchSslTaskStatus(taskId);
+    }
+    modal.classList.add('active');
+}
+
+async function fetchSslTaskStatus(taskId) {
+    try {
+        const res = await fetch(`/api/ssl/task/${taskId}`);
+        const data = await res.json();
+        if (data.success && data.task) {
+            const task = data.task;
+            updateSslDetailModalHeader(task.status, task.domain, task.updated_at, task.task_id);
+            renderSslModalLogs(task.logs || []);
+        }
+    } catch (e) {}
+}
+
+async function openSslItemLogModal(sslId, domain) {
+    currentDetailSslTaskId = null;
+    currentDetailSslId = sslId;
+    const modal = document.getElementById('sslDetailModal');
+    if (!modal) return;
+
+    updateSslDetailModalHeader('ready', domain, '', `SSL ID: ${sslId}`);
+    document.getElementById('sslDetailActions').innerHTML = '';
+    renderSslModalLogs(['正在读取 1Panel 证书流水日志...']);
+    modal.classList.add('active');
+
+    try {
+        const res = await fetch(`/api/ssl/logs/${sslId}`);
+        const data = await res.json();
+        if (data.success && data.logs) {
+            renderSslModalLogs(data.logs);
+        } else {
+            renderSslModalLogs(['获取日志失败: ' + (data.error || '未知错误')]);
+        }
+    } catch (e) {
+        renderSslModalLogs(['网络通信异常: ' + e.message]);
+    }
+}
+
+function updateSslDetailModalHeader(status, domain, updateTime, subId) {
+    const titleEl = document.getElementById('sslDetailTitle');
+    const subEl = document.getElementById('sslDetailSub');
+    const badgeEl = document.getElementById('sslDetailStatusBadge');
+    const timeEl = document.getElementById('sslDetailTime');
+    const actionsEl = document.getElementById('sslDetailActions');
+
+    if (titleEl) titleEl.textContent = `${domain} 证书进度详情`;
+    if (subEl) subEl.textContent = subId || '';
+    if (timeEl) timeEl.textContent = updateTime ? `更新于: ${updateTime}` : '';
+
+    if (badgeEl) {
+        if (status === 'applying') {
+            badgeEl.className = 'badge warning';
+            badgeEl.textContent = '⏳ 正在申请中...';
+        } else if (status === 'ready' || status === 'success') {
+            badgeEl.className = 'badge success';
+            badgeEl.textContent = '✅ 已成功签发';
+        } else if (status === 'cancelled') {
+            badgeEl.className = 'badge secondary';
+            badgeEl.textContent = '⚠️ 已取消申请';
+        } else {
+            badgeEl.className = 'badge danger';
+            badgeEl.textContent = '❌ 申请失败';
+        }
+    }
+
+    if (actionsEl && currentDetailSslTaskId) {
+        if (status === 'applying') {
+            actionsEl.innerHTML = `<button class="btn danger sm" onclick="cancelSslTaskAjax('${currentDetailSslTaskId}')" style="font-size: 11px; padding: 4px 10px;">🛑 取消申请任务</button>`;
+        } else {
+            actionsEl.innerHTML = `<button class="btn accent sm" onclick="reapplySslForDomain('${domain}')" style="font-size: 11px; padding: 4px 10px;">🔄 重新申请</button>`;
+        }
+    }
+}
+
+function renderSslModalLogs(logs) {
+    const logsEl = document.getElementById('sslDetailLogs');
+    if (!logsEl) return;
+    logsEl.innerHTML = (logs || []).map(line => {
+        let cls = 'info';
+        // 关键改动：避免误报停止，日志中正常的等待/跳过不标记为严重错误
+        if (line.includes('❌') || line.includes('error:') || line.includes('Failed:') || line.includes('证书申请失败')) {
+            cls = 'error';
+        } else if (line.includes('🎉') || line.includes('成功') || line.includes('Validations succeeded') || line.includes('Server responded with a certificate')) {
+            cls = 'success';
+        } else if (line.startsWith('[系统]')) {
+            cls = 'system';
+        }
+        return `<div class="${cls}">${escapeHtml(line)}</div>`;
+    }).join('');
+    logsEl.scrollTop = logsEl.scrollHeight;
+}
+
+function closeSslDetailModal() {
+    const modal = document.getElementById('sslDetailModal');
+    if (modal) modal.classList.remove('active');
+    currentDetailSslTaskId = null;
+    currentDetailSslId = null;
+}
+
+async function cancelSslTaskAjax(taskId) {
+    if (!confirm('确定要取消此证书的后台申请任务吗？')) return;
+    try {
+        const res = await fetch(`/api/ssl/cancel/${taskId}`, { method: 'POST' });
+        const data = await res.json();
+        if (data.success) {
+            showToast('已取消证书申请任务', 'info');
+            await loadSslCertificatesAjax(true);
+            if (currentDetailSslTaskId === taskId) {
+                updateSslDetailModalHeader('cancelled', '', '', taskId);
+            }
+        }
+    } catch (e) {
+        showToast('取消请求异常', 'error');
+    }
+}
+
+function reapplySslForDomain(domain) {
+    closeSslDetailModal();
+    openApplySslModal(domain);
+}
+
+// 页面加载或切换时绑定
+async function loadSSLAccounts() {
+    await loadSslCertificatesAjax(false);
+}
+
+// 导出全局函数
+window.loadSslCertificatesAjax = loadSslCertificatesAjax;
+window.filterSslCertificates = filterSslCertificates;
+window.openApplySslModal = openApplySslModal;
+window.closeApplySslModal = closeApplySslModal;
+window.toggleModalSSLDNSSection = toggleModalSSLDNSSection;
+window.submitApplySslModal = submitApplySslModal;
+window.openSslTaskDetailModal = openSslTaskDetailModal;
+window.openSslItemLogModal = openSslItemLogModal;
+window.closeSslDetailModal = closeSslDetailModal;
+window.cancelSslTaskAjax = cancelSslTaskAjax;
+window.reapplySslForDomain = reapplySslForDomain;
+window.loadSSLAccounts = loadSSLAccounts;
+
 
 
 
