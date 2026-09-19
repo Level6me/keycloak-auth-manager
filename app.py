@@ -2121,8 +2121,8 @@ def create_nginx_auth(domain, oauth_port, target_host, target_port):
     new_conf = update_nginx_config(domain, oauth_port, target_host, target_port, auth_enabled=True, proxy_enabled=True)
     return new_conf
 
-def toggle_nginx_ssl(domain, enable):
-    # 查找 1Panel 中的网站ID，修复：1Panel 该接口 orderBy 和 order 为必填字段，须在此补全
+def toggle_nginx_ssl(domain, enable, ssl_id=None):
+    """控制 1Panel 网站 HTTPS 开关，支持指定已有证书 ID 进行绑定，不作强制证书搜索"""
     ws_res = call_1panel_api("/api/v1/websites/search", "POST", {"page": 1, "pageSize": 10, "info": domain, "orderBy": "created_at", "order": "null"})
     if not (ws_res and ws_res.get("code") == 200 and ws_res.get("data") and ws_res["data"]["items"]):
         log("警告: 未在 1Panel 中找到对应的网站ID，跳过 SSL 设置")
@@ -2130,39 +2130,63 @@ def toggle_nginx_ssl(domain, enable):
         
     ws_item = next((x for x in ws_res["data"]["items"] if x.get("primaryDomain") == domain or domain in x.get("domains", [])), None)
     if not ws_item:
-        log("未匹配到对应的网站信息")
+        log(f"未在 1Panel 匹配到对应的网站信息: {domain}")
         return False
         
     ws_id = ws_item["id"]
-    ssl_id = 0
     
-    if enable:
-        # 获取全部证书列表并在 Python 中进行手动精确过滤，解决 1Panel 接口不支持 domain 精确搜索的问题
+    if not enable:
+        # 关闭 SSL
+        https_payload = {
+            "websiteID": ws_id,
+            "enable": False,
+            "websiteSSLID": 0,
+            "type": "manual",
+            "httpConfig": "HTTPAlso",
+            "httpsPorts": [443]
+        }
+        res = call_1panel_api(f"/api/v1/websites/{ws_id}/https", "POST", https_payload)
+        if res and res.get("code") == 200:
+            log(f"1Panel SSL 已成功关闭 (域名: {domain})")
+            return True
+        log(f"1Panel SSL 关闭失败: {res}")
+        return False
+
+    # 开启 SSL
+    target_ssl_id = 0
+    if ssl_id:
+        try: target_ssl_id = int(ssl_id)
+        except: target_ssl_id = 0
+    else:
+        fresh_data = load_data()
+        if domain in fresh_data:
+            target_ssl_id = fresh_data[domain].get('ssl_id') or 0
+
+    if not target_ssl_id:
+        # 兼容兜底：若未手动指定证书，尝试在 1Panel 中寻找匹配该域名的证书
         ssl_res = call_1panel_api("/api/v1/websites/ssl/search", "POST", {"page": 1, "pageSize": 100, "orderBy": "created_at", "order": "null"})
         if ssl_res and ssl_res.get("code") == 200 and ssl_res.get("data") and ssl_res["data"]["items"]:
             items = ssl_res["data"]["items"]
-            # 匹配对应域名且状态已就绪的证书
-            matched_ssl = next((x for x in items if x.get("primaryDomain") == domain and x.get("status", "").lower() in ["ready", "success", "issued"]), None)
-            if matched_ssl:
-                ssl_id = matched_ssl["id"]
-            else:
-                log(f"警告: 未查找到状态为 ready 且匹配域名 {domain} 的已签发证书。")
-                return False
-        else:
-            log("警告: 1Panel 证书列表查询失败")
-            return False
-            
+            for item in items:
+                p_dom = item.get("primaryDomain", "")
+                if p_dom == domain:
+                    target_ssl_id = item["id"]
+                    break
+                if p_dom.startswith("*.") and domain.endswith(p_dom[1:]):
+                    target_ssl_id = item["id"]
+                    break
+
     https_payload = {
         "websiteID": ws_id,
-        "enable": enable,
-        "websiteSSLID": ssl_id,
-        "type": "existed" if ssl_id else "manual",
-        "httpConfig": "HTTPToHTTPS" if enable else "HTTPAlso",
+        "enable": True,
+        "websiteSSLID": int(target_ssl_id) if target_ssl_id else 0,
+        "type": "existed" if target_ssl_id else "manual",
+        "httpConfig": "HTTPToHTTPS",
         "httpsPorts": [443]
     }
     res = call_1panel_api(f"/api/v1/websites/{ws_id}/https", "POST", https_payload)
     if res and res.get("code") == 200:
-        log(f"1Panel SSL 设置成功（状态: {enable}）")
+        log(f"1Panel SSL 开启成功 (域名: {domain}, 绑定证书 ID: {target_ssl_id})")
         return True
     log(f"1Panel SSL 设置失败: {res}")
     return False
@@ -2862,6 +2886,419 @@ def api_ssl_item_logs(ssl_id):
     except Exception as e:
         return jsonify({"success": False, "error": str(e)})
 
+def get_1panel_db_path():
+    candidates = [
+        "/opt/1panel/db/agent.db",
+        "/var/lib/1panel/db/agent.db",
+        "agent.db"
+    ]
+    for p in candidates:
+        if os.path.exists(p):
+            return p
+    return "/opt/1panel/db/agent.db"
+
+def get_1panel_db_conn():
+    db_path = get_1panel_db_path()
+    if not os.path.exists(db_path):
+        return None
+    try:
+        conn = sqlite3.connect(db_path, timeout=10)
+        conn.row_factory = sqlite3.Row
+        return conn
+    except Exception as e:
+        log(f"连接 1Panel agent.db 数据库失败: {e}")
+        return None
+
+@app.route('/api/ssl/export/<int:ssl_id>')
+def api_ssl_export(ssl_id):
+    """导出单个 SSL 证书的完整元数据与私钥、证书链、ACME及DNS信息"""
+    conn = get_1panel_db_conn()
+    if not conn:
+        return jsonify({"success": False, "error": "无法连接 1Panel 数据库"}), 500
+    try:
+        c = conn.cursor()
+        c.execute("SELECT * FROM website_ssls WHERE id = ?", (ssl_id,))
+        row = c.fetchone()
+        if not row:
+            return jsonify({"success": False, "error": "未查找到对应证书"}), 404
+        
+        row_dict = dict(row)
+        
+        # 提取关联 ACME 账户信息
+        acme_info = None
+        if row_dict.get('acme_account_id'):
+            c.execute("SELECT id, email, type, key_type, url FROM website_acme_accounts WHERE id = ?", (row_dict['acme_account_id'],))
+            acme_row = c.fetchone()
+            if acme_row:
+                acme_info = dict(acme_row)
+                
+        # 提取关联 DNS 账户信息
+        dns_info = None
+        if row_dict.get('dns_account_id'):
+            c.execute("SELECT id, name, type, authorization FROM website_dns_accounts WHERE id = ?", (row_dict['dns_account_id'],))
+            dns_row = c.fetchone()
+            if dns_row:
+                dns_info = dict(dns_row)
+
+        bundle = {
+            "version": "1.0",
+            "format": "1panel_ssl_bundle",
+            "exported_at": datetime.now().isoformat(),
+            "certificate": {
+                "id": row_dict["id"],
+                "primary_domain": row_dict.get("primary_domain") or "",
+                "domains": row_dict.get("domains") or "",
+                "private_key": row_dict.get("private_key") or "",
+                "pem": row_dict.get("pem") or "",
+                "cert_url": row_dict.get("cert_url") or "",
+                "type": row_dict.get("type") or "YR1",
+                "provider": row_dict.get("provider") or "dnsAccount",
+                "organization": row_dict.get("organization") or "Let's Encrypt",
+                "auto_renew": row_dict.get("auto_renew", 1),
+                "expire_date": str(row_dict.get("expire_date") or ""),
+                "start_date": str(row_dict.get("start_date") or ""),
+                "status": row_dict.get("status") or "ready",
+                "key_type": row_dict.get("key_type") or "RSA2048",
+                "skip_dns": row_dict.get("skip_dns") or 0,
+                "nameserver1": row_dict.get("nameserver1") or "",
+                "nameserver2": row_dict.get("nameserver2") or "",
+                "disable_cname": row_dict.get("disable_cname") or 0,
+                "exec_shell": row_dict.get("exec_shell") or 0,
+                "shell": row_dict.get("shell") or "",
+                "dir": row_dict.get("dir") or "",
+                "description": row_dict.get("description") or ""
+            },
+            "acme_account": acme_info,
+            "dns_account": dns_info
+        }
+
+        if request.args.get('download') == 'false':
+            return jsonify({"success": True, "bundle": bundle})
+
+        domain_safe = (row_dict.get("primary_domain") or "cert").replace("*", "wildcard").replace(".", "_")
+        filename = f"ssl_{domain_safe}_{ssl_id}.json"
+        
+        json_bytes = json.dumps(bundle, indent=2, ensure_ascii=False).encode('utf-8')
+        return Response(
+            json_bytes,
+            mimetype="application/json",
+            headers={"Content-Disposition": f"attachment; filename={filename}"}
+        )
+    except Exception as e:
+        log(f"导出证书异常: {e}")
+        return jsonify({"success": False, "error": str(e)}), 500
+    finally:
+        conn.close()
+
+@app.route('/api/ssl/export_all')
+def api_ssl_export_all():
+    """批量导出 1Panel 所有证书完整元数据包"""
+    conn = get_1panel_db_conn()
+    if not conn:
+        return jsonify({"success": False, "error": "无法连接 1Panel 数据库"}), 500
+    try:
+        c = conn.cursor()
+        c.execute("SELECT * FROM website_ssls ORDER BY id ASC")
+        rows = c.fetchall()
+
+        c.execute("SELECT id, email, type, key_type, url FROM website_acme_accounts")
+        acme_map = {r['id']: dict(r) for r in c.fetchall()}
+
+        c.execute("SELECT id, name, type, authorization FROM website_dns_accounts")
+        dns_map = {r['id']: dict(r) for r in c.fetchall()}
+
+        cert_bundles = []
+        for r in rows:
+            rd = dict(r)
+            cert_bundles.append({
+                "id": rd["id"],
+                "primary_domain": rd.get("primary_domain") or "",
+                "domains": rd.get("domains") or "",
+                "private_key": rd.get("private_key") or "",
+                "pem": rd.get("pem") or "",
+                "cert_url": rd.get("cert_url") or "",
+                "type": rd.get("type") or "YR1",
+                "provider": rd.get("provider") or "dnsAccount",
+                "organization": rd.get("organization") or "Let's Encrypt",
+                "auto_renew": rd.get("auto_renew", 1),
+                "expire_date": str(rd.get("expire_date") or ""),
+                "start_date": str(rd.get("start_date") or ""),
+                "status": rd.get("status") or "ready",
+                "key_type": rd.get("key_type") or "RSA2048",
+                "skip_dns": rd.get("skip_dns") or 0,
+                "nameserver1": rd.get("nameserver1") or "",
+                "nameserver2": rd.get("nameserver2") or "",
+                "disable_cname": rd.get("disable_cname") or 0,
+                "exec_shell": rd.get("exec_shell") or 0,
+                "shell": rd.get("shell") or "",
+                "dir": rd.get("dir") or "",
+                "description": rd.get("description") or "",
+                "acme_account": acme_map.get(rd.get('acme_account_id')),
+                "dns_account": dns_map.get(rd.get('dns_account_id'))
+            })
+
+        all_bundle = {
+            "version": "1.0",
+            "format": "1panel_ssl_bundle_collection",
+            "exported_at": datetime.now().isoformat(),
+            "total_count": len(cert_bundles),
+            "certificates": cert_bundles
+        }
+
+        filename = f"1panel_all_ssls_export_{datetime.now().strftime('%Y%m%d%H%M%S')}.json"
+        json_bytes = json.dumps(all_bundle, indent=2, ensure_ascii=False).encode('utf-8')
+        return Response(
+            json_bytes,
+            mimetype="application/json",
+            headers={"Content-Disposition": f"attachment; filename={filename}"}
+        )
+    except Exception as e:
+        log(f"批量导出证书异常: {e}")
+        return jsonify({"success": False, "error": str(e)}), 500
+    finally:
+        conn.close()
+
+@app.route('/api/ssl/import', methods=['POST'])
+def api_ssl_import():
+    """完整导入证书并写入 1Panel agent.db，确保完整状态与自动续签持续有效"""
+    bundle_data = None
+    
+    # 1. 尝试从上传文件读取
+    if 'file' in request.files and request.files['file'].filename:
+        file = request.files['file']
+        try:
+            content = file.read().decode('utf-8')
+            bundle_data = json.loads(content)
+        except Exception as e:
+            return jsonify({"success": False, "error": f"上传的 JSON 文件解析失败: {str(e)}"}), 400
+
+    # 2. 尝试从表单 bundle_json 或 JSON body 读取
+    if not bundle_data:
+        raw_text = request.form.get('bundle_json', '').strip()
+        if raw_text:
+            try:
+                bundle_data = json.loads(raw_text)
+            except Exception as e:
+                return jsonify({"success": False, "error": f"粘贴的 JSON 内容格式错误: {str(e)}"}), 400
+
+    if not bundle_data and request.is_json:
+        bundle_data = request.get_json()
+
+    # 3. 兼容手动 PEM + 私钥导入
+    if not bundle_data:
+        manual_domain = request.form.get('primary_domain', '').strip()
+        manual_pem = request.form.get('pem', '').strip()
+        manual_key = request.form.get('private_key', '').strip()
+        if manual_domain and manual_pem and manual_key:
+            bundle_data = {
+                "format": "1panel_ssl_bundle",
+                "certificate": {
+                    "primary_domain": manual_domain,
+                    "pem": manual_pem,
+                    "private_key": manual_key,
+                    "provider": "manual",
+                    "auto_renew": 0,
+                    "organization": "Manual Upload",
+                    "status": "ready"
+                }
+            }
+
+    if not bundle_data:
+        return jsonify({"success": False, "error": "未提供有效的证书导入数据或文件"}), 400
+
+    items_to_import = []
+    if isinstance(bundle_data, dict):
+        if bundle_data.get('format') == '1panel_ssl_bundle_collection' and isinstance(bundle_data.get('certificates'), list):
+            items_to_import = bundle_data.get('certificates')
+        elif 'certificate' in bundle_data:
+            cert_obj = bundle_data['certificate']
+            cert_obj['acme_account'] = bundle_data.get('acme_account')
+            cert_obj['dns_account'] = bundle_data.get('dns_account')
+            items_to_import = [cert_obj]
+        elif 'primary_domain' in bundle_data and 'pem' in bundle_data:
+            items_to_import = [bundle_data]
+    elif isinstance(bundle_data, list):
+        items_to_import = bundle_data
+
+    if not items_to_import:
+        return jsonify({"success": False, "error": "未解析出任何有效的证书记录"}), 400
+
+    conn = get_1panel_db_conn()
+    if not conn:
+        return jsonify({"success": False, "error": "无法连接 1Panel agent.db 数据库"}), 500
+
+    success_count = 0
+    imported_ids = []
+    errors = []
+
+    try:
+        c = conn.cursor()
+
+        c.execute("SELECT id, email, type FROM website_acme_accounts")
+        local_acmes = [dict(r) for r in c.fetchall()]
+        c.execute("SELECT id, name, type FROM website_dns_accounts")
+        local_dnss = [dict(r) for r in c.fetchall()]
+
+        default_acme_id = local_acmes[0]['id'] if local_acmes else 1
+        default_dns_id = local_dnss[0]['id'] if local_dnss else 0
+
+        for item in items_to_import:
+            p_domain = item.get('primary_domain', '').strip()
+            pem = item.get('pem', '').strip()
+            priv_key = item.get('private_key', '').strip()
+
+            if not p_domain or not pem or not priv_key:
+                errors.append(f"跳过无效记录: 域名或密钥为空 ({p_domain})")
+                continue
+
+            acme_id = default_acme_id
+            acme_meta = item.get('acme_account') or {}
+            if acme_meta:
+                matched_acme = next((a for a in local_acmes if a.get('email') == acme_meta.get('email') or a.get('type') == acme_meta.get('type')), None)
+                if matched_acme:
+                    acme_id = matched_acme['id']
+
+            dns_id = default_dns_id
+            dns_meta = item.get('dns_account') or {}
+            if dns_meta:
+                matched_dns = next((d for d in local_dnss if d.get('name') == dns_meta.get('name') or d.get('type') == dns_meta.get('type')), None)
+                if matched_dns:
+                    dns_id = matched_dns['id']
+
+            domains = item.get('domains') or ""
+            cert_url = item.get('cert_url') or ""
+            cert_type = item.get('type') or "YR1"
+            provider = item.get('provider') or "dnsAccount"
+            org = item.get('organization') or "Let's Encrypt"
+            auto_renew = 1 if item.get('auto_renew') in [1, True, '1', 'true'] else 0
+            expire_date = item.get('expire_date') or datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+            start_date = item.get('start_date') or datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+            status = 'ready'
+            key_type = item.get('key_type') or "RSA2048"
+            skip_dns = item.get('skip_dns') or 0
+            nameserver1 = item.get('nameserver1') or ""
+            nameserver2 = item.get('nameserver2') or ""
+            disable_cname = item.get('disable_cname') or 0
+            exec_shell = item.get('exec_shell') or 0
+            shell = item.get('shell') or ""
+            dir_path = item.get('dir') or ""
+            desc = item.get('description') or f"由 Keycloak Auth Manager 导入于 {datetime.now().strftime('%Y-%m-%d %H:%M')}"
+
+            c.execute("SELECT id FROM website_ssls WHERE primary_domain = ? ORDER BY id DESC LIMIT 1", (p_domain,))
+            existing = c.fetchone()
+
+            if existing:
+                row_id = existing['id']
+                c.execute("""
+                    UPDATE website_ssls SET
+                        updated_at = datetime('now'),
+                        private_key = ?,
+                        pem = ?,
+                        domains = ?,
+                        cert_url = ?,
+                        type = ?,
+                        provider = ?,
+                        organization = ?,
+                        dns_account_id = ?,
+                        acme_account_id = ?,
+                        auto_renew = ?,
+                        expire_date = ?,
+                        start_date = ?,
+                        status = ?,
+                        key_type = ?,
+                        skip_dns = ?,
+                        nameserver1 = ?,
+                        nameserver2 = ?,
+                        disable_cname = ?,
+                        exec_shell = ?,
+                        shell = ?,
+                        dir = ?,
+                        description = ?
+                    WHERE id = ?
+                """, (
+                    priv_key, pem, domains, cert_url, cert_type, provider, org,
+                    dns_id, acme_id, auto_renew, expire_date, start_date, status,
+                    key_type, skip_dns, nameserver1, nameserver2, disable_cname,
+                    exec_shell, shell, dir_path, desc, row_id
+                ))
+            else:
+                c.execute("""
+                    INSERT INTO website_ssls (
+                        created_at, updated_at, primary_domain, private_key, pem, domains,
+                        cert_url, type, provider, organization, dns_account_id, acme_account_id,
+                        ca_id, auto_renew, expire_date, start_date, status, message, key_type,
+                        push_dir, dir, description, skip_dns, nameserver1, nameserver2,
+                        disable_cname, exec_shell, shell, master_ssl_id, nodes, push_node,
+                        private_key_path, cert_path, is_ip
+                    ) VALUES (
+                        datetime('now'), datetime('now'), ?, ?, ?, ?,
+                        ?, ?, ?, ?, ?, ?,
+                        0, ?, ?, ?, ?, '', ?,
+                        0, ?, ?, ?, ?, ?,
+                        ?, ?, ?, 0, '', 0,
+                        '', '', 0
+                    )
+                """, (
+                    p_domain, priv_key, pem, domains, cert_url, cert_type, provider, org,
+                    dns_id, acme_id, auto_renew, expire_date, start_date, status,
+                    key_type, dir_path, desc, skip_dns, nameserver1, nameserver2,
+                    disable_cname, exec_shell, shell
+                ))
+                row_id = c.lastrowid
+
+            imported_ids.append(row_id)
+            success_count += 1
+            log(f"证书 {p_domain} 已成功导入 1Panel (SSL ID: {row_id}, AutoRenew: {auto_renew})")
+
+        conn.commit()
+    except Exception as e:
+        conn.rollback()
+        log(f"导入证书写入数据库异常: {e}")
+        return jsonify({"success": False, "error": f"写入 1Panel 数据库失败: {str(e)}"}), 500
+    finally:
+        conn.close()
+
+    return jsonify({
+        "success": True,
+        "imported_count": success_count,
+        "imported_ids": imported_ids,
+        "errors": errors,
+        "message": f"成功导入 {success_count} 张证书！已完整恢复状态并支持自动续签"
+    })
+
+@app.route('/api/domain/<domain>/ssl_cert', methods=['POST'])
+def api_update_domain_ssl_cert(domain):
+    domain = domain.strip().lower()
+    if not is_valid_domain(domain):
+        return jsonify({"success": False, "error": "域名格式非法"}), 400
+
+    data = load_data()
+    if domain not in data:
+        return jsonify({"success": False, "error": "域名配置不存在"}), 404
+
+    ssl_id_str = request.form.get('ssl_id', '0').strip()
+    try:
+        ssl_id = int(ssl_id_str)
+    except (ValueError, TypeError):
+        ssl_id = 0
+
+    auth = data[domain]
+    auth['ssl_id'] = ssl_id
+    save_data(data)
+
+    # 若当前已经开启了 SSL，立即在 1Panel 中重新绑定该证书
+    if auth.get('ssl_enabled', False) and ssl_id > 0:
+        ok = toggle_nginx_ssl(domain, True, ssl_id=ssl_id)
+        if not ok:
+            log(f"警告: 1Panel 切换绑定 SSL 证书 ID {ssl_id} 失败")
+
+    log(f"域名 {domain} 关联 SSL 证书已更新为 ID: {ssl_id}")
+    return jsonify({
+        "success": True,
+        "domain": domain,
+        "ssl_id": ssl_id
+    })
+
 @app.route('/detail/<domain>')
 def detail(domain):
     domain = domain.strip().lower()
@@ -3033,12 +3470,19 @@ def api_toggle(domain, feature):
         return json.dumps({"success": False, "error": "更新 Nginx 认证配置失败"})
         
     elif feature == 'ssl':
-        ok = toggle_nginx_ssl(domain, enabled)
+        ssl_id = request.form.get('ssl_id')
+        if ssl_id is not None:
+            try:
+                auth['ssl_id'] = int(ssl_id)
+            except:
+                pass
+        target_ssl_id = auth.get('ssl_id', 0)
+        ok = toggle_nginx_ssl(domain, enabled, ssl_id=target_ssl_id)
         if ok:
             auth['ssl_enabled'] = enabled
             save_data(data)
-            return json.dumps({"success": True})
-        return json.dumps({"success": False, "error": "1Panel SSL 设置失败，请确认该域名是否有可用证书"})
+            return json.dumps({"success": True, "ssl_enabled": enabled, "ssl_id": auth.get('ssl_id', 0)})
+        return json.dumps({"success": False, "error": "1Panel SSL 设置失败，请确认 1Panel 网站与证书配置"})
         
     return json.dumps({"success": False, "error": "无效的控制类型"})
 
