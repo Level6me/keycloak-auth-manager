@@ -2838,9 +2838,27 @@ def api_ssl_certificates():
     except Exception as e:
         log(f"获取 1Panel SSL 列表异常: {str(e)}")
 
-    # 融合当前内存中的后台活跃任务
+    # 融合当前内存中的后台活跃任务，自动清理已在 1Panel 中就绪完成的任务
+    ready_ids = {c['id'] for c in certs if c.get('status') in ['ready', 'success', 'issued']}
+    ready_domains = {c['primary_domain'].lower() for c in certs if c.get('status') in ['ready', 'success', 'issued']}
+
+    active_tasks = []
     with _SSL_TASKS_LOCK:
-        active_tasks = list(_SSL_TASKS.values())
+        for tid, t in list(_SSL_TASKS.items()):
+            domain_lower = (t.get('domain') or '').lower()
+            ssl_id = t.get('ssl_id')
+
+            # 1. 若 1Panel 中该证书已标记为就绪，清理任务
+            if (ssl_id and ssl_id in ready_ids) or (domain_lower and domain_lower in ready_domains):
+                _SSL_TASKS.pop(tid, None)
+                continue
+
+            # 2. 若任务本身状态为 ready，且 1Panel 已同步，也清理
+            if t.get('status') in ['ready', 'success']:
+                _SSL_TASKS.pop(tid, None)
+                continue
+
+            active_tasks.append(t)
 
     return jsonify({
         "success": True,
