@@ -12,7 +12,8 @@ from app import (
     encrypt_val,
     decrypt_val,
     _is_trusted_proxy_ip,
-    get_root_domain
+    get_root_domain,
+    CIPHER_AVAILABLE
 )
 
 class SecurityRegressionTestSuite(unittest.TestCase):
