@@ -119,11 +119,20 @@ echo "    ✓ 文件复制完成"
 echo "[3] 创建 config.json 配置文件..."
 KC_URL=${KEYCLOAK_URL:-"http://127.0.0.1:8080"}
 KC_ADMIN=${KEYCLOAK_ADMIN:-"admin"}
-KC_PASS=${KEYCLOAK_PASSWORD:-"REDACTED_ROTATE_ME"}
+KC_PASS=${KEYCLOAK_PASSWORD:-}
 KC_CONTAINER=${KEYCLOAK_CONTAINER:-"keycloak"}
 KC_WEB_PORT=${WEB_PORT:-8088}
-OP_API_KEY=${ONEPANEL_API_KEY:-"REDACTED_ROTATE_ME"}
+# 安全修复：移除硬编码的默认 1Panel API Key（疑似真实凭据），必须显式提供
+OP_API_KEY=${ONEPANEL_API_KEY:-}
 OP_PORT=${ONEPANEL_PORT:-18080}
+
+if [ -z "$KC_PASS" ]; then
+    KC_PASS=$(head -c 18 /dev/urandom | base64 | tr -dc 'A-Za-z0-9' | head -c 20)
+    echo "[i] 未设置 KEYCLOAK_PASSWORD，已自动生成强随机密码: $KC_PASS"
+fi
+if [ -z "$OP_API_KEY" ]; then
+    echo "[!] 警告: 未设置 ONEPANEL_API_KEY，安装后需在设置页手动配置方可联动 1Panel"
+fi
 
 sudo tee $INSTALL_DIR/config.json > /dev/null << CONFIG
 {

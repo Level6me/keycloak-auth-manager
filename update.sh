@@ -11,7 +11,8 @@ set -e
 INSTALL_DIR="/opt/keycloak-auth-manager"
 SERVICE_NAME="keycloak-auth-manager"
 REPO_URL="https://github.com/Level6me/keycloak-auth-manager.git"
-BACKUP_DIR="/tmp/keycloak_auth_manager_update_backup_$(date +%s)"
+# 备份目录放在持久化路径，避免放 /tmp 重启即失
+BACKUP_DIR="/var/lib/keycloak-auth-manager/update_backup_$(date +%s)"
 
 echo ""
 echo "=========================================="
@@ -35,6 +36,7 @@ fi
 
 echo "[1/6] 正在备份核心配置文件与加密密钥..."
 mkdir -p "$BACKUP_DIR"
+chmod 700 "$BACKUP_DIR" 2>/dev/null || true
 
 # 备份所有关键配置与数据
 [ -f "$INSTALL_DIR/config.json" ] && cp "$INSTALL_DIR/config.json" "$BACKUP_DIR/"
@@ -51,11 +53,16 @@ echo "[2/6] 正在拉取最新版本源码..."
 TMP_SRC="/tmp/keycloak-auth-manager-latest-$(date +%s)"
 rm -rf "$TMP_SRC"
 
-# 优先使用 git clone 获取最新源码
+# 优先使用 git clone 获取最新源码（第三方镜像代理仅作为显式可选回退，默认直连官方仓库）
 if command -v git >/dev/null 2>&1; then
     git clone "$REPO_URL" "$TMP_SRC" -q || {
-        echo "    ! 直连 GitHub 较慢，尝试备用拉取..."
-        git clone "https://ghproxy.net/$REPO_URL" "$TMP_SRC" -q || git clone "$REPO_URL" "$TMP_SRC" -q
+        if [ "$USE_MIRROR" = "1" ]; then
+            echo "    ! 直连 GitHub 失败，USE_MIRROR=1 已启用第三方镜像代理回退..."
+            git clone "https://ghproxy.net/$REPO_URL" "$TMP_SRC" -q || git clone "$REPO_URL" "$TMP_SRC" -q
+        else
+            echo "    ! 直连 GitHub 失败。如网络受限可使用: USE_MIRROR=1 bash update.sh"
+            git clone "$REPO_URL" "$TMP_SRC" -q
+        fi
     }
 else
     echo "    安装 git 工具中..."
@@ -195,14 +202,9 @@ if [ -f "$INSTALL_DIR/config.json" ]; then
     fi
 fi
 
-# 停止旧服务并清理可能占用端口的残留 Python 孤儿进程
+# 停止旧服务并清理残留的本服务 Python 进程（不再盲杀占用端口的任意进程）
 systemctl stop $SERVICE_NAME 2>/dev/null || true
 pkill -9 -f "python.*${INSTALL_DIR}/app.py" 2>/dev/null || true
-if command -v fuser >/dev/null 2>&1; then
-    fuser -k "${WEB_PORT}/tcp" 2>/dev/null || true
-elif command -v lsof >/dev/null 2>&1; then
-    lsof -ti :${WEB_PORT} | xargs kill -9 2>/dev/null || true
-fi
 
 # 自动检测并修复缺失的 systemd 服务单元
 if [ ! -f "/etc/systemd/system/$SERVICE_NAME.service" ]; then
@@ -243,10 +245,19 @@ else
     exit 1
 fi
 
-# 6. 自动执行存量站点多容器平滑收敛为全局单一 SSO 代理服务
-echo "[6/6] 正在执行全局单一 SSO 架构迁移与存量容器平滑收敛..."
-PYTHONPATH="$INSTALL_DIR" python3 -c "import sys; sys.path.insert(0, '$INSTALL_DIR'); import app; app.migrate_to_single_sso()" 2>/dev/null || true
-echo "    ✓ 所有站点已收敛至全局单一 SSO 代理 (oauth2-proxy-sso 127.0.0.1:4180)，旧独立容器已彻底清理"
+# 6. 可选执行存量站点多容器向全局单一 SSO 收敛迁移
+# 安全修复：迁移会强删旧容器并重写全部站点 Nginx 配置，改为显式 opt-in，不再随每次更新自动执行
+if [ "$RUN_MIGRATION" = "1" ]; then
+    echo "[6/6] RUN_MIGRATION=1 已启用，正在执行全局单一 SSO 架构迁移..."
+    if PYTHONPATH="$INSTALL_DIR" python3 -c "import sys; sys.path.insert(0, '$INSTALL_DIR'); import app; app.migrate_to_single_sso()"; then
+        echo "    ✓ 站点已收敛至全局 SSO 代理池 (混合 127.0.0.1:4180 / 纯 Passkey 127.0.0.1:4181)"
+    else
+        echo "    ⚠️ 迁移执行出错，请查看上方输出排查（站点数据与配置未被静默跳过）"
+        exit 1
+    fi
+else
+    echo "[6/6] 跳过 SSO 架构迁移（如需执行请使用: RUN_MIGRATION=1 bash update.sh）"
+fi
 
 PUBLIC_IP=$(curl -s --connect-timeout 3 ifconfig.me || curl -s --connect-timeout 3 icanhazip.com || echo "127.0.0.1")
 

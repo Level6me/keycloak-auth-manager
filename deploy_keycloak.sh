@@ -96,6 +96,7 @@ if [ "$DB_TYPE" = "postgres" ]; then
         start
 else
     echo "启动 Keycloak 容器 (开发模式，内置 H2)..."
+    echo "⚠️ 警告: start-dev 为开发模式，不适合生产环境（性能受限且重启即重置引导态）。生产部署请选择 postgres 模式。"
     docker run -d \
         --name keycloak \
         --restart always \
@@ -116,15 +117,24 @@ fi
 
 echo "=== Keycloak 部署指令已发送 ==="
 echo "等待 Keycloak 启动..."
-# 检查端口是否可访问
-for i in {1..30}; do
-    if curl -s -I http://localhost:"$PORT" | grep -q "HTTP/1.1 200\|HTTP/1.1 302\|HTTP/1.1 303\|HTTP/1.1 307\|HTTP/1.1 404"; then
+# 严格健康检查：仅 200/重定向视为成功，404 不算就绪；超时则报错退出（修复健康检查形同虚设）
+kc_ready=false
+for i in {1..40}; do
+    if curl -s -o /dev/null -w "%{http_code}" "http://localhost:$PORT/" | grep -qE "^(200|302|303|307)$"; then
+        echo ""
         echo "Keycloak 已成功运行在端口 $PORT !"
+        kc_ready=true
         break
     fi
     echo -n "."
     sleep 3
 done
+
+if [ "$kc_ready" != "true" ]; then
+    echo ""
+    echo "❌ 部署失败：Keycloak 在预期时间内未就绪，请执行 docker logs keycloak 排查"
+    exit 1
+fi
 
 echo ""
 echo "部署完成！"

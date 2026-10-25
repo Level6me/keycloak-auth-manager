@@ -37,7 +37,7 @@ prompt_input() {
     else
         user_val=""
     fi
-    eval "$var_name=\"${user_val:-$default_val}\""
+    printf -v "$var_name" '%s' "${user_val:-$default_val}"
 }
 
 echo ""
@@ -241,7 +241,11 @@ if command -v docker &> /dev/null && docker ps &> /dev/null; then
                 echo "--- 部署 Keycloak 容器配置 ---"
                 prompt_input "    选择数据库类型 (h2/postgres) [h2]: " kc_db_type "h2"
                 prompt_input "    设置 Keycloak 管理员用户名 [admin]: " kc_admin_user "admin"
-                prompt_input "    设置 Keycloak 管理员密码 [REDACTED_ROTATE_ME]: " kc_admin_pass "REDACTED_ROTATE_ME" "true"
+                prompt_input "    设置 Keycloak 管理员密码 [留空自动生成强随机密码]: " kc_admin_pass "" "true"
+                if [ -z "$kc_admin_pass" ]; then
+                    kc_admin_pass="$(head -c 18 /dev/urandom | base64 | tr -dc 'A-Za-z0-9' | head -c 20)"
+                    echo "        ✓ 已自动生成强随机 Keycloak 管理员密码: $kc_admin_pass"
+                fi
                 prompt_input "    设置 Keycloak 映射端口 [8080]: " kc_port "8080"
                 
                 kc_db_pass=""
@@ -321,6 +325,8 @@ if [[ ! "$KEYCLOAK_URL" =~ ^https?:// ]]; then
 fi
 
 # 自动检测并修复云服务器 NAT 回环问题（当域名解析到本机公网 IP 时，内网直连会超时被丢弃）
+# 提前获取公网 IP（修复原 $PUBLIC_IP 未定义即引用的问题）
+PUBLIC_IP=$(curl -s --connect-timeout 3 ifconfig.me || curl -s --connect-timeout 3 icanhazip.com || echo "YOUR_SERVER_IP")
 kc_domain=$(echo "$KEYCLOAK_URL" | awk -F[/:] '{print $4}')
 if [ -n "$kc_domain" ] && [ "$kc_domain" != "localhost" ] && [ "$kc_domain" != "127.0.0.1" ] && ! [[ "$kc_domain" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
     resolved_ip=$(getent hosts "$kc_domain" 2>/dev/null | awk '{print $1}' | head -n1)
@@ -358,7 +364,11 @@ default_kc_pass=${kc_admin_pass:-}
 if [ -n "$default_kc_pass" ]; then
     prompt_input "Keycloak Admin 密码 [使用自动部署时设置的密码]: " KEYCLOAK_PASSWORD "$default_kc_pass" "true"
 else
-    prompt_input "Keycloak Admin 密码 [REDACTED_ROTATE_ME]: " KEYCLOAK_PASSWORD "REDACTED_ROTATE_ME" "true"
+    prompt_input "Keycloak Admin 密码 [留空自动生成强随机密码]: " KEYCLOAK_PASSWORD "" "true"
+    if [ -z "$KEYCLOAK_PASSWORD" ]; then
+        KEYCLOAK_PASSWORD="$(head -c 18 /dev/urandom | base64 | tr -dc 'A-Za-z0-9' | head -c 20)"
+        echo "    ✓ 已自动生成强随机 Keycloak Admin 密码: $KEYCLOAK_PASSWORD"
+    fi
 fi
 
 # Web 控制台端口
@@ -440,10 +450,13 @@ fi
 # 2. pip 安装 / 补齐
 python3 -m pip install --upgrade pip -q 2>/dev/null || pip3 install --upgrade pip -q 2>/dev/null || true
 
-pip3 install flask "$CRYPTO_PKG" requests -q 2>/dev/null || \
-pip install flask "$CRYPTO_PKG" requests -q 2>/dev/null || \
-pip3 install flask "$CRYPTO_PKG" requests --break-system-packages -q 2>/dev/null || \
-python3 -m pip install flask "$CRYPTO_PKG" requests -q 2>/dev/null || \
+# 依赖版本加边界约束（大版本锁定，兼顾老旧发行版的 Python 兼容性）
+_DEP_PKGS=("flask>=2.0,<4" "$CRYPTO_PKG" "requests>=2.25,<3")
+
+pip3 install "${_DEP_PKGS[@]}" -q 2>/dev/null || \
+pip install "${_DEP_PKGS[@]}" -q 2>/dev/null || \
+pip3 install "${_DEP_PKGS[@]}" --break-system-packages -q 2>/dev/null || \
+python3 -m pip install "${_DEP_PKGS[@]}" -q 2>/dev/null || \
 pip3 install flask requests -q 2>/dev/null || true
 
 # 安全安装 cryptography：若最新版需要 Rust 编译环境失败，则自动回退至免 Rust 版本的 <=3.3.2
@@ -498,21 +511,30 @@ if [ -f "/tmp/keycloak_auth_manager_backup/data.json" ]; then
     echo "    检测到备份的站点数据文件，正在还原..."
     cp /tmp/keycloak_auth_manager_backup/data.json "$INSTALL_DIR/"
 fi
+# 还原的敏感文件一律收紧权限为 600（防止默认 644 被本机任意用户读取）
+chmod 600 "$INSTALL_DIR/encryption.key" "$INSTALL_DIR/secret.key" "$INSTALL_DIR/data.json" 2>/dev/null || true
 
 # 写入用户本次确认的最新配置文件（修复S11：以 umask 077 与 chmod 600 严格限制敏感文件访问权限）
 echo "[3] 创建/更新配置文件..."
+# JSON 字符串转义：防止密码中的引号/反斜杠写坏 config.json
+json_escape() {
+    local s="$1"
+    s=${s//\\/\\\\}
+    s=${s//\"/\\\"}
+    printf '%s' "$s"
+}
 (
     umask 077
     cat > "$INSTALL_DIR/config.json" << CONFIG
 {
-    "keycloak_url": "$KEYCLOAK_URL",
-    "keycloak_admin": "$KEYCLOAK_ADMIN",
-    "keycloak_password": "$KEYCLOAK_PASSWORD",
-    "console_username": "$KEYCLOAK_ADMIN",
-    "keycloak_container": "$KEYCLOAK_CONTAINER",
+    "keycloak_url": "$(json_escape "$KEYCLOAK_URL")",
+    "keycloak_admin": "$(json_escape "$KEYCLOAK_ADMIN")",
+    "keycloak_password": "$(json_escape "$KEYCLOAK_PASSWORD")",
+    "console_username": "$(json_escape "$KEYCLOAK_ADMIN")",
+    "keycloak_container": "$(json_escape "$KEYCLOAK_CONTAINER")",
     "web_port": $WEB_PORT,
     "onepanel_port": $ONEPANEL_PORT,
-    "onepanel_api_key": "$ONEPANEL_API_KEY",
+    "onepanel_api_key": "$(json_escape "$ONEPANEL_API_KEY")",
     "install_dir": "$INSTALL_DIR"
 }
 CONFIG
@@ -543,13 +565,19 @@ Wants=docker.service
 Type=simple
 User=root
 WorkingDirectory=$INSTALL_DIR
-ExecStartPre=/bin/sh -c "pkill -f app.py || true; sleep 1"
+# 仅精确终止本服务的旧进程，避免误杀任意命令行包含 app.py 的进程
+ExecStartPre=/bin/sh -c "pkill -f '$PYTHON_BIN $INSTALL_DIR/app.py' || true; sleep 1"
 ExecStart=$PYTHON_BIN $INSTALL_DIR/app.py
 Restart=always
 RestartSec=5
 KillMode=mixed
 KillSignal=SIGTERM
 TimeoutStopSec=10
+# 基础安全加固：禁提权、系统目录只读，仅保留应用与 /etc/hosts 写权限
+NoNewPrivileges=true
+ProtectSystem=full
+ProtectHome=read-only
+ReadWritePaths=/opt/keycloak-auth-manager /etc/hosts
 
 [Install]
 WantedBy=multi-user.target
