@@ -276,6 +276,7 @@
             删除后将彻底移除该域名的 Auth Client、停止并销毁 OAuth2 Proxy 容器，并移除 Nginx 站点认证配置。
         </p>
         <form action="/delete/{{ domain }}" method="post" onsubmit="return confirm('确定要删除域名 {{ domain }} 的全部认证配置吗？\n此操作不可撤销！')">
+            <input type="hidden" name="_csrf_token" value="{{ session.get('csrf_token', '') }}">
             <button type="submit" class="btn danger w-full" style="padding: 10px;">
                 🗑️ 彻底删除此认证服务
             </button>
@@ -467,12 +468,14 @@ function savePageTargetPortAjax() {
             }
             showToast('❌ 网络异常，请重试', 'error');
         });
-function escapeHtml(str) {
-    if (!str) return '';
-    return String(str).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
 }
 
-let currentDomainSslId = {{ auth.get('ssl_id', 0) }};
+function escapeHtml(str) {
+    if (!str) return '';
+    return String(str).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+}
+
+let currentDomainSslId = {{ auth.get('ssl_id', 0)|tojson }};
 
 async function loadDetailSslCerts() {
     const select = document.getElementById('detailSelectSslCert');
@@ -487,7 +490,7 @@ async function loadDetailSslCerts() {
             const org = c.organization || "Let's Encrypt";
             const exp = c.expire_date ? c.expire_date.split('T')[0] : '';
             const isSel = (c.id === currentDomainSslId) ? 'selected' : '';
-            html += `<option value="${c.id}" ${isSel}>${escapeHtml(c.primary_domain)} (${org} · ${exp})</option>`;
+            html += `<option value="${c.id}" ${isSel}>${escapeHtml(c.primary_domain)} (${escapeHtml(org)} · ${escapeHtml(exp)})</option>`;
         });
         select.innerHTML = html;
         select.value = currentDomainSslId.toString();

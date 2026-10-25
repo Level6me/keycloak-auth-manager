@@ -205,7 +205,7 @@ let lastLogId = 0;
 let acmeAccountsLoaded = false;
 let cfZonesData = null;
 
-async function loadCloudflareZones() {
+async function addPageLoadCloudflareZones() {
     const select = document.getElementById('add_root_domain');
     const badge = document.getElementById('add_cf_badge');
     const proxiedContainer = document.getElementById('add_cf_proxied_container');
@@ -328,7 +328,7 @@ function updateCombinedDomain() {
 }
 
 document.addEventListener('DOMContentLoaded', () => {
-    loadCloudflareZones();
+    addPageLoadCloudflareZones();
 });
 
 function selectTargetType(type) {
@@ -356,7 +356,7 @@ function toggleSSLSection(checked) {
     const container = document.getElementById('ssl_config_container');
     container.style.display = checked ? 'block' : 'none';
     if (checked && !acmeAccountsLoaded) {
-        load1PanelAccounts();
+        addPageLoad1PanelAccounts();
     }
 }
 
@@ -365,7 +365,7 @@ function toggleDNSSection(val) {
     dnsBox.style.display = (val === 'dns') ? 'block' : 'none';
 }
 
-async function load1PanelAccounts() {
+async function addPageLoad1PanelAccounts() {
     try {
         const acmeRes = await fetch('/api/acme_accounts');
         const acmes = await acmeRes.json();
@@ -402,7 +402,7 @@ async function load1PanelAccounts() {
     }
 }
 
-function appendLogLine(text) {
+function addPageAppendLogLine(text) {
     const logs = document.getElementById('logs');
     const line = document.createElement('div');
     line.textContent = text;
@@ -419,7 +419,7 @@ function appendLogLine(text) {
     logs.scrollTop = logs.scrollHeight;
 }
 
-function startLogStream() {
+function addPageStartLogStream() {
     lastLogId = 0;
     if (eventSource) eventSource.close();
     if (pollTimer) clearInterval(pollTimer);
@@ -428,7 +428,7 @@ function startLogStream() {
         eventSource = new EventSource('/api/logs?last_id=0');
         eventSource.onmessage = function(event) {
             if (event.data && event.data !== 'heartbeat') {
-                appendLogLine(event.data);
+                addPageAppendLogLine(event.data);
             }
             if (event.lastEventId) {
                 lastLogId = parseInt(event.lastEventId) || lastLogId;
@@ -443,7 +443,7 @@ function startLogStream() {
             if (res.ok) {
                 const data = await res.json();
                 if (data.logs && data.logs.length > 0) {
-                    data.logs.forEach(entry => appendLogLine(entry.text));
+                    data.logs.forEach(entry => addPageAppendLogLine(entry.text));
                     lastLogId = data.last_id;
                 }
             }
@@ -451,9 +451,14 @@ function startLogStream() {
     }, 800);
 }
 
-function stopLogStream() {
+function addPageStopLogStream() {
     if (eventSource) setTimeout(() => eventSource.close(), 3000);
     if (pollTimer) setTimeout(() => clearInterval(pollTimer), 3500);
+}
+
+function getAddPageCsrfToken() {
+    const match = document.cookie.match(/(?:^|;\s*)csrf_token=([^;]+)/);
+    return match ? decodeURIComponent(match[1]) : '{{ session.get("csrf_token", "") }}';
 }
 
 document.getElementById('authForm').addEventListener('submit', async function(e) {
@@ -476,9 +481,10 @@ document.getElementById('authForm').addEventListener('submit', async function(e)
     status.textContent = 'RUNNING';
     logs.innerHTML = '<div class="system">[系统] 正在初始化部署环境并建立日志流...</div>';
     
-    startLogStream();
+    addPageStartLogStream();
 
     const formData = new FormData(this);
+    formData.append('_csrf_token', getAddPageCsrfToken());
     try {
         const response = await fetch('/api/create', {
             method: 'POST',
@@ -492,14 +498,14 @@ document.getElementById('authForm').addEventListener('submit', async function(e)
             btn.innerHTML = '🎉 创建成功！';
             showToast('认证服务创建成功，正在跳转...', 'success');
             setTimeout(() => {
-                window.location.href = '/detail/' + domainVal;
+                window.location.href = '/detail/' + encodeURIComponent(domainVal);
             }, 2500);
         } else {
             status.className = 'badge danger';
             status.textContent = 'FAILED';
             btn.innerHTML = '🚀 重新创建';
             btn.disabled = false;
-            appendLogLine('[系统] 创建失败: ' + (result.error || '未知错误'));
+            addPageAppendLogLine('[系统] 创建失败: ' + (result.error || '未知错误'));
             showToast('创建失败: ' + (result.error || '未知错误'), 'error');
         }
     } catch (err) {
@@ -507,10 +513,10 @@ document.getElementById('authForm').addEventListener('submit', async function(e)
         status.textContent = 'NETWORK ERROR';
         btn.innerHTML = '🚀 重新创建';
         btn.disabled = false;
-        appendLogLine('[系统] 网络请求失败: ' + err);
+        addPageAppendLogLine('[系统] 网络请求失败: ' + err);
         showToast('网络请求发生异常', 'error');
     } finally {
-        stopLogStream();
+        addPageStopLogStream();
     }
 });
 </script>

@@ -1860,7 +1860,7 @@ function renderOidcClients(filterKeyword = '') {
                         </div>
                     </div>
                     <div style="display: flex; gap: 4px; flex-shrink: 0;">
-                        <button class="pill-btn" onclick="copyToClipboard('${escapeHtml(c.client_secret || '')}', 'Client Secret')" style="padding: 4px 8px; font-size: 11px; white-space: nowrap;">📋 复制</button>
+                        <button class="pill-btn" data-clipboard="${escapeHtml(c.client_secret || '')}" onclick="copyToClipboard(this.dataset.clipboard, 'Client Secret')" style="padding: 4px 8px; font-size: 11px; white-space: nowrap;">📋 复制</button>
                         ${!isSys ? `<button class="pill-btn" onclick="regenerateOidcSecret('${escapeHtml(c.client_id)}')" title="重置密钥" style="padding: 4px 8px; font-size: 11px; flex-shrink: 0;">🔄</button>` : ''}
                     </div>
                 </div>
@@ -1869,7 +1869,7 @@ function renderOidcClients(filterKeyword = '') {
                     <button class="btn secondary sm" onclick="openOidcGuideModal('${escapeHtml(c.client_id)}')" style="font-size: 12px; padding: 5px 8px; flex: 1; text-align: center; justify-content: center; min-width: 0; white-space: nowrap;">📋 参数</button>
                     ${!isSys ? `
                     <button class="btn secondary sm" onclick="openEditOidcClientModal('${escapeHtml(c.client_id)}')" style="font-size: 12px; padding: 5px 8px; flex: 1; text-align: center; justify-content: center; min-width: 0; white-space: nowrap;">✏️ 编辑</button>
-                    <button class="btn danger sm" onclick="deleteOidcClientAjax('${escapeHtml(c.client_id)}', '${escapeHtml(c.name)}')" style="font-size: 12px; padding: 5px 8px; flex: 1; text-align: center; justify-content: center; min-width: 0; white-space: nowrap;">🗑️ 删除</button>
+                    <button class="btn danger sm" data-client-id="${escapeHtml(c.client_id)}" data-app-name="${escapeHtml(c.name)}" onclick="deleteOidcClientAjax(this.dataset.clientId, this.dataset.appName)" style="font-size: 12px; padding: 5px 8px; flex: 1; text-align: center; justify-content: center; min-width: 0; white-space: nowrap;">🗑️ 删除</button>
                     ` : '<span style="font-size: 11px; color: var(--text-sec); padding: 4px 8px; flex: 1; text-align: right;">系统内置</span>'}
                 </div>
             </div>
@@ -1922,7 +1922,7 @@ function renderOidcClients(filterKeyword = '') {
                     <div style="background: var(--card-sec); border-radius: 8px; padding: 4px 8px; display: inline-flex; align-items: center; gap: 6px; border: 1px solid var(--border-subtle); max-width: 240px;">
                         <input type="password" id="${secretId}" value="${escapeHtml(c.client_secret || '')}" readonly style="background: transparent; border: none; font-family: monospace; font-size: 11px; color: var(--text); outline: none; width: 90px; text-overflow: ellipsis;">
                         <button type="button" onclick="toggleSecretInputVisibility('${secretId}')" class="pill-btn" style="padding: 1px 5px; font-size: 10px;" title="显示/隐藏">👁️</button>
-                        <button class="pill-btn" onclick="copyToClipboard('${escapeHtml(c.client_secret || '')}', 'Client Secret')" style="padding: 1px 6px; font-size: 10px;" title="复制密钥">📋</button>
+                        <button class="pill-btn" data-clipboard="${escapeHtml(c.client_secret || '')}" onclick="copyToClipboard(this.dataset.clipboard, 'Client Secret')" style="padding: 1px 6px; font-size: 10px;" title="复制密钥">📋</button>
                         ${!isSys ? `<button class="pill-btn" onclick="regenerateOidcSecret('${escapeHtml(c.client_id)}')" title="重置密钥" style="padding: 1px 5px; font-size: 10px;">🔄</button>` : ''}
                     </div>
                 </td>
@@ -1931,7 +1931,7 @@ function renderOidcClients(filterKeyword = '') {
                         <button class="btn secondary sm" onclick="openOidcGuideModal('${escapeHtml(c.client_id)}')">📋 参数</button>
                         ${!isSys ? `
                         <button class="btn secondary sm" onclick="openEditOidcClientModal('${escapeHtml(c.client_id)}')">✏️ 编辑</button>
-                        <button class="btn danger sm" onclick="deleteOidcClientAjax('${escapeHtml(c.client_id)}', '${escapeHtml(c.name)}')">🗑️ 删除</button>
+                        <button class="btn danger sm" data-client-id="${escapeHtml(c.client_id)}" data-app-name="${escapeHtml(c.name)}" onclick="deleteOidcClientAjax(this.dataset.clientId, this.dataset.appName)">🗑️ 删除</button>
                         ` : '<span style="font-size: 11px; color: var(--text-sec); padding: 4px 6px;">系统内置</span>'}
                     </div>
                 </td>
@@ -2135,7 +2135,7 @@ async function deleteOidcClientAjax(clientId, appName) {
     formData.append('_csrf_token', token);
 
     try {
-        const res = await fetch(`/api/oidc/clients/${encodeURIComponent(clientId)}?_csrf_token=${encodeURIComponent(token)}`, {
+        const res = await fetch(`/api/oidc/clients/${encodeURIComponent(clientId)}`, {
             method: 'DELETE',
             headers: {
                 'X-CSRF-Token': token,
@@ -2166,23 +2166,27 @@ function openOidcGuideModal(clientId) {
         client_secret: ''
     };
     currentGuideClient = client;
+    renderOidcGuideModal();
+    // 端点缓存尚未就绪时静默重拉一次并回填，避免展示过期兜底数据
+    if (!cachedOidcEndpoints) {
+        loadOidcClientsAjax(true).then(() => renderOidcGuideModal());
+    }
+}
 
-    const endpoints = cachedOidcEndpoints || {
-        issuer: 'https://au.abab.pw/realms/master',
-        discovery_url: 'https://au.abab.pw/realms/master/.well-known/openid-configuration',
-        authorization_endpoint: 'https://au.abab.pw/realms/master/protocol/openid-connect/auth',
-        token_endpoint: 'https://au.abab.pw/realms/master/protocol/openid-connect/token',
-        userinfo_endpoint: 'https://au.abab.pw/realms/master/protocol/openid-connect/userinfo'
-    };
+function renderOidcGuideModal() {
+    const client = currentGuideClient;
+    if (!client) return;
+    const endpoints = cachedOidcEndpoints || {};
+    const pending = '（端点加载中，请稍候或刷新页面）';
 
     document.getElementById('guideModalTitle').textContent = `[${client.name || client.client_id}] 对接配置指南`;
-    document.getElementById('guide_discovery_url').textContent = endpoints.discovery_url;
-    document.getElementById('guide_issuer').textContent = endpoints.issuer;
+    document.getElementById('guide_discovery_url').textContent = endpoints.discovery_url || pending;
+    document.getElementById('guide_issuer').textContent = endpoints.issuer || pending;
     document.getElementById('guide_client_id').textContent = client.client_id;
     document.getElementById('guide_client_secret').textContent = client.client_secret || '（未获取到或已隐藏）';
-    document.getElementById('guide_auth_url').textContent = endpoints.authorization_endpoint;
-    document.getElementById('guide_token_url').textContent = endpoints.token_endpoint;
-    document.getElementById('guide_userinfo_url').textContent = endpoints.userinfo_endpoint;
+    document.getElementById('guide_auth_url').textContent = endpoints.authorization_endpoint || pending;
+    document.getElementById('guide_token_url').textContent = endpoints.token_endpoint || pending;
+    document.getElementById('guide_userinfo_url').textContent = endpoints.userinfo_endpoint || pending;
 
     // 填充 Gitea 专用 1 对 1 字段
     const giteaClientIdEl = document.getElementById('gitea_guide_client_id');
@@ -2190,7 +2194,7 @@ function openOidcGuideModal(clientId) {
     const giteaSecretEl = document.getElementById('gitea_guide_client_secret');
     if (giteaSecretEl) giteaSecretEl.textContent = client.client_secret || '（未获取到或已隐藏）';
     const giteaDiscEl = document.getElementById('gitea_guide_discovery_url');
-    if (giteaDiscEl) giteaDiscEl.textContent = endpoints.discovery_url;
+    if (giteaDiscEl) giteaDiscEl.textContent = endpoints.discovery_url || pending;
 
     // 生成 Gitea app.ini / GitLab 配置示例
     const gitYaml = `; Gitea app.ini 配置文件 [oauth2_client] 段落示例:
@@ -2201,7 +2205,7 @@ PROVIDER = "openidConnect"
 CLIENT_ID = "${client.client_id}"
 CLIENT_SECRET = "${client.client_secret || 'YOUR_CLIENT_SECRET'}"
 OPENID_CONNECT_SCOPES = "openid email profile"
-AUTO_DISCOVERY_URL = "${endpoints.discovery_url}"
+AUTO_DISCOVERY_URL = "${endpoints.discovery_url || 'YOUR_KEYCLOAK_DISCOVERY_URL'}"
 USERNAME = "preferred_username"
 EMAIL = "email"
 UPDATE_EXISTING_USER_DATA = true
@@ -2903,8 +2907,11 @@ function closeSslDetailModal() {
 
 async function cancelSslTaskAjax(taskId) {
     if (!confirm('确定要取消此证书的后台申请任务吗？')) return;
+    const token = typeof getCsrfToken === 'function' ? getCsrfToken() : ((document.cookie.match(/(?:^|;\s*)csrf_token=([^;]+)/) || [])[1] || '');
+    const formData = new FormData();
+    formData.append('_csrf_token', token);
     try {
-        const res = await fetch(`/api/ssl/cancel/${taskId}`, { method: 'POST' });
+        const res = await fetch(`/api/ssl/cancel/${taskId}`, { method: 'POST', body: formData });
         const data = await res.json();
         if (data.success) {
             showToast('已取消证书申请任务', 'info');
@@ -2912,6 +2919,8 @@ async function cancelSslTaskAjax(taskId) {
             if (currentDetailSslTaskId === taskId) {
                 updateSslDetailModalHeader('cancelled', '', '', taskId);
             }
+        } else {
+            showToast(data.error || '取消失败：任务可能已结束', 'error');
         }
     } catch (e) {
         showToast('取消请求异常', 'error');
