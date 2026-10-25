@@ -22,11 +22,17 @@ ENCRYPTION_KEY_FILE = "/opt/keycloak-auth-manager/encryption.key"
 
 # 加密模块加载（支持 Fernet，缺失时安全回退，防止崩溃）
 CIPHER_AVAILABLE = False
+
+def _in_test_env():
+    """判定当前是否处于单测/工具化调用环境（避免测试触碰生产密钥与系统文件）"""
+    return bool(os.environ.get('TESTING') or 'unittest' in sys.modules or 'pytest' in sys.modules)
+
 try:
     from cryptography.fernet import Fernet
-    _is_test_env = bool(os.environ.get('TESTING') or 'unittest' in sys.modules or 'pytest' in sys.modules)
+    _is_test_env = _in_test_env()
     _key_file = ENCRYPTION_KEY_FILE
-    if _is_test_env and not (os.access('/opt/keycloak-auth-manager', os.W_OK) or os.path.exists(ENCRYPTION_KEY_FILE)):
+    # 测试环境一律使用 /tmp 独立密钥，即使生产目录可写也不触碰（修复测试对生产不隔离）
+    if _is_test_env:
         _key_file = '/tmp/test_encryption.key'
 
     if not os.path.exists(_key_file):
@@ -47,7 +53,10 @@ try:
 except Exception as e:
     print(f"提示: cryptography 模块未就绪 ({e})，使用内置兼容模式。")
 
+_ENCRYPT_WARNED = False
+
 def encrypt_val(val):
+    global _ENCRYPT_WARNED
     if not val: return ""
     if CIPHER_AVAILABLE:
         try:
@@ -55,6 +64,9 @@ def encrypt_val(val):
         except Exception as e:
             print("加密失败:", str(e))
             return val
+    if not _ENCRYPT_WARNED:
+        _ENCRYPT_WARNED = True
+        print("安全警告: cryptography 模块不可用，密码与密钥将以明文写入配置文件！请尽快执行: pip3 install cryptography")
     return val
 
 def decrypt_val(val):
@@ -62,7 +74,9 @@ def decrypt_val(val):
     if CIPHER_AVAILABLE:
         try:
             return cipher.decrypt(val.encode('utf-8')).decode('utf-8')
-        except Exception as e:
+        except Exception:
+            # 密钥文件被删除/更换或数据损坏：显式告警，便于排查站点 secret 静默失效
+            print("解密失败: 密钥可能已被更换或删除，相关凭据将按密文原样使用（站点 secret 可能需要重置）")
             return val
     return val
 
@@ -103,14 +117,20 @@ def _is_trusted_proxy_ip(ip_str):
         return False
 
 def _get_client_ip():
-    """安全获取真实客户端 IP：仅在来自受信任反代网段时才采信 X-Forwarded-For，直连时强制读取 remote_addr（修复S6/N2）"""
+    """安全获取真实客户端 IP：从受信任反代链最右侧（最贴近服务器的跳）向左回溯，
+    取第一个非受信地址（rightmost-untrusted）。客户端自行伪造的 XFF 头部段不会被采信（修复S6/N2）"""
     remote = (request.remote_addr or '0.0.0.0').strip()
+    xff = request.headers.get('X-Forwarded-For', '')
+    candidates = [c.strip() for c in xff.split(',') if c.strip()] if xff else []
+    if candidates:
+        current = remote
+        idx = len(candidates) - 1
+        while _is_trusted_proxy_ip(current) and idx >= 0:
+            current = candidates[idx]
+            idx -= 1
+        if current:
+            return current
     if _is_trusted_proxy_ip(remote):
-        xff = request.headers.get('X-Forwarded-For', '')
-        if xff:
-            client_ip = xff.split(',')[0].strip()
-            if client_ip:
-                return client_ip
         x_real = request.headers.get('X-Real-IP', '')
         if x_real:
             return x_real.strip()
@@ -128,6 +148,16 @@ def _record_fail(ip):
     now = time.time()
     with _login_fail_lock:
         _login_fail_records[ip].append(now)
+        # 限制内存表上限，防止伪造海量 XFF IP 撑爆内存
+        if len(_login_fail_records) > 10000:
+            for k in list(_login_fail_records.keys()):
+                rec = [t for t in _login_fail_records[k] if now - t < LOGIN_RATE_WINDOW]
+                if rec:
+                    _login_fail_records[k] = rec
+                else:
+                    _login_fail_records.pop(k, None)
+            if len(_login_fail_records) > 10000:
+                _login_fail_records.clear()
 
 def _reset_fail(ip):
     with _login_fail_lock:
@@ -177,7 +207,7 @@ def get_server_public_ip():
     ]
     for s in ip_services:
         try:
-            r = requests.get(s, timeout=3)
+            r = _HTTP_SESSION.get(s, timeout=3)
             if r.status_code == 200:
                 ip = r.text.strip()
                 if re.match(r'^\d{1,3}(\.\d{1,3}){3}$', ip):
@@ -254,8 +284,8 @@ def load_config():
                     raw_url = "https://" + raw_url
                 raw_url = raw_url.rstrip("/")
             KEYCLOAK_URL = raw_url
-            # 自动检测并修复云厂商公网 NAT 回环丢包问题
-            if KEYCLOAK_URL:
+            # 自动检测并修复云厂商公网 NAT 回环丢包问题（单测环境跳过，避免污染系统 /etc/hosts）
+            if KEYCLOAK_URL and not _in_test_env():
                 try:
                     import socket
                     _host = urlparse(KEYCLOAK_URL).hostname
@@ -427,6 +457,12 @@ def init_password_page():
         return redirect(url_for('login_page'))
 
     if request.method == 'POST':
+        client_ip = _get_client_ip()
+        if _is_rate_limited(client_ip):
+            flash("尝试过于频繁，请 5 分钟后再试", "danger")
+            return render_template('init_password.html')
+        _record_fail(client_ip)
+
         pwd = request.form.get('password', '').strip()
         pwd_confirm = request.form.get('password_confirm', '').strip()
         if not pwd or len(pwd) < 6:
@@ -435,6 +471,7 @@ def init_password_page():
         if pwd != pwd_confirm:
             flash("两次输入的密码不一致", "danger")
             return render_template('init_password.html')
+        _reset_fail(client_ip)
 
         with _data_lock:
             cfg = {}
@@ -466,6 +503,11 @@ def api_init_password():
     if ADMIN_PASSWORD:
         return json.dumps({"success": False, "error": "系统已初始化管理密码，禁止重复初始化"})
 
+    client_ip = _get_client_ip()
+    if _is_rate_limited(client_ip):
+        return json.dumps({"success": False, "error": "尝试过于频繁，请 5 分钟后再试"})
+    _record_fail(client_ip)
+
     req_data = request.get_json(silent=True) or request.form
     pwd = (req_data.get('password') or '').strip()
     pwd_confirm = (req_data.get('password_confirm') or '').strip()
@@ -474,6 +516,7 @@ def api_init_password():
         return json.dumps({"success": False, "error": "密码长度至少需 6 个字符"})
     if pwd != pwd_confirm:
         return json.dumps({"success": False, "error": "两次输入的密码不一致"})
+    _reset_fail(client_ip)
 
     with _data_lock:
         cfg = {}
@@ -656,33 +699,6 @@ def clear_logs():
     with logs_lock:
         log_history.clear()
 
-def get_used_ports():
-    ports = set()
-    # 优先使用 ss（现代 Linux 标准工具），若不存在则回退到 netstat
-    rc, out, err = run_cmd_args(["ss", "-tlnp"])
-    if rc != 0:
-        rc, out, err = run_cmd_args(["netstat", "-tlnp"])
-    if rc == 0:
-        for line in out.splitlines():
-            # 匹配所有本地绑定的监听端口
-            matches = re.findall(r':(\d+)\s+', line)
-            for m in matches:
-                try:
-                    ports.add(int(m))
-                except ValueError:
-                    pass
-    
-    # 额外检查 data.json 中已经分配出去的端口（防止容器崩溃时释放端口导致重复分配）
-    data = load_data()
-    for k, v in data.items():
-        if isinstance(v, dict) and 'oauth_port' in v:
-            try:
-                ports.add(int(v['oauth_port']))
-            except (ValueError, TypeError):
-                pass
-            
-    return ports
-
 def call_1panel_api(endpoint, method="POST", payload=None):
     if not ONEPANEL_API_KEY:
         log("警告: 未配置 1Panel API Key，跳过 API 调用")
@@ -718,9 +734,9 @@ def call_1panel_api(endpoint, method="POST", payload=None):
         url = f"http://127.0.0.1:{ONEPANEL_PORT}{ep}"
         try:
             if method == "POST":
-                res = requests.post(url, headers=headers, json=req_payload, timeout=10)
+                res = _HTTP_SESSION.post(url, headers=headers, json=req_payload, timeout=10)
             else:
-                res = requests.get(url, headers=headers, params=req_payload, timeout=10)
+                res = _HTTP_SESSION.get(url, headers=headers, params=req_payload, timeout=10)
             
             # 若返回 HTML (通常为 404 或安全入口拦截)，继续尝试下一个兼容端点
             if res.status_code == 200 and res.text.strip().startswith("<!DOCTYPE"):
@@ -742,7 +758,7 @@ def get_cloudflare_zones():
         "Content-Type": "application/json"
     }
     try:
-        res = requests.get(url, headers=headers, timeout=10)
+        res = _HTTP_SESSION.get(url, headers=headers, timeout=10)
         data = res.json()
         if data.get("success") and data.get("result"):
             zones = []
@@ -801,7 +817,7 @@ def add_or_update_cloudflare_dns(full_domain, server_ip=None, proxied=None):
     
     try:
         query_url = f"https://api.cloudflare.com/client/v4/zones/{zone_id}/dns_records?type=A&name={full_domain}"
-        res = requests.get(query_url, headers=headers, timeout=10)
+        res = _HTTP_SESSION.get(query_url, headers=headers, timeout=10)
         data = res.json()
         
         if not data.get("success"):
@@ -826,7 +842,7 @@ def add_or_update_cloudflare_dns(full_domain, server_ip=None, proxied=None):
                 "proxied": is_proxied,
                 "comment": "Managed by Auth Manager"
             }
-            up_res = requests.put(update_url, headers=headers, json=payload, timeout=10)
+            up_res = _HTTP_SESSION.put(update_url, headers=headers, json=payload, timeout=10)
             up_data = up_res.json()
             if up_data.get("success"):
                 log(f"[Cloudflare DNS] 成功更新 A 记录: {full_domain} -> {target_ip}")
@@ -845,7 +861,7 @@ def add_or_update_cloudflare_dns(full_domain, server_ip=None, proxied=None):
                 "proxied": is_proxied,
                 "comment": "Managed by Auth Manager"
             }
-            cr_res = requests.post(create_url, headers=headers, json=payload, timeout=10)
+            cr_res = _HTTP_SESSION.post(create_url, headers=headers, json=payload, timeout=10)
             cr_data = cr_res.json()
             if cr_data.get("success"):
                 log(f"[Cloudflare DNS] 成功创建 A 记录: {full_domain} -> {target_ip}")
@@ -1117,54 +1133,54 @@ def setup_keycloak_adaptive_sso_flow():
                 "webAuthnPolicyUserVerificationRequirement": "preferred",
                 "webAuthnPolicySignatureAlgorithms": ["ES256", "RS256", "EdDSA"],
             }
-            requests.put(api_base, headers=headers, json=realm_update, timeout=6)
+            _HTTP_SESSION.put(api_base, headers=headers, json=realm_update, timeout=6)
         except Exception as ex:
             log(f"自动配置 WebAuthn 策略警告: {ex}")
 
         # 2. 强制注册时绑定 Passkey Required Action
         req_actions_url = f"{auth_api}/required-actions"
-        actions_res = requests.get(req_actions_url, headers=headers, timeout=6)
+        actions_res = _HTTP_SESSION.get(req_actions_url, headers=headers, timeout=6)
         if actions_res.status_code == 200:
             for action in actions_res.json():
                 if action.get("alias") == "webauthn-register-passwordless":
                     action["enabled"] = True
                     action["defaultAction"] = True
-                    requests.put(f"{req_actions_url}/{action['alias']}", headers=headers, json=action, timeout=6)
+                    _HTTP_SESSION.put(f"{req_actions_url}/{action['alias']}", headers=headers, json=action, timeout=6)
                     break
 
         # 3. 创建/校验 passkey-only-browser 纯免密流 (Cookie ALTERNATIVE + WebAuthn ALTERNATIVE，物理彻底拔除密码表单)
-        flows = requests.get(f"{auth_api}/flows", headers=headers, timeout=6).json()
+        flows = _HTTP_SESSION.get(f"{auth_api}/flows", headers=headers, timeout=6).json()
         if not isinstance(flows, list):
             flows = []
 
         pk_flow = next((f for f in flows if f.get("alias") == "passkey-only-browser"), None)
         if not pk_flow:
-            requests.post(f"{auth_api}/flows", headers=headers, json={
+            _HTTP_SESSION.post(f"{auth_api}/flows", headers=headers, json={
                 "alias": "passkey-only-browser",
                 "providerId": "basic-flow",
                 "topLevel": True,
                 "builtIn": False,
                 "description": "Auth manager passkey only flow"
             }, timeout=6)
-            requests.post(f"{auth_api}/flows/passkey-only-browser/executions/execution", headers=headers, json={"provider": "auth-cookie"}, timeout=6)
-            requests.post(f"{auth_api}/flows/passkey-only-browser/executions/execution", headers=headers, json={"provider": "webauthn-authenticator-passwordless"}, timeout=6)
+            _HTTP_SESSION.post(f"{auth_api}/flows/passkey-only-browser/executions/execution", headers=headers, json={"provider": "auth-cookie"}, timeout=6)
+            _HTTP_SESSION.post(f"{auth_api}/flows/passkey-only-browser/executions/execution", headers=headers, json={"provider": "webauthn-authenticator-passwordless"}, timeout=6)
         
         # 严谨设置 requirement：同级全部为 ALTERNATIVE，避免 Keycloak 引擎因同级 REQUIRED 忽略 auth-cookie
         try:
-            for ex in requests.get(f"{auth_api}/flows/passkey-only-browser/executions", headers=headers, timeout=6).json():
+            for ex in _HTTP_SESSION.get(f"{auth_api}/flows/passkey-only-browser/executions", headers=headers, timeout=6).json():
                 ex["requirement"] = "ALTERNATIVE"
-                requests.put(f"{auth_api}/flows/passkey-only-browser/executions", headers=headers, json=ex, timeout=6)
+                _HTTP_SESSION.put(f"{auth_api}/flows/passkey-only-browser/executions", headers=headers, json=ex, timeout=6)
         except Exception:
             pass
 
         # 4. 创建/更新 global-sso-browser 流 (Cookie + Forms + Passkey 混合免密模式)
-        flows = requests.get(f"{auth_api}/flows", headers=headers, timeout=6).json()
+        flows = _HTTP_SESSION.get(f"{auth_api}/flows", headers=headers, timeout=6).json()
         if not isinstance(flows, list):
             flows = []
 
         existing_global_flow = next((f for f in flows if f.get("alias") == "global-sso-browser"), None)
         if existing_global_flow:
-            cur_execs = requests.get(f"{auth_api}/flows/global-sso-browser/executions", headers=headers, timeout=6).json()
+            cur_execs = _HTTP_SESSION.get(f"{auth_api}/flows/global-sso-browser/executions", headers=headers, timeout=6).json()
             if not isinstance(cur_execs, list):
                 cur_execs = []
             top_providers = [e.get("displayName") or e.get("providerId") for e in cur_execs if e.get("level") == 0]
@@ -1173,14 +1189,14 @@ def setup_keycloak_adaptive_sso_flow():
                     eid = e.get("id")
                     if eid:
                         try:
-                            requests.delete(f"{auth_api}/executions/{eid}", headers=headers, timeout=6)
+                            _HTTP_SESSION.delete(f"{auth_api}/executions/{eid}", headers=headers, timeout=6)
                         except Exception:
                             pass
                 cur_execs = []
 
         if not existing_global_flow or (existing_global_flow and not cur_execs):
             if not existing_global_flow:
-                requests.post(f"{auth_api}/flows", headers=headers, json={
+                _HTTP_SESSION.post(f"{auth_api}/flows", headers=headers, json={
                     "alias": "global-sso-browser",
                     "providerId": "basic-flow",
                     "topLevel": True,
@@ -1188,25 +1204,25 @@ def setup_keycloak_adaptive_sso_flow():
                     "description": "Global SSO Multi-mode Adaptive Browser Flow"
                 }, timeout=6)
 
-            requests.post(f"{auth_api}/flows/global-sso-browser/executions/execution", headers=headers, json={"provider": "auth-cookie"}, timeout=6)
-            requests.post(f"{auth_api}/flows/global-sso-browser/executions/flow", headers=headers, json={
+            _HTTP_SESSION.post(f"{auth_api}/flows/global-sso-browser/executions/execution", headers=headers, json={"provider": "auth-cookie"}, timeout=6)
+            _HTTP_SESSION.post(f"{auth_api}/flows/global-sso-browser/executions/flow", headers=headers, json={
                 "alias": "global-sso-forms",
                 "type": "basic-flow",
                 "provider": "registration-page-form",
                 "description": "Username Password Form Subflow"
             }, timeout=6)
-            requests.post(f"{auth_api}/flows/global-sso-forms/executions/execution", headers=headers, json={"provider": "auth-username-password-form"}, timeout=6)
-            requests.post(f"{auth_api}/flows/global-sso-browser/executions/execution", headers=headers, json={"provider": "webauthn-authenticator-passwordless"}, timeout=6)
+            _HTTP_SESSION.post(f"{auth_api}/flows/global-sso-forms/executions/execution", headers=headers, json={"provider": "auth-username-password-form"}, timeout=6)
+            _HTTP_SESSION.post(f"{auth_api}/flows/global-sso-browser/executions/execution", headers=headers, json={"provider": "webauthn-authenticator-passwordless"}, timeout=6)
 
-            for ex in requests.get(f"{auth_api}/flows/global-sso-browser/executions", headers=headers, timeout=6).json():
+            for ex in _HTTP_SESSION.get(f"{auth_api}/flows/global-sso-browser/executions", headers=headers, timeout=6).json():
                 ex["requirement"] = "ALTERNATIVE"
-                requests.put(f"{auth_api}/flows/global-sso-browser/executions", headers=headers, json=ex, timeout=6)
+                _HTTP_SESSION.put(f"{auth_api}/flows/global-sso-browser/executions", headers=headers, json=ex, timeout=6)
 
-            for ex in requests.get(f"{auth_api}/flows/global-sso-forms/executions", headers=headers, timeout=6).json():
+            for ex in _HTTP_SESSION.get(f"{auth_api}/flows/global-sso-forms/executions", headers=headers, timeout=6).json():
                 ex["requirement"] = "REQUIRED"
-                requests.put(f"{auth_api}/flows/global-sso-forms/executions", headers=headers, json=ex, timeout=6)
+                _HTTP_SESSION.put(f"{auth_api}/flows/global-sso-forms/executions", headers=headers, json=ex, timeout=6)
 
-        flows = requests.get(f"{auth_api}/flows", headers=headers, timeout=6).json()
+        flows = _HTTP_SESSION.get(f"{auth_api}/flows", headers=headers, timeout=6).json()
         hybrid_f = next((f for f in flows if f.get("alias") == "global-sso-browser"), None)
         pk_f = next((f for f in flows if f.get("alias") == "passkey-only-browser"), None)
 
@@ -1246,8 +1262,8 @@ def sync_site_policy_to_keycloak_theme():
         with open(nginx_policy_file, "w", encoding="utf-8") as f:
             f.write(policy_json)
 
-        # 2. 写入本地代码仓主题目录（保持代码仓同步）
-        local_policy_file = "/home/ubuntu/github/keycloak-auth-manager/themes/apple/login/resources/site-policy.json"
+        # 2. 写入本地代码仓主题目录（保持代码仓同步，路径随应用位置自适应）
+        local_policy_file = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'themes', 'apple', 'login', 'resources', 'site-policy.json')
         try:
             os.makedirs(os.path.dirname(local_policy_file), exist_ok=True)
             with open(local_policy_file, "w", encoding="utf-8") as f:
@@ -1354,27 +1370,29 @@ def _ensure_specific_sso_client(client_id, flow_id, secret_cfg_key, target_domai
     if not admin_pass:
         return False, "未获取到 Keycloak 管理员密码", ""
 
-    cfg = {}
-    if os.path.exists(CONFIG_FILE):
-        try:
-            with open(CONFIG_FILE, 'r') as f:
-                cfg = json.load(f)
-        except Exception:
-            pass
+    # config.json 读写与 _save_settings_from_dict 共用 _data_lock，避免并发互相覆盖 secret
+    with _data_lock:
+        cfg = {}
+        if os.path.exists(CONFIG_FILE):
+            try:
+                with open(CONFIG_FILE, 'r') as f:
+                    cfg = json.load(f)
+            except Exception:
+                pass
 
-    client_secret = ""
-    raw_sec = cfg.get(secret_cfg_key, "")
-    if raw_sec:
-        client_secret = decrypt_val(raw_sec)
+        client_secret = ""
+        raw_sec = cfg.get(secret_cfg_key, "")
+        if raw_sec:
+            client_secret = decrypt_val(raw_sec)
 
-    if not client_secret:
-        client_secret = generate_secret(32)
-        cfg[secret_cfg_key] = encrypt_val(client_secret)
-        try:
-            with open(CONFIG_FILE, 'w') as f:
-                json.dump(cfg, f, indent=2)
-        except Exception:
-            pass
+        if not client_secret:
+            client_secret = generate_secret(32)
+            cfg[secret_cfg_key] = encrypt_val(client_secret)
+            try:
+                with open(CONFIG_FILE, 'w') as f:
+                    json.dump(cfg, f, indent=2)
+            except Exception:
+                pass
 
     domains = list(target_domains)
     if extra_domain and extra_domain not in domains:
@@ -1502,7 +1520,15 @@ def _ensure_single_sso_container(container_name, client_id, client_secret, port,
     """启动或重载指定的 oauth2-proxy 常驻代理容器服务"""
     _, _, kc_issuer_base = get_keycloak_admin_credentials()
     run_cmd_args(["docker", "rm", "-f", container_name])
-    
+
+    # 纯 HTTP 站点的浏览器不会保存 Secure Cookie（导致登录死循环），按当前站点 SSL 状态自适应
+    cookie_secure = True
+    try:
+        _sites = load_data()
+        cookie_secure = all(v.get('ssl_enabled') for v in _sites.values() if isinstance(v, dict))
+    except Exception:
+        cookie_secure = True
+
     run_args = [
         "docker", "run", "-d",
         "--name", container_name,
@@ -1514,7 +1540,7 @@ def _ensure_single_sso_container(container_name, client_id, client_secret, port,
         "-e", f"OAUTH2_PROXY_CLIENT_SECRET={client_secret}",
         "-e", "OAUTH2_PROXY_COOKIE_NAME=_auth_sso",
         "-e", f"OAUTH2_PROXY_COOKIE_SECRET={cookie_secret}",
-        "-e", "OAUTH2_PROXY_COOKIE_SECURE=true",
+        "-e", f"OAUTH2_PROXY_COOKIE_SECURE={'true' if cookie_secure else 'false'}",
         "-e", f"OAUTH2_PROXY_COOKIE_DOMAINS={cookie_domains_str}",
         "-e", "OAUTH2_PROXY_COOKIE_SAMESITE=lax",
         "-e", "OAUTH2_PROXY_COOKIE_CSRF_PER_REQUEST=true",
@@ -1645,10 +1671,6 @@ def ensure_global_sso_container(extra_domain=None):
     return True, ""
 
 
-def create_keycloak_client(domain, client_id, client_secret):
-    """创建或更新 Keycloak Client (兼容保留)"""
-    return ensure_global_sso_client(client_secret)
-
 def delete_keycloak_client(client_id):
     if client_id == GLOBAL_SSO_CLIENT_ID:
         return
@@ -1684,11 +1706,6 @@ def stop_oauth2_container(container_name):
         return
     log(f"停止并清理历史独立容器: {container_name}")
     run_cmd_args(["docker", "rm", "-f", container_name])
-
-def create_oauth2_container(domain, oauth_port, client_id, client_secret):
-    """复用全局单一 SSO 容器"""
-    ok, err = ensure_global_sso_container(extra_domain=domain)
-    return ok, GLOBAL_SSO_CONTAINER, "", err
 
 def get_proxy_conf_path(domain):
     if not domain:
@@ -1750,7 +1767,9 @@ def get_allowed_users_for_domain(domain, users_data=None):
         if users_data is None:
             users_data, code, _ = call_keycloak_api("users", "GET", params={"briefRepresentation": "false"})
             if code != 200 or not isinstance(users_data, list):
-                return True, ["*"]
+                # fail-close：Keycloak API 异常时拒绝所有受限判断，避免站点访问限制静默失效
+                log(f"获取用户列表失败 (code={code})，域名 {domain} 权限计算 fail-close")
+                return False, []
 
         has_restricted_user = False
         allowed_users = set()
@@ -1794,8 +1813,8 @@ def get_allowed_users_for_domain(domain, users_data=None):
 
         return False, list(allowed_users)
     except Exception as e:
-        log(f"计算域名 {domain} 授权用户异常: {e}")
-        return True, ["*"]
+        log(f"计算域名 {domain} 授权用户异常: {e}，fail-close")
+        return False, []
 
 def sync_all_sites_permissions(users_data=None):
     """当用户站点权限变动时，平滑更新所有受保护站点的 OpenResty 反代配置并重载"""
@@ -1867,9 +1886,14 @@ location ^~ / {
         is_all_allowed, allowed_users = get_allowed_users_for_domain(domain, users_data=users_data)
         admin_user, admin_pass, kc_public_url = get_keycloak_admin_credentials()
 
+        # 拼入 Lua 字符串的 URL 与 client_id 做字符白名单，防止引号/换行写坏 Nginx 配置
+        safe_kc_url = re.sub(r'[^A-Za-z0-9:/.\-_?=&]', '', str(kc_public_url or ""))
+        safe_client_logout = re.sub(r'[^A-Za-z0-9_\-.]', '', str(client_for_logout or ""))
+
         access_check_lua = ""
-        if not is_all_allowed and allowed_users:
+        if not is_all_allowed:
             # 漏洞 S9 修复：对拼入 Lua 的用户名进行严格字符过滤与转义，杜绝引号/换行语法逃逸
+            # 注意：allowed_users 为空（Keycloak 异常 fail-close）时同样生成空 allowlist = 全员拒绝
             clean_lua_entries = []
             for u in allowed_users:
                 clean_u = re.sub(r'[^a-zA-Z0-9_\-@.]', '', str(u).strip())
@@ -1879,6 +1903,11 @@ location ^~ / {
             access_check_lua = f"""
     # 细粒度用户站点访问权限校验 (Access Control)
     access_by_lua_block {{
+        local function html_esc(s)
+            s = tostring(s or "")
+            s = s:gsub("&", "&amp;"):gsub("<", "&lt;"):gsub(">", "&gt;"):gsub('"', "&quot;"):gsub("'", "&#39;")
+            return s
+        end
         local u = ngx.var.preferred_username or ""
         if u == "" then
             u = ngx.var.upstream_http_x_auth_request_preferred_username or ""
@@ -1892,12 +1921,12 @@ location ^~ / {
             ngx.header.content_type = "text/html; charset=utf-8"
             local host = ngx.var.host or ""
             local post_redir = "https://" .. host .. "/"
-            local kc_logout_target = "{kc_public_url}/realms/master/protocol/openid-connect/logout?client_id={client_for_logout}&post_logout_redirect_uri=" .. ngx.escape_uri(post_redir)
+            local kc_logout_target = "{safe_kc_url}/realms/master/protocol/openid-connect/logout?client_id={safe_client_logout}&post_logout_redirect_uri=" .. ngx.escape_uri(post_redir)
             local sign_out_url = "/oauth2/sign_out?rd=" .. ngx.escape_uri(kc_logout_target)
             ngx.say([[<!DOCTYPE html>
 <html><head><meta charset="utf-8"><title>403 访问受限</title><meta name="viewport" content="width=device-width,initial-scale=1">
 <style>body{{margin:0;min-height:100vh;display:flex;align-items:center;justify-content:center;background:#0f172a;color:#f8fafc;font-family:system-ui,-apple-system,sans-serif}}.card{{background:#1e293b;padding:36px 32px;border-radius:20px;box-shadow:0 20px 40px rgba(0,0,0,0.5);text-align:center;max-width:440px;border:1px solid rgba(255,255,255,0.08)}}.icon{{font-size:48px;margin-bottom:16px}}h1{{font-size:22px;margin:0 0 10px;font-weight:700;color:#f43f5e}}p{{color:#94a3b8;font-size:14px;line-height:1.6;margin:0 0 24px}}.badge{{display:inline-block;padding:4px 10px;background:rgba(244,63,94,0.15);color:#fb7185;border-radius:6px;font-family:monospace;font-size:13px;margin-bottom:16px}}.btn{{display:inline-block;padding:10px 22px;background:#3b82f6;color:#fff;text-decoration:none;border-radius:10px;font-size:14px;font-weight:600;transition:all .2s;cursor:pointer}}.btn:hover{{background:#2563eb;transform:translateY(-1px)}}</style></head>
-<body><div class="card"><div class="icon">🚫</div><div class="badge">账号: ]] .. (u ~= "" and u or "未识别") .. [[</div><h1>403 访问受限</h1><p>您已通过身份认证，但未获得访问当前站点 <strong>]] .. (ngx.var.host or "") .. [[</strong> 的权限。<br>如需开通，请联系管理员分配站点访问权限。</p><a href="]] .. sign_out_url .. [[" class="btn" onclick="this.innerHTML='⏳ 正在注销并跳转登录...'; this.style.pointerEvents='none';">🔄 切换账号登录</a></div></body></html>]])
+<body><div class="card"><div class="icon">🚫</div><div class="badge">账号: ]] .. (u ~= "" and html_esc(u) or "未识别") .. [[</div><h1>403 访问受限</h1><p>您已通过身份认证，但未获得访问当前站点 <strong>]] .. html_esc(host) .. [[</strong> 的权限。<br>如需开通，请联系管理员分配站点访问权限。</p><a href="]] .. sign_out_url .. [[" class="btn" onclick="this.innerHTML='⏳ 正在注销并跳转登录...'; this.style.pointerEvents='none';">🔄 切换账号登录</a></div></body></html>]])
             ngx.exit(403)
         end
     }}
@@ -2218,6 +2247,16 @@ _SSL_TASKS_LOCK = threading.Lock()
 _SSL_TASKS = {}
 # 结构: { domain: { 'task_id': str, 'domain': str, 'ssl_id': int, 'status': 'applying'|'ready'|'failed'|'cancelled', 'message': str, 'logs': [str], 'created_at': str, 'updated_at': str, 'cancel_requested': bool } }
 
+def _ssl_task_set_status(task_id, status, message):
+    """线程安全写入任务状态；用户已取消的任务不再被后台线程覆盖（修复取消竞态）"""
+    with _SSL_TASKS_LOCK:
+        t = _SSL_TASKS.get(task_id)
+        if not t or t.get('status') == 'cancelled':
+            return
+        t['status'] = status
+        t['message'] = message
+        t['updated_at'] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+
 def _ssl_background_worker(task_id, domain, acme_id, dns_id):
     with _SSL_TASKS_LOCK:
         task = _SSL_TASKS.get(task_id)
@@ -2241,10 +2280,7 @@ def _ssl_background_worker(task_id, domain, acme_id, dns_id):
                 acme_id = acme_res["data"]["items"][0]["id"]
 
         if not acme_id:
-            with _SSL_TASKS_LOCK:
-                if task_id in _SSL_TASKS:
-                    _SSL_TASKS[task_id]['status'] = 'failed'
-                    _SSL_TASKS[task_id]['message'] = '未在 1Panel 中找到可用的 ACME 账户'
+            _ssl_task_set_status(task_id, 'failed', '未在 1Panel 中找到可用的 ACME 账户')
             task_log("❌ 未在 1Panel 中找到可用的 ACME 账户 (请先在 1Panel -> 证书 中添加 ACME 账户)")
             return
 
@@ -2264,10 +2300,7 @@ def _ssl_background_worker(task_id, domain, acme_id, dns_id):
         ssl_res = call_1panel_api("/api/v1/websites/ssl", "POST", ssl_payload)
         if not (ssl_res and ssl_res.get("code") == 200 and ssl_res.get("data")):
             err_msg = ssl_res.get('message', '未知错误') if ssl_res else '1Panel 无响应'
-            with _SSL_TASKS_LOCK:
-                if task_id in _SSL_TASKS:
-                    _SSL_TASKS[task_id]['status'] = 'failed'
-                    _SSL_TASKS[task_id]['message'] = f"提交失败: {err_msg}"
+            _ssl_task_set_status(task_id, 'failed', f"提交失败: {err_msg}")
             task_log(f"❌ 提交 SSL 申请失败: {err_msg}")
             return
 
@@ -2331,18 +2364,12 @@ def _ssl_background_worker(task_id, domain, acme_id, dns_id):
                         # 严格判定：只有 1Panel 明确标记证书状态为 Error/Failed 时才判定为真正失败
                         err_msg = item.get('message', status)
                         last_log_size, log_file = read_1panel_task_log(last_log_size, log_file)
-                        with _SSL_TASKS_LOCK:
-                            if task_id in _SSL_TASKS:
-                                _SSL_TASKS[task_id]['status'] = 'failed'
-                                _SSL_TASKS[task_id]['message'] = err_msg
+                        _ssl_task_set_status(task_id, 'failed', err_msg)
                         task_log(f"❌ 证书申请失败: {err_msg}")
                         return
 
         if not ssl_ready:
-            with _SSL_TASKS_LOCK:
-                if task_id in _SSL_TASKS:
-                    _SSL_TASKS[task_id]['status'] = 'failed'
-                    _SSL_TASKS[task_id]['message'] = '证书申请超时，请查看详情'
+            _ssl_task_set_status(task_id, 'failed', '证书申请超时，请查看详情')
             task_log("❌ 证书申请超时，请前往 1Panel 后台或详情日志查看")
             return
 
@@ -2363,29 +2390,21 @@ def _ssl_background_worker(task_id, domain, acme_id, dns_id):
                 call_1panel_api(f"/api/v1/websites/{ws_id}/https", "POST", https_payload)
                 task_log("HTTPS 绑定成功，网站配置已无缝重载！")
 
-                fresh_data = load_data()
-                if domain in fresh_data:
-                    fresh_data[domain]['ssl_enabled'] = True
-                    save_data(fresh_data)
+                with _data_lock:
+                    fresh_data = load_data()
+                    if domain in fresh_data:
+                        fresh_data[domain]['ssl_enabled'] = True
+                        save_data(fresh_data)
 
-                with _SSL_TASKS_LOCK:
-                    if task_id in _SSL_TASKS:
-                        _SSL_TASKS[task_id]['status'] = 'ready'
-                        _SSL_TASKS[task_id]['message'] = '证书签发成功并已绑定 HTTPS'
+                _ssl_task_set_status(task_id, 'ready', '证书签发成功并已绑定 HTTPS')
                 task_log("全部完成！")
                 return
 
-        with _SSL_TASKS_LOCK:
-            if task_id in _SSL_TASKS:
-                _SSL_TASKS[task_id]['status'] = 'ready'
-                _SSL_TASKS[task_id]['message'] = '证书签发成功 (未关联反代网站)'
+        _ssl_task_set_status(task_id, 'ready', '证书签发成功 (未关联反代网站)')
         task_log("证书已签发就绪 (未找到 1Panel 反代网站，未自动绑定)")
 
     except Exception as exc:
-        with _SSL_TASKS_LOCK:
-            if task_id in _SSL_TASKS:
-                _SSL_TASKS[task_id]['status'] = 'failed'
-                _SSL_TASKS[task_id]['message'] = str(exc)
+        _ssl_task_set_status(task_id, 'failed', str(exc))
         task_log(f"❌ 申请发生异常: {str(exc)}")
 
 def do_apply_ssl(domain, acme_id, dns_id=None):
@@ -2395,6 +2414,14 @@ def do_apply_ssl(domain, acme_id, dns_id=None):
 
     task_id = f"ssl_{domain}_{int(time.time())}"
     with _SSL_TASKS_LOCK:
+        # 任务表上限保护：超过 100 条时优先清理已终结的旧任务，防止内存无限增长
+        if len(_SSL_TASKS) >= 100:
+            finished = sorted(
+                [tid for tid, t in _SSL_TASKS.items() if t.get('status') in ('ready', 'failed', 'cancelled')],
+                key=lambda tid: _SSL_TASKS[tid].get('created_at', '')
+            )
+            for tid in finished[:len(_SSL_TASKS) - 99]:
+                _SSL_TASKS.pop(tid, None)
         _SSL_TASKS[task_id] = {
             "task_id": task_id,
             "domain": domain,
@@ -2524,38 +2551,40 @@ def migrate_to_single_sso():
             if cname and cname != GLOBAL_SSO_CONTAINER:
                 stop_oauth2_container(cname)
                 
-    # 3. 重新生成全部站点的 Nginx 反代配置文件（统一指向 127.0.0.1:4180）
+    # 3. 重新生成全部站点的 Nginx 反代配置文件（按站点认证策略自适应选择 4180/4181 代理池）
     results = []
-    for domain, auth in data.items():
-        if not isinstance(auth, dict):
-            continue
-        target_host = auth.get("target_host", "127.0.0.1")
-        target_port = auth.get("target_port", auth.get("port", 80))
-        auth_enabled = auth.get("auth_enabled", True)
-        proxy_enabled = auth.get("proxy_enabled", True)
-        
-        auth["oauth_port"] = GLOBAL_SSO_PORT
-        auth["container_name"] = GLOBAL_SSO_CONTAINER
-        auth["client_id"] = GLOBAL_SSO_CLIENT_ID
-        
-        new_conf = update_nginx_config(domain, GLOBAL_SSO_PORT, target_host, target_port, auth_enabled, proxy_enabled, reload_nginx=False)
-        if new_conf:
-            auth["nginx_config"] = new_conf
-            results.append({"domain": domain, "status": "success"})
-        else:
-            results.append({"domain": domain, "status": "failed", "error": "生成 Nginx 配置失败"})
-            
-    save_data(data)
+    with _data_lock:
+        for domain, auth in data.items():
+            if not isinstance(auth, dict):
+                continue
+            target_host = auth.get("target_host", "127.0.0.1")
+            target_port = auth.get("target_port", auth.get("port", 80))
+            auth_enabled = auth.get("auth_enabled", True)
+            proxy_enabled = auth.get("proxy_enabled", True)
+
+            # 纯 Passkey 站点归入 4181 独立池，混合/密码站点归入 4180 池，避免一律改写 4180 造成数据与实际不一致
+            is_pure_pk = auth.get("allow_passkey", True) and not auth.get("allow_password", True)
+            site_port = GLOBAL_PASSKEY_SSO_PORT if is_pure_pk else GLOBAL_SSO_PORT
+            site_client = GLOBAL_PASSKEY_SSO_CLIENT_ID if is_pure_pk else GLOBAL_SSO_CLIENT_ID
+            site_container = GLOBAL_PASSKEY_SSO_CONTAINER if is_pure_pk else GLOBAL_SSO_CONTAINER
+
+            auth["oauth_port"] = site_port
+            auth["container_name"] = site_container
+            auth["client_id"] = site_client
+
+            new_conf = update_nginx_config(domain, site_port, target_host, target_port, auth_enabled, proxy_enabled, reload_nginx=False)
+            if new_conf:
+                auth["nginx_config"] = new_conf
+                results.append({"domain": domain, "status": "success"})
+            else:
+                results.append({"domain": domain, "status": "failed", "error": "生成 Nginx 配置失败"})
+
+        save_data(data)
     
     # 4. 统一测试并重载 OpenResty
     reload_openresty()
     log(f"=== 全局单一 SSO 架构迁移完成！{len(results)} 个站点已统一接入全局 SSO 代理进程 ===")
     return True, results
-
-def redeploy_all_security():
-    """兼容旧接口调用"""
-    ok, res = migrate_to_single_sso()
-    return res if isinstance(res, list) else [{"domain": "global-sso", "status": "success" if ok else "failed"}]
 
 @app.route('/api/security/redeploy_all', methods=['POST'])
 def api_security_redeploy_all():
@@ -2590,7 +2619,16 @@ def index():
                 cfg = json.load(f)
         except Exception:
             pass
-    return render_template('index.html', auths=load_data(), config=cfg)
+    auths = load_data()
+    # 首页内联数据仅用于列表渲染：剔除明文密钥与 Nginx 配置，避免全量泄露进页面源码/缓存（修复密钥泄露）
+    safe_auths = {}
+    for domain, auth in auths.items():
+        if isinstance(auth, dict):
+            safe_auths[domain] = {k: v for k, v in auth.items()
+                                  if k not in ('client_secret', 'cookie_secret', 'nginx_config')}
+        else:
+            safe_auths[domain] = auth
+    return render_template('index.html', auths=safe_auths, config=cfg)
 
 @app.route('/add')
 def add_page():
@@ -2739,28 +2777,34 @@ def api_create():
     client_id = GLOBAL_PASSKEY_SSO_CLIENT_ID if is_pure_pk else GLOBAL_SSO_CLIENT_ID
     container_name = GLOBAL_PASSKEY_SSO_CONTAINER if is_pure_pk else GLOBAL_SSO_CONTAINER
 
-    fresh_data = load_data()
-    fresh_data[domain] = {
-        'client_id': client_id, 
-        'oauth_port': oauth_port,
-        'target_host': target_host,
-        'target_port': port,
-        'container_name': container_name, 
-        'created_at': datetime.now().isoformat(),
-        'proxy_enabled': True,
-        'ssl_enabled': check_domain_ssl_enabled(domain),
-        'auth_enabled': True,
-        'allow_passkey': allow_passkey,
-        'allow_password': allow_password
-    }
-    save_data(fresh_data)
+    # 1Panel SSL 状态查询是网络 IO，放在锁外执行
+    _site_ssl_now = check_domain_ssl_enabled(domain)
+    with _data_lock:
+        fresh_data = load_data()
+        fresh_data[domain] = {
+            'client_id': client_id,
+            'oauth_port': oauth_port,
+            'target_host': target_host,
+            'target_port': port,
+            'container_name': container_name,
+            'created_at': datetime.now().isoformat(),
+            'proxy_enabled': True,
+            'ssl_enabled': _site_ssl_now,
+            'auth_enabled': True,
+            'allow_passkey': allow_passkey,
+            'allow_password': allow_password
+        }
+        save_data(fresh_data)
     sync_site_policy_to_keycloak_theme()
 
     # 3. 极速生成 Nginx / OpenResty 反代配置（根据纯 Passkey 还是混合模式精准连接对应代理池端口）
     conf = create_nginx_auth(domain, oauth_port, target_host, port)
     if conf:
-        fresh_data[domain]['nginx_config'] = conf
-        save_data(fresh_data)
+        with _data_lock:
+            fresh_data = load_data()
+            if domain in fresh_data:
+                fresh_data[domain]['nginx_config'] = conf
+                save_data(fresh_data)
     else:
         log("Nginx 配置失败，请手动检查")
 
@@ -2979,10 +3023,10 @@ def api_ssl_export(ssl_id):
             if acme_row:
                 acme_info = dict(acme_row)
                 
-        # 提取关联 DNS 账户信息
+        # 提取关联 DNS 账户信息（仅元数据，不含 authorization 云厂商凭据，防止导出包泄露 DNS 控制权）
         dns_info = None
         if row_dict.get('dns_account_id'):
-            c.execute("SELECT id, name, type, authorization FROM website_dns_accounts WHERE id = ?", (row_dict['dns_account_id'],))
+            c.execute("SELECT id, name, type FROM website_dns_accounts WHERE id = ?", (row_dict['dns_account_id'],))
             dns_row = c.fetchone()
             if dns_row:
                 dns_info = dict(dns_row)
@@ -3068,7 +3112,7 @@ def api_ssl_export_all():
         c.execute("SELECT id, email, type, key_type, url FROM website_acme_accounts")
         acme_map = {r['id']: dict(r) for r in c.fetchall()}
 
-        c.execute("SELECT id, name, type, authorization FROM website_dns_accounts")
+        c.execute("SELECT id, name, type FROM website_dns_accounts")
         dns_map = {r['id']: dict(r) for r in c.fetchall()}
 
         cert_bundles = []
@@ -3558,20 +3602,22 @@ def detail(domain):
     if not is_valid_domain(domain):
         flash("域名格式非法", "danger")
         return redirect(url_for('index'))
-    data = load_data()
-    if domain not in data:
-        return redirect(url_for('index'))
-    auth = data[domain]
-    
-    # 实时从 1Panel 查询此站点的 HTTPS 开启状态
+    # 实时从 1Panel 查询此站点的 HTTPS 开启状态（网络 IO 在锁外，读-改-写在锁内，避免并发覆盖）
     ws_res = call_1panel_api("/api/v1/websites/search", "POST", {"page": 1, "pageSize": 10, "info": domain, "orderBy": "created_at", "order": "null"})
+    real_ssl_state = None
     if ws_res and ws_res.get("code") == 200 and ws_res.get("data") and ws_res["data"]["items"]:
         ws_item = next((x for x in ws_res["data"]["items"] if x.get("primaryDomain") == domain or domain in x.get("domains", [])), None)
         if ws_item:
             real_ssl_state = ws_item.get("protocol", "").upper() == "HTTPS"
-            if auth.get('ssl_enabled') != real_ssl_state:
-                auth['ssl_enabled'] = real_ssl_state
-                save_data(data)
+
+    with _data_lock:
+        data = load_data()
+        if domain not in data:
+            return redirect(url_for('index'))
+        auth = data[domain]
+        if real_ssl_state is not None and auth.get('ssl_enabled') != real_ssl_state:
+            auth['ssl_enabled'] = real_ssl_state
+            save_data(data)
                 
     rc, out, err = run_cmd_args([
         "docker", "ps", 
@@ -3620,21 +3666,23 @@ def delete(domain):
         return redirect(url_for('index'))
 
     log(f"收到删除请求，domain: '{domain}'")
-    data = load_data()
-    
-    if domain not in data: 
-        log(f"域名 {domain} 不在数据中，直接返回成功")
-        if is_ajax:
-            return jsonify({"success": True, "msg": f"域名 {domain} 已被移除"})
-        return redirect(url_for('index'))
-        
-    auth = data[domain]
-    client_id = auth.get('client_id')
-    container_name = auth.get('container_name')
-    
-    # 1. 优先立即从持久化数据中移除并保存，确保状态即刻生效
-    del data[domain]
-    save_data(data)
+
+    # 读-改-写全程持锁，避免并发请求互相覆盖丢更新
+    with _data_lock:
+        data = load_data()
+        if domain not in data:
+            log(f"域名 {domain} 不在数据中，直接返回成功")
+            if is_ajax:
+                return jsonify({"success": True, "msg": f"域名 {domain} 已被移除"})
+            return redirect(url_for('index'))
+
+        auth = data[domain]
+        client_id = auth.get('client_id')
+        container_name = auth.get('container_name')
+
+        # 1. 优先立即从持久化数据中移除并保存，确保状态即刻生效
+        del data[domain]
+        save_data(data)
     sync_site_policy_to_keycloak_theme()
     log(f"域名 {domain} 已立即从配置文件中移除保存")
     
@@ -3669,21 +3717,27 @@ def api_toggle(domain, feature):
 
     enabled_str = request.form.get('enabled', 'false')
     enabled = enabled_str.lower() == 'true'
-    
-    data = load_data()
-    if domain not in data:
-        return json.dumps({"success": False, "error": "域名配置不存在"})
-        
-    auth = data[domain]
-    
-    if 'target_host' not in auth: auth['target_host'] = '127.0.0.1'
-    if 'proxy_enabled' not in auth: auth['proxy_enabled'] = True
-    if 'ssl_enabled' not in auth: auth['ssl_enabled'] = False
-    if 'auth_enabled' not in auth: auth['auth_enabled'] = True
-    
-    # 尝试从现有配置中提取目标主机与端口
-    target_host = auth.get('target_host', '127.0.0.1')
-    target_port = auth.get('target_port', 80)
+
+    # 阶段1：持锁完成读取与快照（网络 IO 一律不持锁，避免拖慢面板其它请求）
+    with _data_lock:
+        data = load_data()
+        if domain not in data:
+            return json.dumps({"success": False, "error": "域名配置不存在"})
+
+        auth = data[domain]
+
+        if 'target_host' not in auth: auth['target_host'] = '127.0.0.1'
+        if 'proxy_enabled' not in auth: auth['proxy_enabled'] = True
+        if 'ssl_enabled' not in auth: auth['ssl_enabled'] = False
+        if 'auth_enabled' not in auth: auth['auth_enabled'] = True
+
+        target_host = auth.get('target_host', '127.0.0.1')
+        target_port = auth.get('target_port', 80)
+        oauth_port = auth.get('oauth_port', 4180)
+        cur_auth_enabled = auth.get('auth_enabled', True)
+        cur_proxy_enabled = auth.get('proxy_enabled', True)
+
+    # 尝试从现有配置中提取目标主机与端口（文件 IO，不持数据锁）
     proxy_conf = get_proxy_conf_path(domain)
     if proxy_conf:
         try:
@@ -3692,52 +3746,59 @@ def api_toggle(domain, feature):
             # 提取 proxy_pass http://host:port;
             matches = re.findall(r'proxy_pass http://([^:/;\s]+):([0-9]+);', content)
             if matches:
-                oauth_port = str(auth.get('oauth_port', 4180))
                 for h, p in matches:
-                    if p != oauth_port:
+                    if p != str(oauth_port):
                         target_host = h
                         target_port = int(p)
                         break
         except Exception as e:
             log(f"提取原目标地址失败: {e}")
-            
-    auth['target_host'] = target_host
-    auth['target_port'] = target_port
-            
+
+    # 阶段2：Nginx / 1Panel 网络 IO 在锁外执行
     if feature == 'proxy':
-        auth['proxy_enabled'] = enabled
-        new_conf = update_nginx_config(domain, auth['oauth_port'], target_host, target_port, auth['auth_enabled'], enabled)
-        if new_conf:
-            auth['nginx_config'] = new_conf
-            save_data(data)
-            return json.dumps({"success": True, "nginx_config": new_conf})
-        return json.dumps({"success": False, "error": "更新 Nginx 反代配置失败"})
-        
+        new_conf = update_nginx_config(domain, oauth_port, target_host, target_port, cur_auth_enabled, enabled)
     elif feature == 'auth':
-        auth['auth_enabled'] = enabled
-        new_conf = update_nginx_config(domain, auth['oauth_port'], target_host, target_port, enabled, auth['proxy_enabled'])
-        if new_conf:
-            auth['nginx_config'] = new_conf
-            save_data(data)
-            return json.dumps({"success": True, "nginx_config": new_conf})
-        return json.dumps({"success": False, "error": "更新 Nginx 认证配置失败"})
-        
+        new_conf = update_nginx_config(domain, oauth_port, target_host, target_port, enabled, cur_proxy_enabled)
     elif feature == 'ssl':
         ssl_id = request.form.get('ssl_id')
+        target_ssl_id = 0
         if ssl_id is not None:
             try:
-                auth['ssl_id'] = int(ssl_id)
-            except:
-                pass
-        target_ssl_id = auth.get('ssl_id', 0)
+                target_ssl_id = int(ssl_id)
+            except (ValueError, TypeError):
+                target_ssl_id = 0
         ok = toggle_nginx_ssl(domain, enabled, ssl_id=target_ssl_id)
-        if ok:
+        new_conf = None
+    else:
+        return json.dumps({"success": False, "error": "无效的控制类型"})
+
+    # 阶段3：持锁重读-合并-保存，避免覆盖并发写入
+    with _data_lock:
+        data = load_data()
+        if domain not in data:
+            return json.dumps({"success": False, "error": "域名配置已被移除"})
+        auth = data[domain]
+        auth['target_host'] = target_host
+        auth['target_port'] = target_port
+
+        if feature == 'ssl':
+            if ssl_id is not None:
+                try:
+                    auth['ssl_id'] = int(ssl_id)
+                except (ValueError, TypeError):
+                    pass
+            if not ok:
+                return json.dumps({"success": False, "error": "1Panel SSL 设置失败，请确认 1Panel 网站与证书配置"})
             auth['ssl_enabled'] = enabled
             save_data(data)
             return json.dumps({"success": True, "ssl_enabled": enabled, "ssl_id": auth.get('ssl_id', 0)})
-        return json.dumps({"success": False, "error": "1Panel SSL 设置失败，请确认 1Panel 网站与证书配置"})
-        
-    return json.dumps({"success": False, "error": "无效的控制类型"})
+
+        if not new_conf:
+            return json.dumps({"success": False, "error": "更新 Nginx 配置失败"})
+        auth['proxy_enabled' if feature == 'proxy' else 'auth_enabled'] = enabled
+        auth['nginx_config'] = new_conf
+        save_data(data)
+        return json.dumps({"success": True, "nginx_config": new_conf})
 
 @app.route('/api/domain/<domain>/auth_methods', methods=['POST'])
 def api_update_domain_auth_methods(domain):
@@ -3745,43 +3806,48 @@ def api_update_domain_auth_methods(domain):
     if not is_valid_domain(domain):
         return jsonify({"success": False, "error": "域名格式非法"}), 400
 
-    data = load_data()
-    if domain not in data:
-        return jsonify({"success": False, "error": "域名配置不存在"})
+    with _data_lock:
+        data = load_data()
+        if domain not in data:
+            return jsonify({"success": False, "error": "域名配置不存在"})
 
-    allow_passkey = request.form.get('allow_passkey', 'true').lower() == 'true'
-    allow_password = request.form.get('allow_password', 'true').lower() == 'true'
+        allow_passkey = request.form.get('allow_passkey', 'true').lower() == 'true'
+        allow_password = request.form.get('allow_password', 'true').lower() == 'true'
 
-    if not allow_passkey and not allow_password:
-        return jsonify({"success": False, "error": "必须至少保留一种登录认证方式（Passkey 或密码）"})
+        if not allow_passkey and not allow_password:
+            return jsonify({"success": False, "error": "必须至少保留一种登录认证方式（Passkey 或密码）"})
 
-    auth = data[domain]
-    auth['allow_passkey'] = allow_passkey
-    auth['allow_password'] = allow_password
+        auth = data[domain]
+        auth['allow_passkey'] = allow_passkey
+        auth['allow_password'] = allow_password
 
-    is_pure_pk = allow_passkey and not allow_password
-    oauth_port = GLOBAL_PASSKEY_SSO_PORT if is_pure_pk else GLOBAL_SSO_PORT
-    client_id = GLOBAL_PASSKEY_SSO_CLIENT_ID if is_pure_pk else GLOBAL_SSO_CLIENT_ID
-    container_name = GLOBAL_PASSKEY_SSO_CONTAINER if is_pure_pk else GLOBAL_SSO_CONTAINER
+        is_pure_pk = allow_passkey and not allow_password
+        oauth_port = GLOBAL_PASSKEY_SSO_PORT if is_pure_pk else GLOBAL_SSO_PORT
+        client_id = GLOBAL_PASSKEY_SSO_CLIENT_ID if is_pure_pk else GLOBAL_SSO_CLIENT_ID
+        container_name = GLOBAL_PASSKEY_SSO_CONTAINER if is_pure_pk else GLOBAL_SSO_CONTAINER
 
-    auth['oauth_port'] = oauth_port
-    auth['client_id'] = client_id
-    auth['container_name'] = container_name
+        auth['oauth_port'] = oauth_port
+        auth['client_id'] = client_id
+        auth['container_name'] = container_name
 
-    target_host = auth.get('target_host', '127.0.0.1')
-    target_port = auth.get('target_port', 80)
-    auth_enabled = auth.get('auth_enabled', True)
-    proxy_enabled = auth.get('proxy_enabled', True)
+        target_host = auth.get('target_host', '127.0.0.1')
+        target_port = auth.get('target_port', 80)
+        auth_enabled = auth.get('auth_enabled', True)
+        proxy_enabled = auth.get('proxy_enabled', True)
 
-    save_data(data)
+        save_data(data)
+
     sync_site_policy_to_keycloak_theme()
     # 动态同步双 SSO 代理池白名单与容器
     ensure_global_sso_container()
 
     new_conf = update_nginx_config(domain, oauth_port, target_host, target_port, auth_enabled, proxy_enabled)
     if new_conf:
-        auth['nginx_config'] = new_conf
-        save_data(data)
+        with _data_lock:
+            data = load_data()
+            if domain in data:
+                data[domain]['nginx_config'] = new_conf
+                save_data(data)
         log(f"域名 {domain} 登录方式策略已更新 (Passkey: {allow_passkey}, Password: {allow_password}, Port: {oauth_port})")
         return jsonify({
             "success": True,
@@ -3800,36 +3866,45 @@ def api_update_domain_target(domain):
     if not is_valid_domain(domain):
         return jsonify({"success": False, "error": "域名格式非法"}), 400
 
-    data = load_data()
-    if domain not in data:
-        return jsonify({"success": False, "error": "域名配置不存在"}), 404
+    with _data_lock:
+        data = load_data()
+        if domain not in data:
+            return jsonify({"success": False, "error": "域名配置不存在"}), 404
 
-    target_host = request.form.get('target_host', '127.0.0.1').strip()
-    target_port_str = request.form.get('target_port', '').strip()
+        target_host = request.form.get('target_host', '127.0.0.1').strip()
+        target_port_str = request.form.get('target_port', '').strip()
 
-    if not target_host:
-        target_host = '127.0.0.1'
+        if not target_host:
+            target_host = '127.0.0.1'
 
-    try:
-        target_port = int(target_port_str)
-        if target_port < 1 or target_port > 65535:
-            raise ValueError()
-    except (ValueError, TypeError):
-        return jsonify({"success": False, "error": "目标端口必须为 1 ~ 65535 之间的有效整数"}), 400
+        # 与 api_create 同等强度：校验目标主机，防止 Nginx 配置注入（修复S8 遗漏的更新入口）
+        if not is_valid_target_host(target_host):
+            return jsonify({"success": False, "error": "目标主机格式非法（仅支持 IPv4 / IPv6 / localhost / 合法域名）"}), 400
 
-    auth = data[domain]
-    auth['target_host'] = target_host
-    auth['target_port'] = target_port
-    auth['port'] = target_port
+        try:
+            target_port = int(target_port_str)
+            if target_port < 1 or target_port > 65535:
+                raise ValueError()
+        except (ValueError, TypeError):
+            return jsonify({"success": False, "error": "目标端口必须为 1 ~ 65535 之间的有效整数"}), 400
 
-    oauth_port = auth.get('oauth_port', GLOBAL_SSO_PORT)
-    auth_enabled = auth.get('auth_enabled', True)
-    proxy_enabled = auth.get('proxy_enabled', True)
+        auth = data[domain]
+        auth['target_host'] = target_host
+        auth['target_port'] = target_port
+        auth['port'] = target_port
 
+        oauth_port = auth.get('oauth_port', GLOBAL_SSO_PORT)
+        auth_enabled = auth.get('auth_enabled', True)
+        proxy_enabled = auth.get('proxy_enabled', True)
+
+    # Nginx 配置生成与重载在锁外执行，避免网络 IO 拖慢面板其它请求
     new_conf = update_nginx_config(domain, oauth_port, target_host, target_port, auth_enabled, proxy_enabled, reload_nginx=True)
     if new_conf:
-        auth['nginx_config'] = new_conf
-        save_data(data)
+        with _data_lock:
+            data = load_data()
+            if domain in data:
+                data[domain]['nginx_config'] = new_conf
+                save_data(data)
         log(f"域名 {domain} 目标后端地址与端口已更新为 {target_host}:{target_port}")
         return jsonify({
             "success": True,
@@ -3867,8 +3942,14 @@ def invalidate_users_cache():
 @app.route('/api/users')
 def api_users():
     search = request.args.get('search', '').strip()
-    first = int(request.args.get('first', 0))
-    max_count = int(request.args.get('max', 100))
+    try:
+        first = max(0, int(request.args.get('first', 0)))
+    except (ValueError, TypeError):
+        first = 0
+    try:
+        max_count = min(max(1, int(request.args.get('max', 100))), 500)
+    except (ValueError, TypeError):
+        max_count = 100
     force = request.args.get('force', 'false').lower() in ['true', '1']
     
     # 若为常规全量列表且无搜索词，且未强制刷新，优先返回服务端短期内存缓存（30 秒有效）
@@ -4251,7 +4332,9 @@ def get_keycloak_public_url():
     if not url:
         _, _, url = get_keycloak_admin_credentials()
         url = (url or "").strip().rstrip('/')
-    return url or "https://au.abab.pw"
+    if not url:
+        log("警告: 未配置 keycloak_url，无法生成 Keycloak 公网访问地址，请前往设置页补全")
+    return url
 
 def get_standard_oidc_endpoints():
     """生成 Keycloak 标准 OIDC 端点字典"""
@@ -4354,6 +4437,10 @@ def api_create_oidc_client():
 
     if not name:
         return jsonify({"success": False, "error": "请输入应用名称"}), 400
+
+    # 应用名称白名单：禁止引号/尖括号/反斜杠/控制字符，防止存储型 XSS 与 JS 字符串逃逸（修复S-XSS链路）
+    if len(name) > 60 or any(ch in name for ch in ('\'', '"', '<', '>', '\\', '`', '$', '\n', '\r', '\t')):
+        return jsonify({"success": False, "error": "应用名称含非法字符（禁止引号、尖括号、反斜杠、$ 等），长度不超过 60"}), 400
 
     if not client_id:
         return jsonify({"success": False, "error": "请输入 Client ID"}), 400
@@ -4477,6 +4564,9 @@ def api_update_oidc_client(client_id):
     c_uuid = client_obj.get("id")
 
     name = request.form.get("name", "").strip() or client_obj.get("name", client_id)
+    # 与创建接口同等的名称白名单校验（防 XSS）
+    if len(name) > 60 or any(ch in name for ch in ('\'', '"', '<', '>', '\\', '`', '$', '\n', '\r', '\t')):
+        return jsonify({"success": False, "error": "应用名称含非法字符（禁止引号、尖括号、反斜杠、$ 等），长度不超过 60"}), 400
     redirect_uris_raw = request.form.get("redirect_uris", "").strip()
     post_logout_raw = request.form.get("post_logout_redirect_uris", "+").strip()
     auth_method = request.form.get("auth_method", "hybrid").strip().lower()
