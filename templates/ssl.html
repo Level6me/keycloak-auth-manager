@@ -28,10 +28,13 @@
                 <span id="theme-icon">🌓</span>
                 <span id="theme-label" class="pill-text">自动</span>
             </button>
-            <a href="/logout" class="pill-btn" title="退出控制台登录" style="text-decoration: none; color: inherit;">
+            <form action="/logout" method="post" style="margin:0;">
+                <input type="hidden" name="_csrf_token" value="{{ session.get('csrf_token', '') }}">
+                <button type="submit" class="pill-btn" title="退出控制台登录" style="color: inherit;">
                 <span>🚪</span>
                 <span class="pill-text">退出</span>
-            </a>
+                </button>
+            </form>
         </div>
     </header>
 

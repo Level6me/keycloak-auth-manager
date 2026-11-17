@@ -273,7 +273,7 @@
             <span class="card-title" style="color: var(--danger);">⚠️ 危险操作区域</span>
         </div>
         <p style="font-size: 13px; color: var(--text-sec); margin-bottom: 14px;">
-            删除后将彻底移除该域名的 Auth Client、停止并销毁 OAuth2 Proxy 容器，并移除 Nginx 站点认证配置。
+            删除后将移除该域名的认证记录、专属认证配置和非共享 Auth Client。全局 SSO 代理与 1Panel 网站会保留，避免影响其他站点或业务服务。
         </p>
         <form action="/delete/{{ domain }}" method="post" onsubmit="return confirm('确定要删除域名 {{ domain }} 的全部认证配置吗？\n此操作不可撤销！')">
             <input type="hidden" name="_csrf_token" value="{{ session.get('csrf_token', '') }}">

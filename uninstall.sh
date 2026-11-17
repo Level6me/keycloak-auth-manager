@@ -37,7 +37,7 @@ prompt_input() {
 
 # 删除安装目录（保留配置与密钥）
 echo "删除安装目录..."
-prompt_input "是否保留全套配置文件 (config.json, data.json, encryption.key, secret.key)? (y/n) [y]: " keep_config "y"
+prompt_input "是否保留配置、站点与 OIDC 元数据及密钥? (y/n) [y]: " keep_config "y"
 if [ "$keep_config" = "y" ]; then
     rm -rf $BACKUP_DIR
     mkdir -p $BACKUP_DIR
@@ -45,6 +45,7 @@ if [ "$keep_config" = "y" ]; then
     [ -f "$INSTALL_DIR/config.json" ] && cp $INSTALL_DIR/config.json $BACKUP_DIR/
     [ -f "$INSTALL_DIR/encryption.key" ] && cp $INSTALL_DIR/encryption.key $BACKUP_DIR/
     [ -f "$INSTALL_DIR/secret.key" ] && cp $INSTALL_DIR/secret.key $BACKUP_DIR/
+    [ -f "$INSTALL_DIR/oidc_clients.json" ] && cp $INSTALL_DIR/oidc_clients.json $BACKUP_DIR/
 fi
 rm -rf $INSTALL_DIR
 

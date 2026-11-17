@@ -31,10 +31,13 @@
                 <span id="theme-label" class="pill-text">自动</span>
             </button>
             <!-- Logout Button -->
-            <a href="/logout" class="pill-btn" title="退出控制台登录" style="text-decoration: none; color: inherit;">
+            <form action="/logout" method="post" style="margin:0;">
+                <input type="hidden" name="_csrf_token" value="{{ session.get('csrf_token', '') }}">
+                <button type="submit" class="pill-btn" title="退出控制台登录" style="color: inherit;">
                 <span>🚪</span>
                 <span class="pill-text">退出</span>
-            </a>
+                </button>
+            </form>
         </div>
     </header>
 
@@ -723,7 +726,7 @@
             </div>
             <div class="form-group">
                 <label class="form-label">有效注销后重定向 (Valid Post Logout Redirect URIs)</label>
-                <input type="text" id="edit_oidc_post_logout_uris" class="input-box" value="+" style="font-family: monospace; font-size: 12px;">
+                <input type="text" id="edit_oidc_post_logout_uris" class="input-box" value="" placeholder="留空时使用已登记回调地址的来源" style="font-family: monospace; font-size: 12px;">
                 <div class="form-hint">填 <code>+</code> 表示继承所有有效回调地址白名单</div>
             </div>
             <div class="form-group">
@@ -1091,7 +1094,7 @@
 
         <!-- Danger Zone -->
         <button type="button" class="btn danger w-full" onclick="deleteDomainAjax(currentDetailDomain)" style="padding: 10px; font-size: 13px;">
-            🗑️ 彻底删除此认证服务
+            🗑️ 移除认证配置
         </button>
     </div>
 </div>

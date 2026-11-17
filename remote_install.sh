@@ -81,7 +81,11 @@ elif command -v apt-get >/dev/null 2>&1; then
 fi
 
 sudo python3 -m pip install --upgrade pip -q 2>/dev/null || sudo pip3 install --upgrade pip -q 2>/dev/null || true
-sudo pip3 install flask requests -q 2>/dev/null || sudo pip install flask requests -q 2>/dev/null || true
+sudo pip3 install flask requests 'waitress>=2.0,<3' -q 2>/dev/null || sudo pip install flask requests 'waitress>=2.0,<3' -q 2>/dev/null || true
+if ! python3 -c "import flask, requests, waitress" >/dev/null 2>&1; then
+    echo "❌ Flask、Requests 或 Waitress 安装失败"
+    exit 1
+fi
 
 if ! python3 -c "import cryptography" 2>/dev/null; then
     sudo pip3 install cryptography -q 2>/dev/null || \
@@ -124,29 +128,39 @@ KC_CONTAINER=${KEYCLOAK_CONTAINER:-"keycloak"}
 KC_WEB_PORT=${WEB_PORT:-8088}
 # 安全修复：移除硬编码的默认 1Panel API Key（疑似真实凭据），必须显式提供
 OP_API_KEY=${ONEPANEL_API_KEY:-}
-OP_PORT=${ONEPANEL_PORT:-18080}
+OP_PORT=${ONEPANEL_PORT:-40455}
 
 if [ -z "$KC_PASS" ]; then
     KC_PASS=$(head -c 18 /dev/urandom | base64 | tr -dc 'A-Za-z0-9' | head -c 20)
-    echo "[i] 未设置 KEYCLOAK_PASSWORD，已自动生成强随机密码: $KC_PASS"
+    echo "[i] 未设置 KEYCLOAK_PASSWORD，已生成强随机密码并保存至本机受限配置"
 fi
 if [ -z "$OP_API_KEY" ]; then
     echo "[!] 警告: 未设置 ONEPANEL_API_KEY，安装后需在设置页手动配置方可联动 1Panel"
 fi
 
-sudo tee $INSTALL_DIR/config.json > /dev/null << CONFIG
+json_escape() {
+    local s="$1"
+    s=${s//\\/\\\\}
+    s=${s//\"/\\\"}
+    s=${s//$'\n'/\\n}
+    s=${s//$'\r'/\\r}
+    s=${s//$'\t'/\\t}
+    printf '%s' "$s"
+}
+sudo tee "$INSTALL_DIR/config.json" > /dev/null << CONFIG
 {
-  "keycloak_url": "$KC_URL",
-  "keycloak_admin": "$KC_ADMIN",
-  "keycloak_password": "$KC_PASS",
-  "keycloak_container": "$KC_CONTAINER",
+  "keycloak_url": "$(json_escape "$KC_URL")",
+  "keycloak_admin": "$(json_escape "$KC_ADMIN")",
+  "keycloak_password": "$(json_escape "$KC_PASS")",
+  "console_username": "$(json_escape "$KC_ADMIN")",
+  "keycloak_container": "$(json_escape "$KC_CONTAINER")",
   "web_port": $KC_WEB_PORT,
   "install_dir": "$INSTALL_DIR",
-  "onepanel_api_key": "$OP_API_KEY",
+  "onepanel_api_key": "$(json_escape "$OP_API_KEY")",
   "onepanel_port": $OP_PORT
 }
 CONFIG
-sudo chmod 600 $INSTALL_DIR/config.json
+sudo chmod 600 "$INSTALL_DIR/config.json"
 echo "    ✓ 配置文件创建成功"
 
 # 4. 创建空数据文件
@@ -184,6 +198,7 @@ Wants=docker.service
 Type=simple
 User=root
 WorkingDirectory=$INSTALL_DIR
+UMask=0077
 ExecStart=$PYTHON_BIN $INSTALL_DIR/app.py
 Restart=always
 RestartSec=5

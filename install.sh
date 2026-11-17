@@ -244,7 +244,7 @@ if command -v docker &> /dev/null && docker ps &> /dev/null; then
                 prompt_input "    设置 Keycloak 管理员密码 [留空自动生成强随机密码]: " kc_admin_pass "" "true"
                 if [ -z "$kc_admin_pass" ]; then
                     kc_admin_pass="$(head -c 18 /dev/urandom | base64 | tr -dc 'A-Za-z0-9' | head -c 20)"
-                    echo "        ✓ 已自动生成强随机 Keycloak 管理员密码: $kc_admin_pass"
+                    echo "        ✓ 已自动生成强随机 Keycloak 管理员密码，并保存在本机受限配置中"
                 fi
                 prompt_input "    设置 Keycloak 映射端口 [8080]: " kc_port "8080"
                 
@@ -254,7 +254,7 @@ if command -v docker &> /dev/null && docker ps &> /dev/null; then
                 fi
                 
                 echo "    正在调用 deploy_keycloak.sh 部署容器..."
-                if bash "$SOURCE_DIR/deploy_keycloak.sh" "$kc_db_type" "$kc_admin_user" "$kc_admin_pass" "$kc_port" "$kc_db_pass"; then
+                if DEPLOY_DB_TYPE="$kc_db_type" DEPLOY_ADMIN_USER="$kc_admin_user" DEPLOY_ADMIN_PASSWORD="$kc_admin_pass" DEPLOY_PORT="$kc_port" DEPLOY_DB_PASSWORD="$kc_db_pass" bash "$SOURCE_DIR/deploy_keycloak.sh"; then
                     echo "    ✓ Keycloak 容器部署成功"
                     KEYCLOAK_RUNNING="keycloak"
                 else
@@ -367,7 +367,7 @@ else
     prompt_input "Keycloak Admin 密码 [留空自动生成强随机密码]: " KEYCLOAK_PASSWORD "" "true"
     if [ -z "$KEYCLOAK_PASSWORD" ]; then
         KEYCLOAK_PASSWORD="$(head -c 18 /dev/urandom | base64 | tr -dc 'A-Za-z0-9' | head -c 20)"
-        echo "    ✓ 已自动生成强随机 Keycloak Admin 密码: $KEYCLOAK_PASSWORD"
+        echo "    ✓ 已自动生成强随机 Keycloak Admin 密码，并保存在本机受限配置中"
     fi
 fi
 
@@ -444,20 +444,20 @@ if command -v yum >/dev/null 2>&1; then
     yum install -y -q python3-pip python3-flask python3-cryptography python3-requests 2>/dev/null || true
 elif command -v apt-get >/dev/null 2>&1; then
     export DEBIAN_FRONTEND=noninteractive
-    apt-get install -y -q python3-pip python3-flask python3-cryptography python3-requests 2>/dev/null || true
+    apt-get install -y -q python3-pip python3-flask python3-cryptography python3-requests python3-waitress 2>/dev/null || true
 fi
 
 # 2. pip 安装 / 补齐
 python3 -m pip install --upgrade pip -q 2>/dev/null || pip3 install --upgrade pip -q 2>/dev/null || true
 
 # 依赖版本加边界约束（大版本锁定，兼顾老旧发行版的 Python 兼容性）
-_DEP_PKGS=("flask>=2.0,<4" "$CRYPTO_PKG" "requests>=2.25,<3")
+_DEP_PKGS=("flask>=2.0,<4" "$CRYPTO_PKG" "requests>=2.25,<3" "waitress>=2.0,<3")
 
 pip3 install "${_DEP_PKGS[@]}" -q 2>/dev/null || \
 pip install "${_DEP_PKGS[@]}" -q 2>/dev/null || \
 pip3 install "${_DEP_PKGS[@]}" --break-system-packages -q 2>/dev/null || \
 python3 -m pip install "${_DEP_PKGS[@]}" -q 2>/dev/null || \
-pip3 install flask requests -q 2>/dev/null || true
+pip3 install flask requests waitress -q 2>/dev/null || true
 
 # 安全安装 cryptography：若最新版需要 Rust 编译环境失败，则自动回退至免 Rust 版本的 <=3.3.2
 if ! python3 -c "import cryptography" 2>/dev/null; then
@@ -466,14 +466,14 @@ if ! python3 -c "import cryptography" 2>/dev/null; then
 fi
 
 # 3. 校验核心依赖 (flask 与 requests 必须具备)
-if python3 -c "import flask, requests" 2>/dev/null; then
+if python3 -c "import flask, requests, waitress" 2>/dev/null; then
     if python3 -c "import cryptography" 2>/dev/null; then
-        echo "    ✓ Python 核心与安全依赖已全部就绪 (flask, cryptography, requests)"
+        echo "    ✓ Python 核心与安全依赖已全部就绪 (flask, cryptography, requests, waitress)"
     else
-        echo "    ✓ Python 核心依赖已就绪 (flask, requests，开启内置安全加密兼容)"
+        echo "    ✓ Python 核心依赖已就绪 (flask, requests, waitress，开启内置安全加密兼容)"
     fi
 else
-    echo "    ✗ 严重错误: Python 核心依赖安装失败！请在终端手动执行 'pip3 install flask requests' 后重试。"
+    echo "    ✗ 严重错误: Python 核心依赖安装失败！请在终端手动执行 'pip3 install flask requests waitress' 后重试。"
     exit 1
 fi
 
@@ -511,8 +511,12 @@ if [ -f "/tmp/keycloak_auth_manager_backup/data.json" ]; then
     echo "    检测到备份的站点数据文件，正在还原..."
     cp /tmp/keycloak_auth_manager_backup/data.json "$INSTALL_DIR/"
 fi
+if [ -f "/tmp/keycloak_auth_manager_backup/oidc_clients.json" ]; then
+    echo "    检测到备份的 OIDC 客户端元数据，正在还原..."
+    cp /tmp/keycloak_auth_manager_backup/oidc_clients.json "$INSTALL_DIR/"
+fi
 # 还原的敏感文件一律收紧权限为 600（防止默认 644 被本机任意用户读取）
-chmod 600 "$INSTALL_DIR/encryption.key" "$INSTALL_DIR/secret.key" "$INSTALL_DIR/data.json" 2>/dev/null || true
+chmod 600 "$INSTALL_DIR/encryption.key" "$INSTALL_DIR/secret.key" "$INSTALL_DIR/data.json" "$INSTALL_DIR/oidc_clients.json" 2>/dev/null || true
 
 # 写入用户本次确认的最新配置文件（修复S11：以 umask 077 与 chmod 600 严格限制敏感文件访问权限）
 echo "[3] 创建/更新配置文件..."
@@ -521,6 +525,9 @@ json_escape() {
     local s="$1"
     s=${s//\\/\\\\}
     s=${s//\"/\\\"}
+    s=${s//$'\n'/\\n}
+    s=${s//$'\r'/\\r}
+    s=${s//$'\t'/\\t}
     printf '%s' "$s"
 }
 (
@@ -565,6 +572,7 @@ Wants=docker.service
 Type=simple
 User=root
 WorkingDirectory=$INSTALL_DIR
+UMask=0077
 # 仅精确终止本服务的旧进程，避免误杀任意命令行包含 app.py 的进程
 ExecStartPre=/bin/sh -c "pkill -f '$PYTHON_BIN $INSTALL_DIR/app.py' || true; sleep 1"
 ExecStart=$PYTHON_BIN $INSTALL_DIR/app.py

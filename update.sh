@@ -178,9 +178,9 @@ if ! python3 -c "import flask, requests" >/dev/null 2>&1; then
 
     if [ -n "$PIP_CMD" ]; then
         # 安装核心 Web 与网络依赖
-        $PIP_CMD install --upgrade --break-system-packages flask requests -q >/dev/null 2>&1 || \
-        $PIP_CMD install --upgrade flask requests -q >/dev/null 2>&1 || \
-        $PIP_CMD install flask requests -q >/dev/null 2>&1 || true
+        $PIP_CMD install --upgrade --break-system-packages flask requests waitress -q >/dev/null 2>&1 || \
+        $PIP_CMD install --upgrade flask requests waitress -q >/dev/null 2>&1 || \
+        $PIP_CMD install flask requests waitress -q >/dev/null 2>&1 || true
 
         # 安全安装 cryptography：优先尝试免 Rust 编译版本 <=3.3.2 避免旧系统缺少 Rust 报错
         if ! python3 -c "import cryptography" >/dev/null 2>&1; then
@@ -220,6 +220,7 @@ Wants=docker.service
 Type=simple
 User=root
 WorkingDirectory=$INSTALL_DIR
+UMask=0077
 ExecStart=$PYTHON_BIN $INSTALL_DIR/app.py
 Restart=always
 RestartSec=5
@@ -249,7 +250,7 @@ fi
 # 安全修复：迁移会强删旧容器并重写全部站点 Nginx 配置，改为显式 opt-in，不再随每次更新自动执行
 if [ "$RUN_MIGRATION" = "1" ]; then
     echo "[6/6] RUN_MIGRATION=1 已启用，正在执行全局单一 SSO 架构迁移..."
-    if PYTHONPATH="$INSTALL_DIR" python3 -c "import sys; sys.path.insert(0, '$INSTALL_DIR'); import app; app.migrate_to_single_sso()"; then
+    if PYTHONPATH="$INSTALL_DIR" python3 -c "import sys; sys.path.insert(0, '$INSTALL_DIR'); import app; ok, result = app.migrate_to_single_sso(); print(result); sys.exit(0 if ok else 1)"; then
         echo "    ✓ 站点已收敛至全局 SSO 代理池 (混合 127.0.0.1:4180 / 纯 Passkey 127.0.0.1:4181)"
     else
         echo "    ⚠️ 迁移执行出错，请查看上方输出排查（站点数据与配置未被静默跳过）"

@@ -965,10 +965,10 @@ function renderUsersUI(users) {
                     </div>
 
                     <div class="domain-actions" style="margin-top: auto; padding-top: 10px; border-top: 1px solid var(--border-subtle); display: flex; justify-content: space-between; align-items: center; gap: 6px;">
-                        <button type="button" class="btn secondary sm btn-user-action" data-action="reset" data-user-id="${escapeHtml(u.id)}" data-username="${escapeHtml(u.username)}" data-has-passkey="${u.has_passkey ? 'true' : 'false'}" onclick="openResetUserModal('${u.id}', '${escapeHtml(u.username)}', ${Boolean(u.has_passkey)})" style="flex: 1; justify-content: center; font-size: 11px; padding: 5px 6px;" title="重置密码或重新绑定 Passkey">🔐 凭据</button>
-                        <button type="button" class="btn secondary sm btn-user-action" data-action="sites" data-user-id="${escapeHtml(u.id)}" data-username="${escapeHtml(u.username)}" onclick="openUserSitesModal('${u.id}', '${escapeHtml(u.username)}')" style="flex: 1; justify-content: center; font-size: 11px; padding: 5px 6px;" title="配置可访问站点权限">🌐 站点</button>
-                        <button type="button" class="btn secondary sm btn-user-action" data-action="roles" data-user-id="${escapeHtml(u.id)}" data-username="${escapeHtml(u.username)}" onclick="openUserRolesModal('${u.id}', '${escapeHtml(u.username)}')" style="flex: 1; justify-content: center; font-size: 11px; padding: 5px 6px;" title="分配角色权限">🛡️ 角色</button>
-                        <button type="button" class="btn danger sm btn-user-action" data-action="delete" data-user-id="${escapeHtml(u.id)}" data-username="${escapeHtml(u.username)}" onclick="deleteUserAjax('${u.id}', '${escapeHtml(u.username)}')" style="font-size: 11px; padding: 5px 8px;" title="删除用户">🗑️</button>
+                        <button type="button" class="btn secondary sm btn-user-action" data-action="reset" data-user-id="${escapeHtml(u.id)}" data-username="${escapeHtml(u.username)}" data-has-passkey="${u.has_passkey ? 'true' : 'false'}" style="flex: 1; justify-content: center; font-size: 11px; padding: 5px 6px;" title="重置密码或重新绑定 Passkey">🔐 凭据</button>
+                        <button type="button" class="btn secondary sm btn-user-action" data-action="sites" data-user-id="${escapeHtml(u.id)}" data-username="${escapeHtml(u.username)}" style="flex: 1; justify-content: center; font-size: 11px; padding: 5px 6px;" title="配置可访问站点权限">🌐 站点</button>
+                        <button type="button" class="btn secondary sm btn-user-action" data-action="roles" data-user-id="${escapeHtml(u.id)}" data-username="${escapeHtml(u.username)}" style="flex: 1; justify-content: center; font-size: 11px; padding: 5px 6px;" title="分配角色权限">🛡️ 角色</button>
+                        <button type="button" class="btn danger sm btn-user-action" data-action="delete" data-user-id="${escapeHtml(u.id)}" data-username="${escapeHtml(u.username)}" style="font-size: 11px; padding: 5px 8px;" title="删除用户">🗑️</button>
                     </div>
                 </div>
             `;
@@ -1042,10 +1042,10 @@ function renderUsersUI(users) {
                 </td>
                 <td style="text-align: right;">
                     <div style="display: inline-flex; align-items: center; gap: 4px;">
-                        <button type="button" class="btn secondary sm btn-user-action" data-action="reset" data-user-id="${escapeHtml(u.id)}" data-username="${escapeHtml(u.username)}" data-has-passkey="${u.has_passkey ? 'true' : 'false'}" onclick="openResetUserModal('${u.id}', '${escapeHtml(u.username)}', ${Boolean(u.has_passkey)})" style="padding: 4px 7px; font-size: 11px;">🔐 凭据</button>
-                        <button type="button" class="btn secondary sm btn-user-action" data-action="sites" data-user-id="${escapeHtml(u.id)}" data-username="${escapeHtml(u.username)}" onclick="openUserSitesModal('${u.id}', '${escapeHtml(u.username)}')" style="padding: 4px 7px; font-size: 11px;">🌐 站点</button>
-                        <button type="button" class="btn secondary sm btn-user-action" data-action="roles" data-user-id="${escapeHtml(u.id)}" data-username="${escapeHtml(u.username)}" onclick="openUserRolesModal('${u.id}', '${escapeHtml(u.username)}')" style="padding: 4px 7px; font-size: 11px;">🛡️ 角色</button>
-                        <button type="button" class="btn danger sm btn-user-action" data-action="delete" data-user-id="${escapeHtml(u.id)}" data-username="${escapeHtml(u.username)}" onclick="deleteUserAjax('${u.id}', '${escapeHtml(u.username)}')" style="padding: 4px 7px; font-size: 11px;">🗑️</button>
+                        <button type="button" class="btn secondary sm btn-user-action" data-action="reset" data-user-id="${escapeHtml(u.id)}" data-username="${escapeHtml(u.username)}" data-has-passkey="${u.has_passkey ? 'true' : 'false'}" style="padding: 4px 7px; font-size: 11px;">🔐 凭据</button>
+                        <button type="button" class="btn secondary sm btn-user-action" data-action="sites" data-user-id="${escapeHtml(u.id)}" data-username="${escapeHtml(u.username)}" style="padding: 4px 7px; font-size: 11px;">🌐 站点</button>
+                        <button type="button" class="btn secondary sm btn-user-action" data-action="roles" data-user-id="${escapeHtml(u.id)}" data-username="${escapeHtml(u.username)}" style="padding: 4px 7px; font-size: 11px;">🛡️ 角色</button>
+                        <button type="button" class="btn danger sm btn-user-action" data-action="delete" data-user-id="${escapeHtml(u.id)}" data-username="${escapeHtml(u.username)}" style="padding: 4px 7px; font-size: 11px;">🗑️</button>
                     </div>
                 </td>
             `;
@@ -1973,7 +1973,7 @@ function openEditOidcClientModal(clientId) {
     document.getElementById('edit_oidc_app_name').value = client.name || client.client_id;
     document.getElementById('edit_oidc_auth_method').value = client.auth_method || 'hybrid';
     document.getElementById('edit_oidc_redirect_uris').value = (client.redirect_uris || []).join('\n');
-    document.getElementById('edit_oidc_post_logout_uris').value = client.post_logout_redirect_uris || '+';
+    document.getElementById('edit_oidc_post_logout_uris').value = client.post_logout_redirect_uris === '+' ? '' : (client.post_logout_redirect_uris || '');
     document.getElementById('edit_oidc_app_desc').value = client.description || '';
 
     const modal = document.getElementById('editOidcClientModal');
@@ -1999,7 +1999,7 @@ function autoFixClientRedirectUris() {
         } catch (e) {}
     }
     textarea.value = Array.from(added).join('\n');
-    document.getElementById('edit_oidc_post_logout_uris').value = '+';
+    document.getElementById('edit_oidc_post_logout_uris').value = '';
     showToast('已自动补充根域通配符与注销白名单 (+)', 'success');
 }
 
@@ -2030,7 +2030,7 @@ async function submitEditOidcClientForm(event) {
     formData.append('name', name);
     formData.append('auth_method', authMethod);
     formData.append('redirect_uris', redirectUris);
-    formData.append('post_logout_redirect_uris', postLogoutUris || '+');
+    formData.append('post_logout_redirect_uris', postLogoutUris);
     formData.append('description', description);
 
     try {

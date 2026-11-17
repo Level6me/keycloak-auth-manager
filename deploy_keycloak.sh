@@ -3,11 +3,11 @@
 
 set -e
 
-DB_TYPE=$1
-ADMIN_USER=$2
-ADMIN_PASSWORD=$3
-PORT=$4
-DB_PASSWORD=$5
+DB_TYPE=${1:-${DEPLOY_DB_TYPE:-}}
+ADMIN_USER=${2:-${DEPLOY_ADMIN_USER:-}}
+ADMIN_PASSWORD=${3:-${DEPLOY_ADMIN_PASSWORD:-}}
+PORT=${4:-${DEPLOY_PORT:-}}
+DB_PASSWORD=${5:-${DEPLOY_DB_PASSWORD:-}}
 
 if [ -z "$DB_TYPE" ] || [ -z "$ADMIN_USER" ] || [ -z "$ADMIN_PASSWORD" ] || [ -z "$PORT" ]; then
     echo "Usage: $0 <h2|postgres> <admin_user> <admin_password> <port> [db_password]"
