@@ -660,7 +660,7 @@
             <div class="form-group">
                 <label class="form-label">Client ID (客户端唯一标识)</label>
                 <input type="text" id="oidc_client_id" class="input-box" placeholder="例如: wordpress 或 my-app" required autocomplete="off" style="font-family: monospace;">
-                <div class="form-hint">在第三方系统中配置填写的 Client ID（英文字母、数字或下划线）</div>
+                <div class="form-hint">在第三方系统中配置填写的 Client ID（2-50 位字母、数字、下划线或连字符，保存时自动转为小写）</div>
             </div>
             <div class="form-group">
                 <label class="form-label">认证登录策略 (Browser Flow)</label>
@@ -673,8 +673,13 @@
             </div>
             <div class="form-group">
                 <label class="form-label">合法回调地址 (Valid Redirect URIs)</label>
-                <textarea id="oidc_redirect_uris" class="input-box" rows="3" placeholder="例如:&#10;https://blog.example.com/*&#10;https://blog.example.com/wp-login.php?openid-connect-generic-callback=1" required style="font-family: monospace; font-size: 12px; line-height: 1.5;"></textarea>
-                <div class="form-hint">支持通配符 *，多个地址请换行输入</div>
+                <textarea id="oidc_redirect_uris" class="input-box" rows="3" placeholder="例如:&#10;https://blog.example.com/wp-login.php?openid-connect-generic-callback=1&#10;https://git.example.com/user/oauth2/keycloak/callback" required style="font-family: monospace; font-size: 12px; line-height: 1.5;"></textarea>
+                <div class="form-hint">建议填写精确回调路径（OAuth 2.1 不推荐生产环境使用宽泛通配符 <code>*</code>），多个地址请换行输入</div>
+            </div>
+            <div class="form-group">
+                <label class="form-label">有效注销后重定向 (Post Logout Redirect URIs, 可选)</label>
+                <textarea id="oidc_post_logout_uris" class="input-box" rows="2" placeholder="留空或填 + 表示继承所有已登记的 Valid Redirect URIs" style="font-family: monospace; font-size: 12px; line-height: 1.5;"></textarea>
+                <div class="form-hint">填 <code>+</code> 或留空表示继承 Valid Redirect URIs；如需限定具体退出跳转地址，请换行输入</div>
             </div>
             <div class="form-group">
                 <label class="form-label">应用描述 (可选)</label>
@@ -719,15 +724,15 @@
             <div class="form-group">
                 <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 4px;">
                     <label class="form-label" style="margin-bottom: 0;">合法回调地址 (Valid Redirect URIs)</label>
-                    <button type="button" class="pill-btn" onclick="autoFixClientRedirectUris()" style="font-size: 11px; padding: 2px 7px;">自动补全通配符</button>
+                    <button type="button" class="pill-btn" onclick="autoFixClientRedirectUris()" style="font-size: 11px; padding: 2px 7px;">规范化与继承注销 (+)</button>
                 </div>
                 <textarea id="edit_oidc_redirect_uris" class="input-box" rows="3" required style="font-family: monospace; font-size: 12px; line-height: 1.5;"></textarea>
-                <div class="form-hint">支持多行输入与通配符 *</div>
+                <div class="form-hint">支持多行输入，推荐登记精确回调路径（生产环境慎用 <code>*</code> 通配符）</div>
             </div>
             <div class="form-group">
                 <label class="form-label">有效注销后重定向 (Valid Post Logout Redirect URIs)</label>
-                <input type="text" id="edit_oidc_post_logout_uris" class="input-box" value="" placeholder="留空时使用已登记回调地址的来源" style="font-family: monospace; font-size: 12px;">
-                <div class="form-hint">填 <code>+</code> 表示继承所有有效回调地址白名单</div>
+                <textarea id="edit_oidc_post_logout_uris" class="input-box" rows="2" placeholder="留空或填 + 表示继承所有已登记的 Valid Redirect URIs" style="font-family: monospace; font-size: 12px; line-height: 1.5;"></textarea>
+                <div class="form-hint">填 <code>+</code> 或留空表示继承 Valid Redirect URIs；也可换行填写同源下的具体注销回调 URL</div>
             </div>
             <div class="form-group">
                 <label class="form-label">应用描述 (可选)</label>
@@ -762,6 +767,9 @@
 
         <!-- Tab 1: Standard Endpoints -->
         <div id="guideTabContentStandard">
+            <div id="guide_public_url_warning" style="display: none; background: rgba(245, 158, 11, 0.12); border: 1px solid rgba(245, 158, 11, 0.35); color: var(--text); border-radius: 8px; padding: 10px 12px; margin-bottom: 12px; font-size: 12px; line-height: 1.5;">
+                ⚠️ 当前未配置 Keycloak 公网 HTTPS 域名（正在回退内网/本地地址），外部应用将无法校验 <code>issuer</code> 或跳转登录。请前往「系统设置」补全公网 <code>keycloak_url</code>。
+            </div>
             <div class="card" style="padding: 12px 16px; background: var(--card-sec); font-size: 12px;">
                 <div class="setting-row" style="padding: 8px 0; border-bottom: 1px solid var(--border-subtle);">
                     <div class="setting-info">
@@ -811,12 +819,28 @@
                     <button class="pill-btn" onclick="copyToClipboard(document.getElementById('guide_token_url').textContent, 'Token Endpoint')" style="padding: 3px 8px; font-size: 11px;">📋 复制</button>
                 </div>
 
-                <div class="setting-row" style="padding: 8px 0;">
+                <div class="setting-row" style="padding: 8px 0; border-bottom: 1px solid var(--border-subtle);">
                     <div class="setting-info">
                         <span class="setting-label" style="font-size: 12px; font-weight: 700;">UserInfo Endpoint (用户信息端点)</span>
                         <code id="guide_userinfo_url" style="font-size: 11px; word-break: break-all;"></code>
                     </div>
                     <button class="pill-btn" onclick="copyToClipboard(document.getElementById('guide_userinfo_url').textContent, 'UserInfo Endpoint')" style="padding: 3px 8px; font-size: 11px;">📋 复制</button>
+                </div>
+
+                <div class="setting-row" style="padding: 8px 0; border-bottom: 1px solid var(--border-subtle);">
+                    <div class="setting-info">
+                        <span class="setting-label" style="font-size: 12px; font-weight: 700;">JWKS URI (公钥集验签端点)</span>
+                        <code id="guide_jwks_uri" style="font-size: 11px; word-break: break-all;"></code>
+                    </div>
+                    <button class="pill-btn" onclick="copyToClipboard(document.getElementById('guide_jwks_uri').textContent, 'JWKS URI')" style="padding: 3px 8px; font-size: 11px;">📋 复制</button>
+                </div>
+
+                <div class="setting-row" style="padding: 8px 0;">
+                    <div class="setting-info">
+                        <span class="setting-label" style="font-size: 12px; font-weight: 700;">End Session Endpoint (RP 注销端点)</span>
+                        <code id="guide_end_session_url" style="font-size: 11px; word-break: break-all;"></code>
+                    </div>
+                    <button class="pill-btn" onclick="copyToClipboard(document.getElementById('guide_end_session_url').textContent, 'End Session Endpoint')" style="padding: 3px 8px; font-size: 11px;">📋 复制</button>
                 </div>
             </div>
         </div>
@@ -922,7 +946,7 @@
                     </div>
                 </div>
 
-                <div style="font-weight: 700; color: var(--text); margin-bottom: 6px; font-size: 12px;">⚙️ Gitea app.ini 配置文件参数示例 (可选)：</div>
+                <div style="font-weight: 700; color: var(--text); margin-bottom: 6px; font-size: 12px;">⚙️ Gitea CLI 创建命令与 app.ini 全局配置示例：</div>
                 <pre id="guide_git_yaml" style="background: #0f172a; color: #38bdf8; padding: 12px; border-radius: 8px; font-size: 11px; overflow-x: auto; margin-bottom: 0;"></pre>
             </div>
         </div>

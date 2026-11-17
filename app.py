@@ -1323,12 +1323,44 @@ def setup_keycloak_adaptive_sso_flow():
                 _HTTP_SESSION.put(f"{auth_api}/flows/global-sso-forms/executions", headers=headers, json=ex, timeout=6)
 
         flows = _HTTP_SESSION.get(f"{auth_api}/flows", headers=headers, timeout=6).json()
+        if not isinstance(flows, list):
+            flows = []
+
+        # 5. 创建/校验 password-only-browser 纯密码流 (Cookie ALTERNATIVE + Username/Password 表单 ALTERNATIVE，不含 WebAuthn)
+        pw_flow = next((f for f in flows if f.get("alias") == "password-only-browser"), None)
+        if not pw_flow:
+            _HTTP_SESSION.post(f"{auth_api}/flows", headers=headers, json={
+                "alias": "password-only-browser",
+                "providerId": "basic-flow",
+                "topLevel": True,
+                "builtIn": False,
+                "description": "Auth manager password only flow"
+            }, timeout=6)
+            _HTTP_SESSION.post(f"{auth_api}/flows/password-only-browser/executions/execution", headers=headers, json={"provider": "auth-cookie"}, timeout=6)
+            _HTTP_SESSION.post(f"{auth_api}/flows/password-only-browser/executions/flow", headers=headers, json={
+                "alias": "password-only-forms",
+                "type": "basic-flow",
+                "provider": "registration-page-form",
+                "description": "Username Password Form Subflow"
+            }, timeout=6)
+            _HTTP_SESSION.post(f"{auth_api}/flows/password-only-forms/executions/execution", headers=headers, json={"provider": "auth-username-password-form"}, timeout=6)
+
+            for ex in _HTTP_SESSION.get(f"{auth_api}/flows/password-only-browser/executions", headers=headers, timeout=6).json():
+                ex["requirement"] = "ALTERNATIVE"
+                _HTTP_SESSION.put(f"{auth_api}/flows/password-only-browser/executions", headers=headers, json=ex, timeout=6)
+            for ex in _HTTP_SESSION.get(f"{auth_api}/flows/password-only-forms/executions", headers=headers, timeout=6).json():
+                ex["requirement"] = "REQUIRED"
+                _HTTP_SESSION.put(f"{auth_api}/flows/password-only-forms/executions", headers=headers, json=ex, timeout=6)
+
+        flows = _HTTP_SESSION.get(f"{auth_api}/flows", headers=headers, timeout=6).json()
         hybrid_f = next((f for f in flows if f.get("alias") == "global-sso-browser"), None)
         pk_f = next((f for f in flows if f.get("alias") == "passkey-only-browser"), None)
+        pw_f = next((f for f in flows if f.get("alias") == "password-only-browser"), None)
 
         return {
             "hybrid": hybrid_f["id"] if hybrid_f else None,
-            "passkey_only": pk_f["id"] if pk_f else None
+            "passkey_only": pk_f["id"] if pk_f else None,
+            "password_only": pw_f["id"] if pw_f else None,
         }
     except Exception as e:
         log(f"配置 Keycloak 自适应认证流异常: {e}")
@@ -4796,6 +4828,72 @@ def get_standard_oidc_endpoints():
         "keycloak_url": kc_url
     }
 
+OIDC_AUTH_FLOW_ALIASES = {
+    "hybrid": "global-sso-browser",
+    "passkey_only": "passkey-only-browser",
+    "password_only": "password-only-browser",
+}
+
+def _parse_oidc_client_uris(redirect_uris_raw, post_logout_raw):
+    """校验并规范化 OIDC 客户端的 Redirect URIs 与 Post-Logout Redirect URIs"""
+    r_uris = set()
+    origins = set()
+    for line in re.split(r'[\r\n,]+', redirect_uris_raw or ""):
+        uri = line.strip()
+        if not uri:
+            continue
+        parsed = urlparse(uri)
+        if (parsed.scheme not in ("http", "https") or not parsed.hostname or
+                parsed.username or parsed.password or parsed.fragment or
+                any(ch in uri for ch in ('\r', '\n', ' '))):
+            return None, None, None, f"回调地址格式非法: '{uri}'（必须以 http:// 或 https:// 开头）"
+        r_uris.add(uri)
+        origins.add(f"{parsed.scheme}://{parsed.netloc}")
+
+    if not r_uris:
+        return None, None, None, "请至少填写一个合法的回调地址 (Redirect URI)"
+
+    logout_raw = (post_logout_raw or "").strip()
+    if not logout_raw or logout_raw == "+":
+        return sorted(r_uris), sorted(origins), "+", None
+
+    logout_uris = []
+    for item in re.split(r'(?:##|[\r\n,]+)', logout_raw):
+        logout_uri = item.strip()
+        if not logout_uri:
+            continue
+        if logout_uri == "+":
+            return sorted(r_uris), sorted(origins), "+", None
+        parsed_logout = urlparse(logout_uri)
+        logout_origin = f"{parsed_logout.scheme}://{parsed_logout.netloc}"
+        if (parsed_logout.scheme not in ("http", "https") or not parsed_logout.hostname or
+                parsed_logout.username or parsed_logout.password or
+                parsed_logout.fragment or logout_origin not in origins or
+                any(ch in logout_uri for ch in ('\r', '\n', ' '))):
+            return None, None, None, "退出回调必须是已登记回调地址所属来源下的合法 URL，或填 +"
+        if logout_uri not in logout_uris:
+            logout_uris.append(logout_uri)
+
+    post_logout_attr = "##".join(logout_uris) if logout_uris else "+"
+    return sorted(r_uris), sorted(origins), post_logout_attr, None
+
+def _resolve_oidc_browser_flow_id(auth_method):
+    """根据认证模式解析 Keycloak 浏览器认证流 ID，必要时自动补建缺失流"""
+    target_alias = OIDC_AUTH_FLOW_ALIASES.get(auth_method)
+    if not target_alias:
+        return ""
+
+    flows_res, f_code, _ = call_keycloak_api("authentication/flows", "GET")
+    if f_code == 200 and isinstance(flows_res, list):
+        for f in flows_res:
+            if f.get("alias") == target_alias:
+                return f.get("id") or ""
+        # 流列表可查但目标流尚未创建（如首次使用 password_only），自动初始化认证流
+        flow_map = setup_keycloak_adaptive_sso_flow()
+        if isinstance(flow_map, dict):
+            return flow_map.get(auth_method) or ""
+    return ""
+
 @app.route('/api/oidc/endpoints', methods=['GET'])
 def api_get_oidc_endpoints():
     """获取当前身份中心标准 OIDC 端点配置"""
@@ -4817,6 +4915,8 @@ def api_list_oidc_clients():
     if f_code == 200 and isinstance(flows_res, list):
         for f in flows_res:
             flow_map[f.get("id")] = f.get("alias")
+
+    alias_to_method = {v: k for k, v in OIDC_AUTH_FLOW_ALIASES.items()}
 
     for c in clients_res:
         cid = c.get("clientId", "")
@@ -4841,9 +4941,10 @@ def api_list_oidc_clients():
 
         meta = local_meta.get(cid, {})
         app_name = meta.get("name") or c.get("name") or cid
-        auth_method = meta.get("auth_method") or ("passkey_only" if browser_flow_alias == "passkey-only-browser" else "hybrid")
+        auth_method = meta.get("auth_method") or alias_to_method.get(browser_flow_alias, "hybrid")
         created_at = meta.get("created_at") or ""
         description = meta.get("description") or c.get("description") or ""
+        attrs = c.get("attributes") if isinstance(c.get("attributes"), dict) else {}
 
         # 是否为系统核心代理客户端
         is_system = cid in (GLOBAL_SSO_CLIENT_ID, GLOBAL_PASSKEY_SSO_CLIENT_ID)
@@ -4856,7 +4957,7 @@ def api_list_oidc_clients():
             "enabled": c.get("enabled", True),
             "public_client": is_public,
             "redirect_uris": c.get("redirectUris", []),
-            "post_logout_redirect_uris": c.get("attributes", {}).get("post.logout.redirect.uris", "+") if isinstance(c.get("attributes"), dict) else "+",
+            "post_logout_redirect_uris": attrs.get("post.logout.redirect.uris") or "+",
             "web_origins": c.get("webOrigins", []),
             "client_secret": secret,
             "auth_method": auth_method,
@@ -4866,7 +4967,8 @@ def api_list_oidc_clients():
         })
 
     # 排序：系统客户端在前，其他按创建时间倒序
-    result.sort(key=lambda x: (not x["is_system"], x.get("created_at", "")), reverse=True)
+    result.sort(key=lambda x: x.get("created_at", ""), reverse=True)
+    result.sort(key=lambda x: not x["is_system"])
     return jsonify({"success": True, "clients": result, "endpoints": get_standard_oidc_endpoints()})
 
 @app.route('/api/oidc/clients', methods=['POST'])
@@ -4881,7 +4983,7 @@ def api_create_oidc_client():
 
     if not name:
         return jsonify({"success": False, "error": "请输入应用名称"}), 400
-    if auth_method not in ("hybrid", "passkey_only"):
+    if auth_method not in OIDC_AUTH_FLOW_ALIASES:
         return jsonify({"success": False, "error": "认证方式无效"}), 400
 
     # 应用名称白名单：禁止引号/尖括号/反斜杠/控制字符，防止存储型 XSS 与 JS 字符串逃逸（修复S-XSS链路）
@@ -4891,7 +4993,7 @@ def api_create_oidc_client():
     if not client_id:
         return jsonify({"success": False, "error": "请输入 Client ID"}), 400
 
-    if not re.match(r'^[a-zA-Z0-9_-]{2,50}$', client_id):
+    if not re.match(r'^[a-z0-9_-]{2,50}$', client_id):
         return jsonify({"success": False, "error": "Client ID 格式非法（仅支持 2-50 位字母、数字、下划线与连字符）"}), 400
 
     if client_id in SYSTEM_RESERVED_CLIENT_IDS or client_id in (GLOBAL_SSO_CLIENT_ID, GLOBAL_PASSKEY_SSO_CLIENT_ID):
@@ -4902,48 +5004,11 @@ def api_create_oidc_client():
     if code == 200 and isinstance(existing, list) and len(existing) > 0:
         return jsonify({"success": False, "error": f"Client ID '{client_id}' 已存在，请更换"}), 400
 
-    # 只注册操作者明确填写的回调 URI，不自动放宽到整个站点或另一种协议。
-    r_uris = set()
-    origins = set()
-    for line in re.split(r'[\r\n,]+', redirect_uris_raw):
-        uri = line.strip()
-        if uri:
-            parsed = urlparse(uri)
-            if (parsed.scheme not in ("http", "https") or not parsed.hostname or
-                    parsed.username or parsed.password or parsed.fragment or
-                    any(ch in uri for ch in ('\r', '\n', ' '))):
-                return jsonify({"success": False, "error": f"回调地址格式非法: '{uri}'（必须以 http:// 或 https:// 开头）"}), 400
-            r_uris.add(uri)
-            origins.add(f"{parsed.scheme}://{parsed.netloc}")
+    unique_r_uris, web_origins, post_logout_attr, uri_err = _parse_oidc_client_uris(redirect_uris_raw, post_logout_raw)
+    if uri_err:
+        return jsonify({"success": False, "error": uri_err}), 400
 
-    if not r_uris:
-        return jsonify({"success": False, "error": "请至少填写一个合法的回调地址 (Redirect URI)"}), 400
-
-    unique_r_uris = sorted(list(r_uris))
-    web_origins = sorted(origins)
-    logout_uris = []
-    for logout_uri in re.split(r'[\r\n,]+', post_logout_raw):
-        logout_uri = logout_uri.strip()
-        if not logout_uri:
-            continue
-        parsed_logout = urlparse(logout_uri)
-        logout_origin = f"{parsed_logout.scheme}://{parsed_logout.netloc}"
-        if (parsed_logout.scheme not in ("http", "https") or not parsed_logout.hostname or
-                parsed_logout.fragment or logout_origin not in origins or
-                any(ch in logout_uri for ch in ('\r', '\n', ' '))):
-            return jsonify({"success": False, "error": "退出回调必须是已登记回调地址所属来源下的合法 URL"}), 400
-        logout_uris.append(logout_uri)
-    if not logout_uris:
-        logout_uris = web_origins
-
-    flow_id = ""
-    flows_res, f_code, _ = call_keycloak_api("authentication/flows", "GET")
-    if f_code == 200 and isinstance(flows_res, list):
-        target_alias = "passkey-only-browser" if auth_method == "passkey_only" else "global-sso-browser"
-        for f in flows_res:
-            if f.get("alias") == target_alias:
-                flow_id = f.get("id")
-                break
+    flow_id = _resolve_oidc_browser_flow_id(auth_method)
     if not flow_id:
         return jsonify({"success": False, "error": "未找到对应的 Keycloak 认证流；客户端未创建"}), 500
 
@@ -4958,11 +5023,11 @@ def api_create_oidc_client():
         "publicClient": False,
         "protocol": "openid-connect",
         "standardFlowEnabled": True,
-        "directAccessGrantsEnabled": auth_method != "passkey_only",
+        "directAccessGrantsEnabled": False,
         "redirectUris": unique_r_uris,
         "webOrigins": web_origins,
         "attributes": {
-            "post.logout.redirect.uris": "##".join(logout_uris)
+            "post.logout.redirect.uris": post_logout_attr
         }
     }
     if flow_id:
@@ -5012,58 +5077,25 @@ def api_update_oidc_client(client_id):
     redirect_uris_raw = request.form.get("redirect_uris", "").strip()
     post_logout_raw = request.form.get("post_logout_redirect_uris", "").strip()
     auth_method = request.form.get("auth_method", "hybrid").strip().lower()
-    if auth_method not in ("hybrid", "passkey_only"):
+    if auth_method not in OIDC_AUTH_FLOW_ALIASES:
         return jsonify({"success": False, "error": "认证方式无效"}), 400
     description = request.form.get("description", "").strip()
 
-    r_uris = set()
-    origins = set()
-    for line in re.split(r'[\r\n,]+', redirect_uris_raw):
-        uri = line.strip()
-        if uri:
-            parsed = urlparse(uri)
-            if (parsed.scheme not in ("http", "https") or not parsed.hostname or
-                    parsed.username or parsed.password or parsed.fragment or
-                    any(ch in uri for ch in ('\r', '\n', ' '))):
-                return jsonify({"success": False, "error": f"回调地址格式非法: '{uri}'（必须以 http:// 或 https:// 开头）"}), 400
-            r_uris.add(uri)
-            origins.add(f"{parsed.scheme}://{parsed.netloc}")
+    unique_r_uris, web_origins, post_logout_attr, uri_err = _parse_oidc_client_uris(redirect_uris_raw, post_logout_raw)
+    if uri_err:
+        return jsonify({"success": False, "error": uri_err}), 400
 
-    if not r_uris:
-        return jsonify({"success": False, "error": "请至少填写一个合法的回调地址 (Redirect URI)"}), 400
-
-    logout_uris = []
-    for uri in re.split(r'[\r\n,]+', post_logout_raw):
-        uri = uri.strip()
-        if not uri:
-            continue
-        parsed = urlparse(uri)
-        if (parsed.scheme not in ("http", "https") or not parsed.hostname or parsed.fragment or
-                f"{parsed.scheme}://{parsed.netloc}" not in origins or
-                any(ch in uri for ch in ('\r', '\n', ' '))):
-            return jsonify({"success": False, "error": "退出回调必须是已登记回调地址所属来源下的合法 URL"}), 400
-        logout_uris.append(uri)
-    if not logout_uris:
-        logout_uris = sorted(origins)
-
-    flow_id = ""
-    flows_res, f_code, _ = call_keycloak_api("authentication/flows", "GET")
-    if f_code == 200 and isinstance(flows_res, list):
-        target_alias = "passkey-only-browser" if auth_method == "passkey_only" else "global-sso-browser"
-        for f in flows_res:
-            if f.get("alias") == target_alias:
-                flow_id = f.get("id")
-                break
+    flow_id = _resolve_oidc_browser_flow_id(auth_method)
     if not flow_id:
         return jsonify({"success": False, "error": "未找到对应的 Keycloak 认证流；客户端未更新"}), 500
 
     client_obj["name"] = name
     client_obj["description"] = description
-    client_obj["redirectUris"] = sorted(list(r_uris))
-    client_obj["webOrigins"] = sorted(origins)
-    client_obj["directAccessGrantsEnabled"] = auth_method != "passkey_only"
+    client_obj["redirectUris"] = unique_r_uris
+    client_obj["webOrigins"] = web_origins
+    client_obj["directAccessGrantsEnabled"] = False
     attrs = client_obj.get("attributes", {}) or {}
-    attrs["post.logout.redirect.uris"] = "##".join(logout_uris)
+    attrs["post.logout.redirect.uris"] = post_logout_attr
     client_obj["attributes"] = attrs
     if flow_id:
         client_obj["authenticationFlowBindingOverrides"] = {"browser": flow_id}

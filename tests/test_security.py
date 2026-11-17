@@ -464,5 +464,124 @@ class SecurityRegressionTestSuite(unittest.TestCase):
             self.assertIn(("users/u-123/logout", "POST"), kc_calls)
             self.assertLess(kc_calls.index(("users/u-123/logout", "POST")), kc_calls.index(("users/u-123", "DELETE")))
 
+    def test_oidc_client_crud_standards_and_sorting(self):
+        """验证 OIDC 应用 CRUD 符合标准：password_only支持、ROPC禁用、+与##注销白名单、大小写规范化与系统前置排序"""
+        import tempfile
+        import app as kam_app
+        from unittest.mock import patch
+
+        endpoints = kam_app.get_standard_oidc_endpoints()
+        for key in ("issuer", "discovery_url", "authorization_endpoint", "token_endpoint", "userinfo_endpoint", "jwks_uri", "end_session_endpoint"):
+            self.assertIn(key, endpoints)
+
+        # 1. 验证 URI 解析与注销白名单规则
+        r_uris, origins, logout_attr, err = kam_app._parse_oidc_client_uris("https://blog.example.com/cb", "")
+        self.assertIsNone(err)
+        self.assertEqual(r_uris, ["https://blog.example.com/cb"])
+        self.assertEqual(origins, ["https://blog.example.com"])
+        self.assertEqual(logout_attr, "+")
+
+        _, _, logout_plus, err_plus = kam_app._parse_oidc_client_uris("https://blog.example.com/cb", "+")
+        self.assertIsNone(err_plus)
+        self.assertEqual(logout_plus, "+")
+
+        _, _, logout_multi, err_multi = kam_app._parse_oidc_client_uris(
+            "https://blog.example.com/cb",
+            "https://blog.example.com/logout1##https://blog.example.com/logout2"
+        )
+        self.assertIsNone(err_multi)
+        self.assertEqual(logout_multi, "https://blog.example.com/logout1##https://blog.example.com/logout2")
+
+        _, _, _, err_cross = kam_app._parse_oidc_client_uris("https://blog.example.com/cb", "https://evil.com/logout")
+        self.assertIsNotNone(err_cross)
+
+        # 2. 验证创建/更新/列表接口行为
+        with tempfile.TemporaryDirectory() as tmpdir:
+            meta_file = os.path.join(tmpdir, "oidc_clients.json")
+            created_payloads = []
+            updated_payloads = []
+            flows = [
+                {"id": "flow-hybrid", "alias": "global-sso-browser"},
+                {"id": "flow-pk", "alias": "passkey-only-browser"},
+                {"id": "flow-pw", "alias": "password-only-browser"},
+            ]
+            kc_clients = [
+                {"id": "sys-1", "clientId": kam_app.GLOBAL_SSO_CLIENT_ID, "name": "Global SSO", "publicClient": False, "redirectUris": ["https://a.com/*"], "webOrigins": ["https://a.com"], "authenticationFlowBindingOverrides": {"browser": "flow-hybrid"}, "attributes": {}},
+                {"id": "app-old", "clientId": "old_app", "name": "Old App", "publicClient": False, "redirectUris": ["https://old.com/cb"], "webOrigins": ["https://old.com"], "authenticationFlowBindingOverrides": {"browser": "flow-pw"}, "attributes": {"post.logout.redirect.uris": "+"}},
+            ]
+
+            def fake_fetch_all(endpoint, params=None):
+                if endpoint == "clients":
+                    return kc_clients, 200, ""
+                return [], 200, ""
+
+            def fake_call_kc(endpoint, method="GET", json_data=None, params=None):
+                if endpoint == "authentication/flows" and method == "GET":
+                    return flows, 200, ""
+                if endpoint == "clients" and method == "GET":
+                    cid = (params or {}).get("clientId")
+                    return [c for c in kc_clients if c.get("clientId") == cid], 200, ""
+                if endpoint == "clients" and method == "POST":
+                    created_payloads.append(json_data)
+                    new_obj = dict(json_data)
+                    new_obj["id"] = f"id-{json_data['clientId']}"
+                    kc_clients.append(new_obj)
+                    return {"id": new_obj["id"]}, 201, ""
+                if endpoint.startswith("clients/") and endpoint.endswith("/client-secret") and method == "GET":
+                    return {"value": "mock-secret"}, 200, ""
+                if endpoint.startswith("clients/") and method == "PUT":
+                    updated_payloads.append(json_data)
+                    return {}, 204, ""
+                return {}, 200, ""
+
+            client = kam_app.app.test_client()
+            with patch.object(kam_app, "OIDC_CLIENTS_FILE", meta_file), \
+                 patch.object(kam_app, "ADMIN_PASSWORD", "StrongPass!23"), \
+                 patch.object(kam_app, "_fetch_all_keycloak_items", side_effect=fake_fetch_all), \
+                 patch.object(kam_app, "call_keycloak_api", side_effect=fake_call_kc):
+                with client.session_transaction() as sess:
+                    sess["logged_in"] = True
+                    sess["user"] = kam_app.ADMIN_USERNAME
+                    sess["csrf_token"] = "tok"
+
+                # 创建含大写 client_id 且 auth_method=password_only、注销白名单=+
+                res_create = client.post("/api/oidc/clients", data={
+                    "_csrf_token": "tok",
+                    "name": "Wiki App",
+                    "client_id": "MyWiki",
+                    "auth_method": "password_only",
+                    "redirect_uris": "https://wiki.example.com/callback",
+                    "post_logout_redirect_uris": "+",
+                })
+                self.assertEqual(res_create.status_code, 200)
+                body_create = json.loads(res_create.get_data(as_text=True))
+                self.assertTrue(body_create["success"])
+                self.assertEqual(body_create["client_id"], "mywiki")
+                self.assertEqual(len(created_payloads), 1)
+                self.assertFalse(created_payloads[0]["directAccessGrantsEnabled"])
+                self.assertEqual(created_payloads[0]["authenticationFlowBindingOverrides"]["browser"], "flow-pw")
+                self.assertEqual(created_payloads[0]["attributes"]["post.logout.redirect.uris"], "+")
+
+                # 更新应用，提交多条注销地址
+                res_upd = client.put("/api/oidc/clients/MyWiki", data={
+                    "_csrf_token": "tok",
+                    "name": "Wiki App Updated",
+                    "auth_method": "hybrid",
+                    "redirect_uris": "https://wiki.example.com/callback",
+                    "post_logout_redirect_uris": "https://wiki.example.com/out1\nhttps://wiki.example.com/out2",
+                })
+                self.assertEqual(res_upd.status_code, 200)
+                self.assertFalse(updated_payloads[0]["directAccessGrantsEnabled"])
+                self.assertEqual(updated_payloads[0]["authenticationFlowBindingOverrides"]["browser"], "flow-hybrid")
+                self.assertEqual(updated_payloads[0]["attributes"]["post.logout.redirect.uris"], "https://wiki.example.com/out1##https://wiki.example.com/out2")
+
+                # 验证列表排序（系统客户端在前）与 password_only 推断
+                res_list = client.get("/api/oidc/clients")
+                self.assertEqual(res_list.status_code, 200)
+                clients_list = json.loads(res_list.get_data(as_text=True))["clients"]
+                self.assertTrue(clients_list[0]["is_system"])
+                old_item = next(c for c in clients_list if c["client_id"] == "old_app")
+                self.assertEqual(old_item["auth_method"], "password_only")
+
 if __name__ == '__main__':
     unittest.main()

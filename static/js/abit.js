@@ -1991,7 +1991,9 @@ function openEditOidcClientModal(clientId) {
     document.getElementById('edit_oidc_app_name').value = client.name || client.client_id;
     document.getElementById('edit_oidc_auth_method').value = client.auth_method || 'hybrid';
     document.getElementById('edit_oidc_redirect_uris').value = (client.redirect_uris || []).join('\n');
-    document.getElementById('edit_oidc_post_logout_uris').value = client.post_logout_redirect_uris === '+' ? '' : (client.post_logout_redirect_uris || '');
+    const rawLogout = (client.post_logout_redirect_uris || '+').trim();
+    document.getElementById('edit_oidc_post_logout_uris').value =
+        rawLogout === '+' ? '+' : rawLogout.split('##').map(s => s.trim()).filter(Boolean).join('\n');
     document.getElementById('edit_oidc_app_desc').value = client.description || '';
 
     const modal = document.getElementById('editOidcClientModal');
@@ -2006,19 +2008,23 @@ function closeEditOidcClientModal() {
 function autoFixClientRedirectUris() {
     const textarea = document.getElementById('edit_oidc_redirect_uris');
     if (!textarea) return;
-    const lines = textarea.value.split(/[\r\n]+/).map(s => s.trim()).filter(Boolean);
-    const added = new Set(lines);
+    const lines = textarea.value.split(/[\r\n,]+/).map(s => s.trim()).filter(Boolean);
+    const cleaned = new Set();
     for (const uri of lines) {
         try {
             const url = new URL(uri);
-            const origin = `${url.protocol}//${url.host}`;
-            added.add(`${origin}/*`);
-            added.add(`${origin}/`);
-        } catch (e) {}
+            cleaned.add(uri);
+            // 仅当条目只有域名没有路径时补充默认根路径，不强行注入宽泛 * 通配符
+            if (!url.pathname || url.pathname === '') {
+                cleaned.add(`${url.protocol}//${url.host}/`);
+            }
+        } catch (e) {
+            cleaned.add(uri);
+        }
     }
-    textarea.value = Array.from(added).join('\n');
-    document.getElementById('edit_oidc_post_logout_uris').value = '';
-    showToast('已自动补充根域通配符与注销白名单 (+)', 'success');
+    textarea.value = Array.from(cleaned).join('\n');
+    document.getElementById('edit_oidc_post_logout_uris').value = '+';
+    showToast('已规范化回调地址并设置注销白名单为继承 (+)', 'success');
 }
 
 async function submitEditOidcClientForm(event) {
@@ -2076,9 +2082,11 @@ async function submitAddOidcClientForm(e) {
     e.preventDefault();
     const btn = document.getElementById('btnSubmitAddOidcClient');
     const name = document.getElementById('oidc_app_name').value.trim();
-    const clientId = document.getElementById('oidc_client_id').value.trim();
+    const clientId = document.getElementById('oidc_client_id').value.trim().toLowerCase();
     const authMethod = document.getElementById('oidc_auth_method').value;
     const redirectUris = document.getElementById('oidc_redirect_uris').value.trim();
+    const postLogoutEl = document.getElementById('oidc_post_logout_uris');
+    const postLogoutUris = postLogoutEl ? postLogoutEl.value.trim() : '';
     const desc = document.getElementById('oidc_app_desc').value.trim();
 
     if (!name || !clientId || !redirectUris) {
@@ -2094,6 +2102,9 @@ async function submitAddOidcClientForm(e) {
     formData.append('client_id', clientId);
     formData.append('auth_method', authMethod);
     formData.append('redirect_uris', redirectUris);
+    if (postLogoutUris) {
+        formData.append('post_logout_redirect_uris', postLogoutUris);
+    }
     formData.append('description', desc);
     formData.append('_csrf_token', getCsrfToken());
 
@@ -2105,8 +2116,8 @@ async function submitAddOidcClientForm(e) {
             showToast(result.msg || '客户端创建成功！', 'success');
             closeAddOidcClientModal();
             await loadOidcClientsAjax(true);
-            // 自动弹出该应用的对接指南参数表
-            openOidcGuideModal(clientId);
+            // 使用后端规范化后的小写 client_id 弹出对接指南参数表
+            openOidcGuideModal(result.client_id || clientId);
         } else {
             showToast(result.error || '创建失败', 'error');
         }
@@ -2205,6 +2216,16 @@ function renderOidcGuideModal() {
     document.getElementById('guide_auth_url').textContent = endpoints.authorization_endpoint || pending;
     document.getElementById('guide_token_url').textContent = endpoints.token_endpoint || pending;
     document.getElementById('guide_userinfo_url').textContent = endpoints.userinfo_endpoint || pending;
+    const jwksEl = document.getElementById('guide_jwks_uri');
+    if (jwksEl) jwksEl.textContent = endpoints.jwks_uri || pending;
+    const endSessionEl = document.getElementById('guide_end_session_url');
+    if (endSessionEl) endSessionEl.textContent = endpoints.end_session_endpoint || pending;
+    const urlWarnEl = document.getElementById('guide_public_url_warning');
+    if (urlWarnEl) {
+        const kcUrl = (endpoints.keycloak_url || '').trim();
+        const isInternal = !kcUrl || /^https?:\/\/(127\.0\.0\.1|localhost)(:|\/|$)/i.test(kcUrl);
+        urlWarnEl.style.display = isInternal ? 'block' : 'none';
+    }
 
     // 填充 Gitea 专用 1 对 1 字段
     const giteaClientIdEl = document.getElementById('gitea_guide_client_id');
@@ -2214,20 +2235,23 @@ function renderOidcGuideModal() {
     const giteaDiscEl = document.getElementById('gitea_guide_discovery_url');
     if (giteaDiscEl) giteaDiscEl.textContent = endpoints.discovery_url || pending;
 
-    // 生成 Gitea app.ini / GitLab 配置示例
-    const gitYaml = `; Gitea app.ini 配置文件 [oauth2_client] 段落示例:
+    // 生成 Gitea CLI 认证源添加命令 + app.ini 有效全局配置示例
+    const gitYaml = `# 1. 使用 Gitea CLI 添加 OIDC 认证源（或按上方对照表在 Web 后台添加）:
+gitea admin auth add-oauth \\
+  --name "keycloak" \\
+  --provider "openidConnect" \\
+  --key "${client.client_id}" \\
+  --secret "${client.client_secret || 'YOUR_CLIENT_SECRET'}" \\
+  --auto-discover-url "${endpoints.discovery_url || 'YOUR_KEYCLOAK_DISCOVERY_URL'}" \\
+  --scopes "openid email profile"
+
+# 2. Gitea app.ini 全局 [oauth2_client] 配置（仅放置 Gitea 支持的全局参数）:
 [oauth2_client]
-ENABLE = true
-NAME = "keycloak"
-PROVIDER = "openidConnect"
-CLIENT_ID = "${client.client_id}"
-CLIENT_SECRET = "${client.client_secret || 'YOUR_CLIENT_SECRET'}"
-OPENID_CONNECT_SCOPES = "openid email profile"
-AUTO_DISCOVERY_URL = "${endpoints.discovery_url || 'YOUR_KEYCLOAK_DISCOVERY_URL'}"
-USERNAME = "preferred_username"
-EMAIL = "email"
-UPDATE_EXISTING_USER_DATA = true
-AUTO_REGISTRATION = true`;
+OPENID_CONNECT_SCOPES = openid email profile
+ENABLE_AUTO_REGISTRATION = true
+USERNAME = preferred_username
+ACCOUNT_LINKING = auto
+UPDATE_AVATAR = true`;
     const gitEl = document.getElementById('guide_git_yaml');
     if (gitEl) gitEl.textContent = gitYaml;
 
