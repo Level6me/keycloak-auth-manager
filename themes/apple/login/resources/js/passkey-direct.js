@@ -161,7 +161,8 @@
                         const buttons = doc1.querySelectorAll("button[name='authenticationExecution']");
                         for (const btn of buttons) {
                             const txt = (btn.innerText || btn.textContent || "").toLowerCase();
-                            if (txt.includes("密钥") || txt.includes("安全") || txt.includes("webauthn") || txt.includes("passkey")) {
+                            const val = (btn.value || "").toLowerCase();
+                            if (txt.includes("密钥") || txt.includes("安全") || txt.includes("webauthn") || txt.includes("passkey") || txt.includes("security key") || val.includes("webauthn")) {
                                 passkeyExecId = btn.value;
                                 break;
                             }
@@ -233,7 +234,8 @@
                     const buttons = doc1.querySelectorAll("button[name='authenticationExecution']");
                     for (const btn of buttons) {
                         const txt = (btn.innerText || btn.textContent || "").toLowerCase();
-                        if (txt.includes("密钥") || txt.includes("安全") || txt.includes("webauthn") || txt.includes("passkey")) {
+                        const val = (btn.value || "").toLowerCase();
+                        if (txt.includes("密钥") || txt.includes("安全") || txt.includes("webauthn") || txt.includes("passkey") || txt.includes("security key") || val.includes("webauthn")) {
                             passkeyExecId = btn.value;
                             break;
                         }
@@ -259,11 +261,13 @@
                     if (!res2.ok) throw new Error("Step 2 failed");
 
                     const html2 = await res2.text();
+                    const doc2 = new DOMParser().parseFromString(html2, "text/html");
+                    const webauthFormEl = doc2.getElementById("webauth");
 
-                    const mChallenge = html2.match(/challenge\s*:\s*"([^"]+)"/);
-                    const mRpId = html2.match(/rpId\s*:\s*"([^"]+)"/);
-                    const mUV = html2.match(/userVerification\s*:\s*"([^"]+)"/);
-                    const mAction = html2.match(/id="webauth"[^>]*action="([^"]+)"/);
+                    const mChallenge = html2.match(/challenge\s*:\s*["']([^"']+)["']/);
+                    const mRpId = html2.match(/rpId\s*:\s*["']([^"']+)["']/);
+                    const mUV = html2.match(/userVerification\s*:\s*["']([^"']+)["']/);
+                    const mAction = html2.match(/id=["']webauth["'][^>]*action=["']([^"']+)["']/);
 
                     if (!mChallenge || !mRpId || !window.PublicKeyCredential) {
                         const fallbackForm = document.createElement("form");
@@ -282,7 +286,7 @@
                     const challenge = mChallenge[1];
                     const rpId = mRpId[1];
                     const userVerification = mUV ? mUV[1] : "preferred";
-                    const webauthAction = mAction ? mAction[1].replace(/&amp;/g, "&") : action2;
+                    const webauthAction = (webauthFormEl && webauthFormEl.getAttribute("action")) ? webauthFormEl.getAttribute("action").replace(/&amp;/g, "&") : (mAction ? mAction[1].replace(/&amp;/g, "&") : action2);
 
                     const credential = await navigator.credentials.get({
                         publicKey: {

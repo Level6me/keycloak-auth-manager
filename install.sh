@@ -494,7 +494,6 @@ cp -f "$SOURCE_DIR/app.py" "$INSTALL_DIR/"
 cp -rf "$SOURCE_DIR/static" "$INSTALL_DIR/"
 cp -rf "$SOURCE_DIR/templates" "$INSTALL_DIR/"
 cp -rf "$SOURCE_DIR/themes" "$INSTALL_DIR/" 2>/dev/null || true
-cp -rf "$SOURCE_DIR/nginx-auth" "$INSTALL_DIR/" 2>/dev/null || true
 cp -f "$SOURCE_DIR/deploy_keycloak.sh" "$INSTALL_DIR/" 2>/dev/null || true
 echo "    ✓ 文件已复制"
 
@@ -581,11 +580,7 @@ RestartSec=5
 KillMode=mixed
 KillSignal=SIGTERM
 TimeoutStopSec=10
-# 基础安全加固：禁提权、系统目录只读，仅保留应用与 /etc/hosts 写权限
 NoNewPrivileges=true
-ProtectSystem=full
-ProtectHome=read-only
-ReadWritePaths=/opt/keycloak-auth-manager /etc/hosts
 
 [Install]
 WantedBy=multi-user.target
@@ -644,7 +639,7 @@ if [ "$INSTALL_THEME" = "y" ]; then
             echo "    请在 Keycloak 容器启动后手动执行此命令复制主题："
             echo "    docker cp $INSTALL_DIR/themes/apple $KEYCLOAK_CONTAINER:/opt/keycloak/themes/"
         fi
-        echo "    说明: 导入后，请在 Keycloak Admin Console 的 Realm Settings -> Themes 中选择 Login Theme 为 'apple'。"
+        echo "    说明: 服务初始化就绪后将自动激活 'apple' 登录主题（亦可随时在 Keycloak 后台 Realm Settings -> Themes 确认）。"
     else
         echo "    ! 本地主题文件不存在，跳过安装。"
     fi
@@ -658,7 +653,7 @@ echo "  🎉 Keycloak Auth Manager 部署完成！"
 echo "=========================================="
 echo ""
 echo "访问地址: http://${PUBLIC_IP}:$WEB_PORT"
-echo "登录账号: $KEYCLOAK_ADMIN (亦可使用 admin 登录)"
+echo "登录账号: $KEYCLOAK_ADMIN"
 echo "登录密码: (您在部署时设置的 Keycloak Admin 密码)"
 echo ""
 echo "文件位置:"

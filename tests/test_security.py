@@ -205,5 +205,264 @@ class SecurityRegressionTestSuite(unittest.TestCase):
         self.assertFalse(bool(re.match(pattern, "bad/slash")))
         self.assertFalse(bool(re.match(pattern, "inject;drop")))
 
+    def test_decrypt_val_fallback_and_plaintext(self):
+        """验证解密明文透传与损坏密文在 fallback_empty=True 时安全回退为空串"""
+        self.assertEqual(decrypt_val("plain-secret"), "plain-secret")
+        if CIPHER_AVAILABLE:
+            bad_token = "gAAAAABinvalid_corrupted_token_payload_1234567890"
+            self.assertEqual(decrypt_val(bad_token, fallback_empty=True), "")
+
+    def test_csrf_json_array_and_login_username(self):
+        """验证 JSON 数组请求体不触发 500 崩溃，且自定义管理员名时拒绝硬编码 admin"""
+        import app as kam_app
+        from unittest.mock import patch
+
+        client = kam_app.app.test_client()
+        with patch.object(kam_app, "ADMIN_USERNAME", "custom_ops"), \
+             patch.object(kam_app, "KEYCLOAK_ADMIN", "kc_ops"), \
+             patch.object(kam_app, "ADMIN_PASSWORD", "StrongPass!23"):
+            with client.session_transaction() as sess:
+                sess["logged_in"] = True
+                sess["user"] = "custom_ops"
+                sess["csrf_token"] = "valid-token"
+
+            res_csrf = client.post(
+                "/api/ssl/import",
+                data=json.dumps([{"primary_domain": "a.com"}]),
+                content_type="application/json"
+            )
+            self.assertEqual(res_csrf.status_code, 403)
+
+            client.post("/logout")
+            res_login_bad = client.post(
+                "/login",
+                data={"username": "admin", "password": "StrongPass!23"},
+                follow_redirects=False
+            )
+            self.assertEqual(res_login_bad.status_code, 200)
+            self.assertIn("用户名或密码错误", res_login_bad.get_data(as_text=True))
+
+            res_init = client.post("/api/init_password", json={"password": "NewPassword123", "password_confirm": "NewPassword123"})
+            self.assertEqual(res_init.status_code, 409)
+
+    def test_ensure_global_sso_pure_passkey_routing_and_pagination(self):
+        """验证新建纯 Passkey 站点正确分流到 global-sso-passkey 且 Keycloak 分页不截断"""
+        import app as kam_app
+        from unittest.mock import patch
+
+        recorded_calls = []
+
+        def fake_ensure_client(client_id, flow_id, secret_cfg_key, target_domains, extra_domain=None, extra_ssl_enabled=None):
+            recorded_calls.append((client_id, list(target_domains), extra_domain))
+            return True, "", "dummy-secret"
+
+        with patch.object(kam_app, "setup_keycloak_adaptive_sso_flow", return_value={"hybrid": "f1", "passkey_only": "f2"}), \
+             patch.object(kam_app, "load_data", return_value={}), \
+             patch.object(kam_app, "_ensure_specific_sso_client", side_effect=fake_ensure_client), \
+             patch.object(kam_app, "_ensure_single_sso_container", return_value=(True, "")), \
+             patch.object(kam_app, "get_all_cookie_and_whitelist_domains", return_value=(".example.com", "*.example.com")):
+            ok, err = kam_app.ensure_global_sso_container(
+                extra_domain="pk.example.com",
+                extra_ssl_enabled=True,
+                extra_allow_passkey=True,
+                extra_allow_password=False
+            )
+            self.assertTrue(ok, err)
+            by_cid = {cid: (domains, extra) for cid, domains, extra in recorded_calls}
+            self.assertNotIn("pk.example.com", by_cid[kam_app.GLOBAL_SSO_CLIENT_ID][0])
+            self.assertIsNone(by_cid[kam_app.GLOBAL_SSO_CLIENT_ID][1])
+            self.assertIn("pk.example.com", by_cid[kam_app.GLOBAL_PASSKEY_SSO_CLIENT_ID][0])
+            self.assertEqual(by_cid[kam_app.GLOBAL_PASSKEY_SSO_CLIENT_ID][1], "pk.example.com")
+
+        # 验证分页拉取超过 100 名用户时不被截断
+        users_page_1 = [{"username": f"u{i}", "enabled": True, "attributes": {"allowed_sites": ["*"]}} for i in range(200)]
+        users_page_2 = [{"username": "restricted_u", "enabled": True, "attributes": {"allowed_sites": ["other.com"]}},
+                        {"username": "u201", "enabled": True, "attributes": {"allowed_sites": ["app.example.com"]}}]
+
+        def fake_call_kc(endpoint, method="GET", json_data=None, params=None):
+            if endpoint == "users" and params:
+                return (users_page_1 if params.get("first", 0) == 0 else users_page_2), 200, ""
+            return [], 200, ""
+
+        with patch.object(kam_app, "call_keycloak_api", side_effect=fake_call_kc), \
+             patch.object(kam_app, "get_keycloak_admin_credentials", return_value=("admin", "pw", "http://127.0.0.1:8080")):
+            all_allowed, allowed_list = kam_app.get_allowed_users_for_domain("app.example.com")
+            self.assertFalse(all_allowed)
+            self.assertIn("u201", allowed_list)
+            self.assertNotIn("restricted_u", allowed_list)
+
+    def test_settings_checkbox_uncheck_and_shared_guards(self):
+        """验证 /settings 取消勾选 cloudflare_proxied 正确保存为 False，且 Passkey 共享资源受保护"""
+        import tempfile
+        import app as kam_app
+        from unittest.mock import patch
+
+        with tempfile.NamedTemporaryFile(mode="w", suffix=".json", delete=False) as tf:
+            json.dump({"cloudflare_proxied": True}, tf)
+            tmp_cfg = tf.name
+
+        orig_cfg = kam_app.CONFIG_FILE
+        try:
+            kam_app.CONFIG_FILE = tmp_cfg
+            kam_app._save_settings_from_dict({"has_cloudflare_proxied_field": "1"})
+            with open(tmp_cfg, "r", encoding="utf-8") as f:
+                saved = json.load(f)
+            self.assertFalse(saved["cloudflare_proxied"])
+        finally:
+            kam_app.CONFIG_FILE = orig_cfg
+            if os.path.exists(tmp_cfg):
+                os.remove(tmp_cfg)
+
+        with patch.object(kam_app, "run_cmd_args") as mock_cmd:
+            kam_app.delete_keycloak_client(kam_app.GLOBAL_PASSKEY_SSO_CLIENT_ID)
+            kam_app.stop_oauth2_container(kam_app.GLOBAL_PASSKEY_SSO_CONTAINER)
+            mock_cmd.assert_not_called()
+
+    def test_403_root_causes_prevention(self):
+        """验证认证后 403 根因修复：admin角色放行、大小写不敏感、API失败不覆写配置、新建用户触发同步、api_list脱敏"""
+        import tempfile
+        import app as kam_app
+        from unittest.mock import patch
+
+        users_sample = [
+            {"username": "Alice", "enabled": True, "attributes": {"allowed_sites": ["App.Example.com"]}},
+            {"username": "ops_admin", "enabled": True, "attributes": {"allowed_sites": ["other.com"]}},
+            {"username": "Bob", "enabled": True, "attributes": {"allowed_sites": ["other.com"]}},
+        ]
+
+        def fake_kc(endpoint, method="GET", json_data=None, params=None):
+            if endpoint == "users":
+                return users_sample, 200, ""
+            if endpoint == "roles/admin/users":
+                return [{"username": "ops_admin"}], 200, ""
+            return [], 200, ""
+
+        with patch.object(kam_app, "call_keycloak_api", side_effect=fake_kc), \
+             patch.object(kam_app, "get_keycloak_admin_credentials", return_value=("SuperAdmin", "pw", "https://auth.example.com")):
+            all_ok, allowed = kam_app.get_allowed_users_for_domain("app.example.com")
+            self.assertFalse(all_ok)
+            self.assertIn("alice", allowed)
+            self.assertIn("ops_admin", allowed)
+            self.assertIn("superadmin", allowed)
+            self.assertNotIn("bob", allowed)
+
+        # Keycloak 失败时 sync_all_sites_permissions 必须直接中止，不得调用 update_nginx_config
+        with patch.object(kam_app, "load_data", return_value={"app.example.com": {"proxy_enabled": True}}), \
+             patch.object(kam_app, "_fetch_all_keycloak_items", return_value=(None, 500, "down")), \
+             patch.object(kam_app, "update_nginx_config") as mock_upd:
+            self.assertFalse(kam_app.sync_all_sites_permissions())
+            mock_upd.assert_not_called()
+
+        # 验证 /api/list 剔除了旧密钥字段但保留 nginx_config
+        sample_data = {"app.example.com": {"client_secret": "sec", "cookie_secret": "csec", "nginx_config": "cfg", "oauth_port": 4180}}
+        client = kam_app.app.test_client()
+        with patch.object(kam_app, "ADMIN_PASSWORD", "StrongPass!23"), \
+             patch.object(kam_app, "load_data", return_value=sample_data):
+            with client.session_transaction() as sess:
+                sess["logged_in"] = True
+                sess["user"] = kam_app.ADMIN_USERNAME
+                sess["csrf_token"] = "tok"
+            res = client.get("/api/list")
+            self.assertEqual(res.status_code, 200)
+            body = json.loads(res.get_data(as_text=True))
+            site = body["app.example.com"]
+            self.assertNotIn("client_secret", site)
+            self.assertNotIn("cookie_secret", site)
+            self.assertEqual(site.get("nginx_config"), "cfg")
+
+        # 验证生成的 Nginx 配置包含 /oauth2/auth 大缓冲区、Lua string.lower 与 OIDC_EMAIL_CLAIM
+        with tempfile.TemporaryDirectory() as tmpdir:
+            conf_file = os.path.join(tmpdir, "root.conf")
+            with patch.object(kam_app, "get_proxy_conf_path", return_value=conf_file), \
+                 patch.object(kam_app, "load_data", return_value={"app.example.com": {}}), \
+                 patch.object(kam_app, "get_allowed_users_for_domain", return_value=(False, ["alice"])), \
+                 patch.object(kam_app, "get_keycloak_admin_credentials", return_value=("admin", "pw", "https://auth.example.com")), \
+                 patch.object(kam_app, "reload_openresty", return_value=True):
+                conf_txt = kam_app.update_nginx_config("app.example.com", 4180, "127.0.0.1", 8080, True, True)
+                self.assertIn("string.lower", conf_txt)
+                self.assertIn("location = /oauth2/auth", conf_txt)
+                self.assertIn("proxy_buffer_size 128k;", conf_txt)
+                self.assertIn("client_max_body_size 0;", conf_txt)
+                self.assertIn('proxy_set_header X-Original-URL "";', conf_txt)
+                self.assertIn('proxy_set_header X-Forwarded-Preferred-Username "";', conf_txt)
+
+    def test_bypass_hardening_empty_sites_proxy_isolation_and_logout(self):
+        """验证绕过防护：空 allowed_sites 拒绝访问、冲突 proxy/*.conf 隔离与回滚、停用/删号即时 logout"""
+        import tempfile
+        import app as kam_app
+        from unittest.mock import patch
+
+        # 1. 显式设置 allowed_sites=[] 必须拒绝访问，不得反转成 *
+        users_empty_sites = [
+            {"username": "revoked_user", "enabled": True, "attributes": {"allowed_sites": []}},
+            {"username": "normal_user", "enabled": True, "attributes": {}},
+        ]
+
+        def fake_kc(endpoint, method="GET", json_data=None, params=None):
+            if endpoint == "users":
+                return users_empty_sites, 200, ""
+            if endpoint == "roles/admin/users":
+                return [], 200, ""
+            return [], 200, ""
+
+        with patch.object(kam_app, "call_keycloak_api", side_effect=fake_kc), \
+             patch.object(kam_app, "get_keycloak_admin_credentials", return_value=("admin", "pw", "https://auth.example.com")):
+            all_ok, allowed = kam_app.get_allowed_users_for_domain("app.example.com")
+            self.assertFalse(all_ok)
+            self.assertNotIn("revoked_user", allowed)
+            self.assertIn("normal_user", allowed)
+
+        # 2. 同级冲突 proxy/*.conf 自动隔离，并在 update_nginx_config 失败时还原
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root_conf = os.path.join(tmpdir, "root.conf")
+            conflict_conf = os.path.join(tmpdir, "legacy-bypass.conf")
+            with open(conflict_conf, "w", encoding="utf-8") as f:
+                f.write("location / { proxy_pass http://127.0.0.1:9999; }")
+
+            with patch.object(kam_app, "ONEPANEL_API_KEY", ""), \
+                 patch.object(kam_app, "ensure_openresty_site_conf"), \
+                 patch.object(kam_app, "get_proxy_conf_path", return_value=root_conf), \
+                 patch.object(kam_app, "_audit_1panel_site_security"):
+                with patch.object(kam_app, "update_nginx_config", return_value="ok_conf"):
+                    res = kam_app.create_nginx_auth("app.example.com", 4180, "127.0.0.1", 8080)
+                    self.assertEqual(res, "ok_conf")
+                    self.assertFalse(os.path.exists(conflict_conf))
+                    self.assertTrue(os.path.exists(conflict_conf + ".kam-disabled"))
+
+                # 恢复冲突文件并测试失败回滚
+                os.replace(conflict_conf + ".kam-disabled", conflict_conf)
+                with patch.object(kam_app, "update_nginx_config", return_value=None):
+                    res_fail = kam_app.create_nginx_auth("app.example.com", 4180, "127.0.0.1", 8080)
+                    self.assertIsNone(res_fail)
+                    self.assertTrue(os.path.exists(conflict_conf))
+
+        # 3. 停用或删除用户时立即吊销 Keycloak 会话 (logout)
+        kc_calls = []
+
+        def fake_user_ops(endpoint, method="GET", json_data=None, params=None):
+            kc_calls.append((endpoint, method))
+            if endpoint == "users/u-123" and method == "GET":
+                return {"id": "u-123", "username": "bob"}, 200, ""
+            return {}, 204, ""
+
+        client = kam_app.app.test_client()
+        with patch.object(kam_app, "ADMIN_PASSWORD", "StrongPass!23"), \
+             patch.object(kam_app, "call_keycloak_api", side_effect=fake_user_ops), \
+             patch.object(kam_app, "sync_all_sites_permissions", return_value=True):
+            with client.session_transaction() as sess:
+                sess["logged_in"] = True
+                sess["user"] = kam_app.ADMIN_USERNAME
+                sess["csrf_token"] = "tok"
+
+            res_dis = client.post("/api/users/u-123/toggle", data={"enabled": "false", "_csrf_token": "tok"})
+            self.assertEqual(res_dis.status_code, 200)
+            self.assertIn(("users/u-123/logout", "POST"), kc_calls)
+
+            kc_calls.clear()
+            res_del = client.post("/api/users/u-123/delete", data={"_csrf_token": "tok"})
+            self.assertEqual(res_del.status_code, 200)
+            self.assertIn(("users/u-123/logout", "POST"), kc_calls)
+            self.assertLess(kc_calls.index(("users/u-123/logout", "POST")), kc_calls.index(("users/u-123", "DELETE")))
+
 if __name__ == '__main__':
     unittest.main()

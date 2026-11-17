@@ -380,7 +380,7 @@
             </div>
             <div class="form-group">
                 <label class="form-label">1Panel 端口 (onepanel_port)</label>
-                <input type="number" class="input-box" id="set_onepanel_port" value="{{ config.get('onepanel_port', 10427) }}" required>
+                <input type="number" class="input-box" id="set_onepanel_port" value="{{ config.get('onepanel_port', 40455) }}" required>
                 <div class="form-hint">1Panel 运维面板的通信端口</div>
             </div>
             <div class="form-group">
@@ -1875,11 +1875,21 @@ function selectAddTargetType(type) {
 function toggleAddSSLSection(checked) {
     const container = document.getElementById('add_ssl_config_container');
     container.style.display = checked ? 'block' : 'none';
-    if (checked) load1PanelAccounts();
+    const methodEl = document.getElementById('add_auth_method');
+    if (checked) {
+        load1PanelAccounts();
+        toggleAddDNSSection(methodEl ? methodEl.value : 'http');
+    } else {
+        toggleAddDNSSection('http');
+    }
 }
 
 function toggleAddDNSSection(val) {
-    document.getElementById('add_dns_container').style.display = (val === 'dns') ? 'block' : 'none';
+    const dnsBox = document.getElementById('add_dns_container');
+    const dnsSelect = document.getElementById('add_dns_account');
+    const isDns = (val === 'dns');
+    if (dnsBox) dnsBox.style.display = isDns ? 'block' : 'none';
+    if (dnsSelect) dnsSelect.disabled = !isDns;
 }
 
 async function load1PanelAccounts() {
@@ -1971,6 +1981,31 @@ document.getElementById('authAddForm').addEventListener('submit', async function
     startLogStream('addLogs');
 
     const formData = new FormData(this);
+    const allowPasskeyEl = document.getElementById('add_allow_passkey');
+    const allowPasswordEl = document.getElementById('add_allow_password');
+    const allowPasskey = allowPasskeyEl ? allowPasskeyEl.checked : true;
+    const allowPassword = allowPasswordEl ? allowPasswordEl.checked : true;
+    if (!allowPasskey && !allowPassword) {
+        showToast('必须至少启用一种登录认证方式（Passkey 或账号密码）！', 'warning');
+        btn.disabled = false;
+        btn.innerHTML = '🚀 立即创建';
+        stopLogStream();
+        return;
+    }
+    formData.set('allow_passkey', allowPasskey ? 'true' : 'false');
+    formData.set('allow_password', allowPassword ? 'true' : 'false');
+
+    const applySslEl = document.getElementById('add_apply_ssl');
+    const authMethodEl = document.getElementById('add_auth_method');
+    const applySsl = applySslEl ? applySslEl.checked : false;
+    formData.set('apply_ssl', applySsl ? 'true' : 'false');
+    if (!applySsl) {
+        formData.delete('acme_id');
+        formData.delete('dns_id');
+    } else if (!authMethodEl || authMethodEl.value !== 'dns') {
+        formData.delete('dns_id');
+    }
+
     formData.append('_csrf_token', getCsrfToken());
     try {
         const res = await fetch('/api/create', { method: 'POST', body: formData });
@@ -1980,7 +2015,7 @@ document.getElementById('authAddForm').addEventListener('submit', async function
             badge.className = 'badge success';
             badge.textContent = 'SUCCESS';
             btn.innerHTML = '🎉 创建成功！';
-            showToast('认证服务创建成功！', 'success');
+            showToast(result.ssl_applied ? '认证服务已创建，SSL 证书正在后台申请！' : '认证服务创建成功！', 'success');
             await loadDomainsAjax();
             setTimeout(() => {
                 closeAddDomainModal();

@@ -141,10 +141,38 @@
 
                     <div class="form-group" id="dns_container" style="display: none;">
                         <label class="form-label" style="font-size: 12px;">DNS 账户</label>
-                        <select class="select-custom" id="dns_account" name="dns_id">
+                        <select class="select-custom" id="dns_account" name="dns_id" disabled>
                             <option value="">请选择 DNS 账户...</option>
                         </select>
                     </div>
+                </div>
+            </div>
+
+            <!-- 3.5 站点认证登录策略 -->
+            <div class="card" style="background: var(--card-sec); border-color: var(--border-subtle); padding: 16px; margin: 20px 0;">
+                <div style="font-size: 14px; font-weight: 700; color: var(--text); margin-bottom: 10px; display: flex; align-items: center; gap: 6px;">
+                    <span>🔐</span>
+                    <span>站点认证登录策略 (Authentication Policy)</span>
+                </div>
+                <div class="setting-row" style="padding: 4px 0;">
+                    <div class="setting-info">
+                        <span class="setting-label" style="font-size: 13px;">🔑 启用 Passkey (WebAuthn) 认证</span>
+                        <span class="setting-desc" style="font-size: 11px;">支持生物识别与硬件安全密钥凭据</span>
+                    </div>
+                    <label class="switch">
+                        <input type="checkbox" id="add_allow_passkey" name="allow_passkey" checked>
+                        <span class="slider"></span>
+                    </label>
+                </div>
+                <div class="setting-row" style="padding: 4px 0; margin-top: 6px; border-top: 1px solid var(--border-subtle); padding-top: 6px;">
+                    <div class="setting-info">
+                        <span class="setting-label" style="font-size: 13px;">🔒 启用账号密码认证</span>
+                        <span class="setting-desc" style="font-size: 11px;">支持标准用户名与口令输入</span>
+                    </div>
+                    <label class="switch">
+                        <input type="checkbox" id="add_allow_password" name="allow_password" checked>
+                        <span class="slider"></span>
+                    </label>
                 </div>
             </div>
 
@@ -355,14 +383,21 @@ function selectTargetType(type) {
 function toggleSSLSection(checked) {
     const container = document.getElementById('ssl_config_container');
     container.style.display = checked ? 'block' : 'none';
-    if (checked && !acmeAccountsLoaded) {
-        addPageLoad1PanelAccounts();
+    const methodEl = document.getElementById('auth_method');
+    if (checked) {
+        if (!acmeAccountsLoaded) addPageLoad1PanelAccounts();
+        toggleDNSSection(methodEl ? methodEl.value : 'http');
+    } else {
+        toggleDNSSection('http');
     }
 }
 
 function toggleDNSSection(val) {
     const dnsBox = document.getElementById('dns_container');
-    dnsBox.style.display = (val === 'dns') ? 'block' : 'none';
+    const dnsSelect = document.getElementById('dns_account');
+    const isDns = (val === 'dns');
+    if (dnsBox) dnsBox.style.display = isDns ? 'block' : 'none';
+    if (dnsSelect) dnsSelect.disabled = !isDns;
 }
 
 async function addPageLoad1PanelAccounts() {
@@ -484,6 +519,31 @@ document.getElementById('authForm').addEventListener('submit', async function(e)
     addPageStartLogStream();
 
     const formData = new FormData(this);
+    const allowPasskeyEl = document.getElementById('add_allow_passkey');
+    const allowPasswordEl = document.getElementById('add_allow_password');
+    const allowPasskey = allowPasskeyEl ? allowPasskeyEl.checked : true;
+    const allowPassword = allowPasswordEl ? allowPasswordEl.checked : true;
+    if (!allowPasskey && !allowPassword) {
+        showToast('必须至少启用一种登录认证方式（Passkey 或账号密码）！', 'warning');
+        btn.disabled = false;
+        btn.innerHTML = '🚀 创建认证服务';
+        addPageStopLogStream();
+        return;
+    }
+    formData.set('allow_passkey', allowPasskey ? 'true' : 'false');
+    formData.set('allow_password', allowPassword ? 'true' : 'false');
+
+    const applySslEl = document.getElementById('apply_ssl');
+    const authMethodEl = document.getElementById('auth_method');
+    const applySsl = applySslEl ? applySslEl.checked : false;
+    formData.set('apply_ssl', applySsl ? 'true' : 'false');
+    if (!applySsl) {
+        formData.delete('acme_id');
+        formData.delete('dns_id');
+    } else if (!authMethodEl || authMethodEl.value !== 'dns') {
+        formData.delete('dns_id');
+    }
+
     formData.append('_csrf_token', getAddPageCsrfToken());
     try {
         const response = await fetch('/api/create', {

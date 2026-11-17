@@ -2,6 +2,11 @@
    Abit Design System - Modern SPA & AJAX Interactive Engine for KAM
    ========================================================================== */
 
+function getCsrfToken() {
+    const m = document.cookie.match(/(?:^|;\s*)csrf_token=([^;]+)/);
+    return m ? decodeURIComponent(m[1]) : '';
+}
+
 function escapeHtml(str) {
     if (str === null || str === undefined) return '';
     return String(str)
@@ -355,8 +360,8 @@ function openDomainDetail(domain) {
     toggleEditTarget(false);
 
     document.getElementById('modalClientId').textContent = auth.client_id || '';
-    document.getElementById('modalClientSecret').textContent = auth.client_secret || '';
-    document.getElementById('modalCookieSecret').textContent = auth.cookie_secret || '';
+    document.getElementById('modalClientSecret').textContent = auth.client_secret || '全局共享凭据 (已托管)';
+    document.getElementById('modalCookieSecret').textContent = auth.cookie_secret || '全局共享凭据 (已托管)';
     document.getElementById('modalOauthPort').textContent = `:${auth.oauth_port}`;
     document.getElementById('modalContainerName').textContent = auth.container_name || '';
     document.getElementById('modalCreatedAt').textContent = auth.created_at || '';
@@ -611,15 +616,28 @@ async function handleAuthMethodsToggle() {
         if (passwordToggle) passwordToggle.disabled = false;
 
         if (data.success) {
+            const isPurePk = (allowPasskey && !allowPassword);
+            const newPort = data.oauth_port || (isPurePk ? 4181 : 4180);
+            const newClientId = isPurePk ? 'global-sso-passkey' : 'global-sso';
+            const newContainer = isPurePk ? 'oauth2-proxy-passkey-sso' : 'oauth2-proxy-sso';
             if (cachedDomainsData && cachedDomainsData[domain]) {
                 cachedDomainsData[domain].allow_passkey = allowPasskey;
                 cachedDomainsData[domain].allow_password = allowPassword;
+                cachedDomainsData[domain].oauth_port = newPort;
+                cachedDomainsData[domain].client_id = newClientId;
+                cachedDomainsData[domain].container_name = newContainer;
                 if (data.nginx_config) {
                     cachedDomainsData[domain].nginx_config = data.nginx_config;
                     const pre = document.getElementById('modalNginxPre');
                     if (pre) pre.textContent = data.nginx_config;
                 }
             }
+            const portEl = document.getElementById('modalOauthPort');
+            if (portEl) portEl.textContent = `:${newPort}`;
+            const cidEl = document.getElementById('modalClientId');
+            if (cidEl) cidEl.textContent = newClientId;
+            const cnameEl = document.getElementById('modalContainerName');
+            if (cnameEl) cnameEl.textContent = newContainer;
             renderDomainsUI(cachedDomainsData);
             let modeDesc = 'Passkey 与密码混合模式';
             if (allowPasskey && !allowPassword) modeDesc = '仅限 Passkey (WebAuthn) 认证';

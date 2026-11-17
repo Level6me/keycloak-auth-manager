@@ -116,7 +116,6 @@ sudo cp -r "$SOURCE_DIR/app.py" $INSTALL_DIR/
 sudo cp -r "$SOURCE_DIR/static" $INSTALL_DIR/
 sudo cp -r "$SOURCE_DIR/templates" $INSTALL_DIR/
 sudo cp -rf "$SOURCE_DIR/themes" $INSTALL_DIR/ 2>/dev/null || true
-sudo cp -rf "$SOURCE_DIR/nginx-auth" $INSTALL_DIR/ 2>/dev/null || true
 echo "    ✓ 文件复制完成"
 
 # 3. 创建配置文件
@@ -173,11 +172,12 @@ fi
 
 # 5. 复制 Apple 登录主题到 Keycloak 容器中
 echo "[5] 配置 Apple 登录主题..."
-if sudo docker ps --filter "name=keycloak" --format "{{.Names}}" | grep -q "keycloak"; then
-    sudo docker exec keycloak mkdir -p /opt/keycloak/themes 2>/dev/null || true
+if sudo docker ps --filter "name=^/${KC_CONTAINER}$" --format "{{.Names}}" | grep -q "^${KC_CONTAINER}$"; then
+    sudo docker exec "$KC_CONTAINER" mkdir -p /opt/keycloak/themes 2>/dev/null || true
     if [ -d "$SOURCE_DIR/themes/apple" ]; then
-        sudo docker cp "$SOURCE_DIR/themes/apple" keycloak:/opt/keycloak/themes/
-        echo "    ✓ Apple 主题已复制到 Keycloak 容器内 (/opt/keycloak/themes/apple)"
+        sudo docker cp "$SOURCE_DIR/themes/apple" "$KC_CONTAINER":/opt/keycloak/themes/
+        sudo docker restart "$KC_CONTAINER" >/dev/null
+        echo "    ✓ Apple 主题已复制到 Keycloak 容器 ($KC_CONTAINER) 并刷新就绪（将在服务启动后自动激活）"
     else
         echo "    ! 未找到本地 Apple 主题目录，跳过"
     fi
